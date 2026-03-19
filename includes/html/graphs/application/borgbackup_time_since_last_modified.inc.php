@@ -7,9 +7,9 @@ $dostack = 0;
 $printtotal = 0;
 $addarea = 1;
 $transparency = 15;
-$unitlen = 0;
+$unitlen = 4;
 $bigdescrlen = 18;
-$smalldescrlen = 15;
+$smalldescrlen = 5;
 
 if (isset($vars['borgrepo'])) {
     $repo = $vars['borgrepo'];

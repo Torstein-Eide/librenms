@@ -6,6 +6,9 @@ $dostack = 0;
 $printtotal = 0;
 $addarea = 1;
 $transparency = 15;
+$unitlen = 0;
+$bigdescrlen = 18;
+$smalldescrlen = 15;
 
 $rrdVar = $metric;
 
