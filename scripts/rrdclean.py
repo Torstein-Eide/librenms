@@ -617,15 +617,15 @@ def main():
         help="Don't write changes, just show what would be done (runs all operations)",
     )
     parser.add_argument(
-        "--interpolate",
+        "--fill-gaps",
         action="store_true",
-        help="[EXPERIMENTAL] Fill gaps between non-NaN values with linear interpolation",
+        help="[EXPERIMENTAL] Fill gaps between non-NaN values (uses -A method)",
     )
     parser.add_argument(
         "--max-gap",
         type=int,
         default=20,
-        help="Maximum gap size to interpolate (default: 20, ~100min at 5min intervals)",
+        help="Maximum gap size to fill (default: 20, ~100min at 5min intervals)",
     )
     parser.add_argument(
         "--zero",
@@ -707,7 +707,7 @@ def main():
             or args.stddev is not None
             or args.percent is not None
         )
-        run_interpolate = args.interpolate
+        run_interpolate = args.fill_gaps
         run_zero = args.zero
 
         if not run_spike_removal and not run_interpolate and not run_zero:
@@ -748,11 +748,11 @@ def main():
             with open(clean_xml_file, "w") as f:
                 f.write(dump_content)
 
-        # Interpolate gaps if requested
+        # Fill gaps if requested
         gaps_filled = 0
         if run_interpolate:
             if verbose:
-                print(f"Interpolating gaps in {clean_xml_file}")
+                print(f"Filling gaps in {clean_xml_file}")
             with open(clean_xml_file, "r") as f:
                 original_data = f.read()
 
@@ -764,9 +764,9 @@ def main():
                 with open(clean_xml_file, "w") as f:
                     f.write(interpolated_data)
 
-            print(f"Gaps interpolated: {gaps_filled}")
+            print(f"Gaps filled: {gaps_filled}")
             if gaps_filled == 0:
-                print("No gaps to interpolate.")
+                print("No gaps to fill.")
 
         # Replace zeros if requested (uses -A method)
         zeros_replaced = 0

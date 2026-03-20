@@ -1,10 +1,14 @@
 # RRD Spike Remover
 
-Tool to remove spikes/anomalies from RRD files and optionally interpolate gaps.
+Tool to remove spikes/anomalies from RRD files and optionally fill gaps.
 
 **Location:** `scripts/rrdclean.py`
 
-**IMPORTANT:** Always make a backup before making changes!
+!!! danger "Backup required"
+
+    ```bash
+    cp file.rrd file.rrd.bak && ./scripts/rrdclean.py file.rrd [options]
+    ```
 
 ## Comparison with Other RRD Spike Removers
 
@@ -15,7 +19,7 @@ LibreNMS includes multiple spike removal tools with different capabilities:
 | Language | Python | PHP | Perl |
 | Spike detection | stddev, variance | stddev, variance | Percentage-based |
 | Replace zeros | Yes (--zero) | No | No |
-| Interpolate gaps | Yes [EXPERIMENTAL] | No | No |
+| Fill gaps | Yes [EXPERIMENTAL] | No | No |
 | Histogram analysis | Yes | No | No |
 | Suggested parameters | Yes | No | No |
 | Dry-run | Yes | Yes (-D) | No |
@@ -24,7 +28,7 @@ LibreNMS includes multiple spike removal tools with different capabilities:
 
 ### When to Use Each Tool
 
-- **rrdclean.py** - Recommended for most use cases. Offers the most features including histogram analysis, parameter suggestions, gap interpolation, and zero handling.
+- **rrdclean.py** - Recommended for most use cases. Offers the most features including histogram analysis, parameter suggestions, gap filling, and zero handling.
 
 - **removespikes.php** - Original Cacti-era script. Use when you need PHP-only environment or familiar interface.
 
@@ -38,7 +42,7 @@ cp file.rrd file.rrd.bak && ./scripts/rrdclean.py file.rrd [options]
 
 - Remove spikes using statistical methods (stddev or variance)
 - Replace zero values with average, NaN, or previous value
-- Interpolate gaps between non-NaN values [EXPERIMENTAL]
+- Fill gaps between non-NaN values [EXPERIMENTAL]
 - Preview changes before applying
 - Generate histograms with suggested parameters
 
@@ -60,15 +64,14 @@ cp file.rrd file.rrd.bak && ./scripts/rrdclean.py file.rrd [options]
 | `-v, --verbose` | Show verbose output |
 | `-n, --dry-run` | Don't write changes, just show what would be done |
 | `--histogram` | Show data histogram and suggested parameters |
-| `--interpolate` | [EXPERIMENTAL] Fill gaps between non-NaN values |
-| `--max-gap NUM` | Max gap size to interpolate (default: 20) |
+| `--fill-gaps` | [EXPERIMENTAL] Fill gaps between non-NaN values (uses -A method) |
+| `--max-gap NUM` | Max gap size to fill (default: 20) |
 | `--zero` | Replace zero values (uses -A method) |
 
-**Note:** Operations are only performed if explicitly requested. Without options, nothing happens.
+!!! note ""
+    Operations are only performed if explicitly requested. Without options, nothing happens.
 
 ## Examples
-
-**Important:** Operations must be explicitly requested. Nothing happens without options.
 
 ### Basic Spike Removal
 
@@ -83,17 +86,20 @@ cp file.rrd file.rrd.bak && ./scripts/rrdclean.py file.rrd [options]
 ./scripts/rrdclean.py -M stddev -S 3 -A nan file.rrd
 ```
 
+!!! tip "Use histogram first"
+    Run with `--histogram` to analyze your data and get suggested `-S` and `-P` values before removing spikes.
+
 ### Preview and Analyze
 
 ```bash
 # Show histogram with suggested parameters
 ./scripts/rrdclean.py --histogram file.rrd
 
-# Dry-run of ALL operations (spikes + interpolate + zero) - no changes written
-./scripts/rrdclean.py --dry-run -S 3 --zero avg --interpolate file.rrd
+# Dry-run of ALL operations (spikes + fill-gaps + zero) - no changes written
+./scripts/rrdclean.py --dry-run -S 3 --zero --fill-gaps file.rrd
 
 # Dry-run with verbose output
-./scripts/rrdclean.py --dry-run -v -S 3 --interpolate file.rrd
+./scripts/rrdclean.py --dry-run -v -S 3 --fill-gaps file.rrd
 ```
 
 ### Output to New File
@@ -116,30 +122,33 @@ cp file.rrd file.rrd.bak && ./scripts/rrdclean.py file.rrd [options]
 ./scripts/rrdclean.py -A prev --zero file.rrd
 ```
 
-### Gap Interpolation [EXPERIMENTAL]
+### Gap Filling
+
+!!! warning "Experimental feature"
+    Gap filling cannot detect the true start/end of data in RRD files. It only fills gaps that have valid values on BOTH sides, so gaps at the beginning or end of data will not be filled. Always preview with `--dry-run` first and verify results.
 
 ```bash
-# Interpolate gaps (default max 20 rows)
-./scripts/rrdclean.py --interpolate file.rrd
+# Fill gaps (default max 20 rows)
+./scripts/rrdclean.py --fill-gaps file.rrd
 
-# Interpolate only small gaps (max 10 rows)
-./scripts/rrdclean.py --interpolate --max-gap 10 file.rrd
+# Fill only small gaps (max 10 rows)
+./scripts/rrdclean.py --fill-gaps --max-gap 10 file.rrd
 
-# Interpolate without limit
-./scripts/rrdclean.py --interpolate --max-gap 0 file.rrd
+# Fill gaps without limit
+./scripts/rrdclean.py --fill-gaps --max-gap 0 file.rrd
 ```
 
 ### Combined Operations
 
 ```bash
-# Remove spikes and interpolate gaps
-./scripts/rrdclean.py -S 3 --interpolate file.rrd
+# Remove spikes and fill gaps
+./scripts/rrdclean.py -S 3 --fill-gaps file.rrd
 
-# Remove spikes, replace zeros, and interpolate
-./scripts/rrdclean.py -S 3 --zero avg --interpolate file.rrd
+# Remove spikes, replace zeros, and fill gaps
+./scripts/rrdclean.py -S 3 --zero --fill-gaps file.rrd
 
 # Preview combined operations
-./scripts/rrdclean.py --preview -S 3 --zero avg --interpolate file.rrd
+./scripts/rrdclean.py --dry-run -S 3 --zero --fill-gaps file.rrd
 ```
 
 ## Example Outputs
@@ -171,20 +180,19 @@ cp file.rrd file.rrd.bak && ./scripts/rrdclean.py file.rrd [options]
     -S 10: max_cutoff=2.5598e+10, min_cutoff=-4.3071e+09, outliers=0
 
   Suggested -P (percent) values for variance method:
-    -P 1: limit=1.0751e+10, outliers=12
-    -P 5: limit=1.1177e+10, outliers=2
-    -P 10: limit=1.1709e+10, outliers=0
+    -P 75: limit=1.8629e+10, outliers=5
+    -P 100: limit=2.1290e+10, outliers=2
+    -P 150: limit=2.6613e+10, outliers=1
+    -P 200: limit=3.1935e+10, outliers=0
 ```
 
-### Preview Output
+### Dry-run Output
 
 ```
-=== Preview ===
-Settings: -M stddev -S 3 -P 5 -A avg
+$ ./scripts/rrdclean.py --dry-run -S 3 file.rrd
+Total rows: 826, Total values: 826, Spikes removed: 8
 
-Total rows: 826, Total values: 826, Would remove: 8
-
-Preview mode: No changes made (dry-run)
+Dry-run: No changes written.
 ```
 
 ### Dry-run with Verbose
@@ -200,20 +208,12 @@ Total rows: 826, Total values: 826, Spikes removed: 8
 Dry-run: No changes written.
 ```
 
-### Normal Run
-
-```
-$ ./scripts/rrdclean.py -S 3 file.rrd
-Total rows: 826, Total values: 826, Spikes removed: 8
-Done: file.rrd
-```
-
 ### Combined Operations
 
 ```
-$ ./scripts/rrdclean.py -S 3 --zero avg --interpolate file.rrd
+$ ./scripts/rrdclean.py -S 3 --zero --fill-gaps file.rrd
 Total rows: 826, Total values: 826, Spikes removed: 8
-Gaps interpolated: 45
+Gaps filled: 45
 Zeros replaced: 12
 Done: file.rrd
 ```
@@ -225,9 +225,9 @@ Operations are processed in this order:
 1. **Dump** - RRD file is dumped to XML format using `rrdtool dump`
 2. **Analyze** - Data is parsed and statistics are calculated per DS
 3. **Spike Detection** - Values outside thresholds are identified
-4. **Spike Replacement** - Spikes are replaced with average or NaN
-5. **Gap Interpolation** - [EXPERIMENTAL] NaN gaps are filled with linear interpolation
-6. **Zero Replacement** - Zero values are replaced with avg/nan/prev
+4. **Spike Replacement** - Spikes are replaced with -A method
+5. **Gap Filling** - [EXPERIMENTAL] NaN gaps are filled with linear interpolation
+6. **Zero Replacement** - Zero values are replaced with -A method
 7. **Restore** - XML is converted back to RRD using `rrdtool restore`
 
 **Note:** Each operation modifies the data. Use `--dry-run` to see combined results.
@@ -237,23 +237,22 @@ Operations are processed in this order:
 When combining multiple operations, they are processed in order:
 
 ```
-1. Spike removal    → outliers become avg or NaN
-2. Gap interpolation → NaN gaps between valid values are filled
-3. Zero replacement → 0 values are replaced
+1. Spike removal    → outliers become -A method
+2. Gap filling       → NaN gaps between valid values are filled
+3. Zero replacement  → 0 values are replaced with -A method
 ```
 
-Example - what happens with `--interpolate --zero avg`:
+Example - what happens with `--fill-gaps --zero`:
 
 ```bash
-./scripts/rrdclean.py --interpolate --zero avg file.rrd
+./scripts/rrdclean.py --fill-gaps --zero file.rrd
 ```
 
 | Step | Data | Notes |
 |------|------|-------|
 | Start | `1.0 → 0 → NaN → NaN → 5.0 → 0` | |
-| After spike | `1.0 → 0 → NaN → NaN → 5.0 → 0` | No spikes detected |
-| After interpolate | `1.0 → 0 → 2.0 → 4.0 → 5.0 → 0` | Gap filled |
-| After zero | `1.0 → 2.0 → 2.0 → 4.0 → 5.0 → 3.0` | Zeros replaced with avg (3.0) |
+| After fill-gaps | `1.0 → 0 → 1.67 → 3.33 → 5.0 → 0` | Gap filled (linear) |
+| After zero | `1.0 → 2.5 → 1.67 → 3.33 → 5.0 → 2.5` | Zeros replaced with avg |
 
 ### Spike Detection Methods
 
@@ -270,22 +269,26 @@ if value > variance_avg * (1 + P):
     value is a spike
 ```
 
-### Gap Interpolation [EXPERIMENTAL]
+### Gap Filling
 
-Gaps (sequences of NaN values) are filled using linear interpolation only if:
-- Gap has valid values on both sides
-- Gap size is within --max-gap limit (default: 20)
+!!! info "How it works"
+    Gaps (sequences of NaN values) are filled using linear interpolation only if:
+    - Gap has valid values on both sides
+    - Gap size is within --max-gap limit (default: 20)
 
-```
-Before: 1.0 → NaN → NaN → 4.0
-After:  1.0 → 2.0 → 3.0 → 4.0
-```
+    ```
+    Before: 1.0 → NaN → NaN → 4.0
+    After:  1.0 → 2.0 → 3.0 → 4.0
+    ```
 
 ## Troubleshooting
 
 ### No spikes detected
 
-Your data might have extreme outliers affecting statistics. Try:
+!!! info "Why no spikes detected"
+    Your data might have extreme outliers affecting statistics. The mean and standard deviation are calculated from ALL values, so outliers can make thresholds too high.
+
+    Try:
 ```bash
 # Use histogram to analyze data
 ./scripts/rrdclean.py --histogram file.rrd
@@ -299,9 +302,10 @@ Your data might have extreme outliers affecting statistics. Try:
 
 ### All values become NaN
 
-You may have set thresholds too aggressive. Check with preview first:
+You may have set thresholds too low. Check with `--dry-run` first:
+
 ```bash
-./scripts/rrdclean.py --preview -S 1 file.rrd
+./scripts/rrdclean.py --dry-run -S 1 file.rrd
 ```
 
 ## See Also
