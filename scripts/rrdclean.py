@@ -8,17 +8,20 @@ This script dumps an RRD file to XML, analyzes the data to identify spikes
 IMPORTANT: Always make a backup before making changes!
 
 Features:
-- Remove spikes using stddev or variance methods
-- Interpolate gaps (NaN values) between valid values [EXPERIMENTAL]
-- Preview changes before applying
-- Generate histograms with suggested parameters
+- Remove spikes using stddev or variance methods (-S, -M, -P)
+- Interpolate gaps (NaN values) between valid values (--interpolate) [EXPERIMENTAL]
+- Replace zero values (--zero)
+- Preview changes before applying (--dry-run)
+- Generate histograms with suggested parameters (--histogram)
+
+Note: Operations must be explicitly requested. Running without options shows help.
 
 Usage:
-    ./rrdremovezeros.py input.rrd [options]
-    ./rrdremovezeros.py --histogram input.rrd  # Analyze data only
-    ./rrdremovezeros.py --preview input.rrd     # Show what would be removed
-    ./rrdremovezeros.py --interpolate input.rrd # Fill gaps between values
-    cp file.rrd file.rrd.bak && ./rrdremovezeros.py file.rrd  # With backup
+    ./scripts/rrdclean.py --histogram file.rrd    # Analyze data
+    ./scripts/rrdclean.py -S 3 file.rrd          # Remove spikes
+    ./scripts/rrdclean.py --interpolate file.rrd # Interpolate gaps
+    ./scripts/rrdclean.py --zero avg file.rrd    # Replace zeros
+    cp file.rrd file.rrd.bak && ./scripts/rrdclean.py file.rrd [options]  # With backup
 """
 
 import argparse
@@ -230,14 +233,13 @@ def get_data_stats(input_path: Path) -> tuple[list[list[float]], list[dict], lis
     return all_samples, rra_data, ds_names
 
 
-def replace_zeros(data: str, method: str, avgnan: str = "avg") -> tuple[str, int]:
+def replace_zeros(data: str, method: str) -> tuple[str, int]:
     """
     Replace zero values based on the specified method.
 
     Args:
         data: XML content as string
         method: 'avg' (replace with average), 'nan' (set to NaN), 'prev' (use previous value)
-        avgnan: Fallback for 'avg' method when calculating average per DS
 
     Returns:
         Tuple of (modified XML, count of replaced zeros)
@@ -568,42 +570,51 @@ def main():
         "-M",
         "--method",
         choices=["stddev", "variance"],
-        default="stddev",
-        help="Spike removal method (default: stddev)",
+        default=None,
+        help="Spike removal method (stddev or variance)",
     )
     parser.add_argument(
         "-A",
         "--avgnan",
-        choices=["avg", "nan"],
-        default="avg",
-        help="Replacement method (default: avg)",
+        choices=["avg", "nan", "prev"],
+        default=None,
+        help="Replacement method for spikes, zeros, and gaps (avg, nan, or prev)",
     )
     parser.add_argument(
         "-S",
         "--stddev",
         type=float,
-        default=10,
-        help="Number of standard deviations allowed (default: 10)",
+        default=None,
+        help="Number of standard deviations allowed",
     )
     parser.add_argument(
         "-P",
         "--percent",
         type=float,
-        default=5,
-        help="Sample to sample percentage variation (default: 5)",
+        default=None,
+        help="Percentage variation for variance method",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Show verbose output"
     )
     parser.add_argument("--histogram", action="store_true", help="Show data histogram")
     parser.add_argument(
-        "--preview", action="store_true", help="Preview what would be removed"
+        "--suggested-S",
+        type=str,
+        default="1,2,3,5,10",
+        help="Comma-separated list of -S values to suggest (default: 1,2,3,5,10)",
+    )
+    parser.add_argument(
+        "--suggested-P",
+        type=str,
+        default="75,100,150,200",
+        help="Comma-separated list of -P values to suggest (default: 75,100,150,200)",
     )
     parser.add_argument(
         "-n",
         "--dry-run",
         action="store_true",
-        help="Don't write changes, just show what would be done",
+        help="Don't write changes, just show what would be done (runs all operations)",
     )
     parser.add_argument(
         "--interpolate",
@@ -617,15 +628,9 @@ def main():
         help="Maximum gap size to interpolate (default: 20, ~100min at 5min intervals)",
     )
     parser.add_argument(
-        "--max-gap",
-        type=int,
-        default=20,
-        help="Maximum gap size to interpolate (default: 20, ~100min at 5min intervals)",
-    )
-    parser.add_argument(
         "--zero",
-        choices=["avg", "nan", "prev"],
-        help="Replace zero values: avg=with average, nan=with NaN, prev=with previous value",
+        action="store_true",
+        help="Replace zero values (uses -A method)",
     )
     args = parser.parse_args()
 
@@ -671,9 +676,13 @@ def main():
                 print(f"  VarianceAvg (no outliers): {var_avg:.4e}")
                 print_histogram(samples)
 
+                # Parse comma-separated suggested values
+                suggested_s = [float(x.strip()) for x in args.suggested_S.split(",")]
+                suggested_p = [float(x.strip()) for x in args.suggested_P.split(",")]
+
                 # Suggest -S values based on current data
                 print(f"\n  Suggested -S (stddev) values:")
-                for s in [1, 2, 3, 5, 10]:
+                for s in suggested_s:
                     max_cut = avg + (s * std)
                     min_cut = avg - (s * std)
                     outliers_above = sum(1 for v in samples if v > max_cut)
@@ -685,54 +694,63 @@ def main():
                 # Suggest -P values for variance method
                 if not math.isnan(var_avg):
                     print(f"\n  Suggested -P (percent) values for variance method:")
-                    for p in [1, 2, 5, 10, 25]:
+                    for p in suggested_p:
                         limit = var_avg * (1 + p / 100)
                         outliers = sum(1 for v in samples if v > limit)
                         print(f"    -P {p}: limit={limit:.4e}, outliers={outliers}")
             print("\nHistogram mode: No changes made (dry-run)")
             return
 
-        # Preview mode: show what would be removed without applying
-        if args.preview:
-            print("\n=== Preview ===")
+        # Check if any operations are requested
+        run_spike_removal = (
+            args.method is not None
+            or args.stddev is not None
+            or args.percent is not None
+        )
+        run_interpolate = args.interpolate
+        run_zero = args.zero
+
+        if not run_spike_removal and not run_interpolate and not run_zero:
             print(
-                f"Settings: -M {args.method} -S {args.stddev} -P {args.percent} -A {args.avgnan}"
+                "No operations specified. Use --histogram, -S, --interpolate, or --zero"
             )
-            percent_val = args.percent / 100
+            return
+
+        total_rows = 0
+        total_values = 0
+        kills = 0
+
+        # Clean spikes only if spike parameters specified
+        if run_spike_removal:
+            # Use defaults if not specified
+            method = args.method if args.method else "stddev"
+            stddev_val = args.stddev if args.stddev else 10
+            percent_val = (args.percent if args.percent else 5) / 100
+            avgnan = args.avgnan if args.avgnan else "avg"
+
             kills, total_rows, total_values = clean_spikes(
                 dump_xml,
                 clean_xml_file,
-                args.method,
-                args.avgnan,
-                args.stddev,
+                method,
+                avgnan,
+                stddev_val,
                 percent_val,
-                True,  # verbose for preview
+                verbose,
             )
+
             print(
-                f"\nTotal rows: {total_rows}, Total values: {total_values}, Would remove: {kills}"
+                f"Total rows: {total_rows}, Total values: {total_values}, Spikes removed: {kills}"
             )
-            print("\nPreview mode: No changes made (dry-run)")
-            return
-
-        # Clean spikes and restore
-        percent_val = args.percent / 100
-        kills, total_rows, total_values = clean_spikes(
-            dump_xml,
-            clean_xml_file,
-            args.method,
-            args.avgnan,
-            args.stddev,
-            percent_val,
-            verbose,
-        )
-
-        print(
-            f"Total rows: {total_rows}, Total values: {total_values}, Spikes removed: {kills}"
-        )
+        else:
+            # Copy dump to clean file for other operations
+            with open(dump_xml, "r") as f:
+                dump_content = f.read()
+            with open(clean_xml_file, "w") as f:
+                f.write(dump_content)
 
         # Interpolate gaps if requested
         gaps_filled = 0
-        if args.interpolate:
+        if run_interpolate:
             if verbose:
                 print(f"Interpolating gaps in {clean_xml_file}")
             with open(clean_xml_file, "r") as f:
@@ -750,16 +768,15 @@ def main():
             if gaps_filled == 0:
                 print("No gaps to interpolate.")
 
-        # Replace zeros if requested
+        # Replace zeros if requested (uses -A method)
         zeros_replaced = 0
-        if args.zero:
+        if run_zero:
+            zero_method = args.avgnan if args.avgnan else "avg"
             if verbose:
-                print(f"Replacing zeros with {args.zero} in {clean_xml_file}")
+                print(f"Replacing zeros with {zero_method} in {clean_xml_file}")
             with open(clean_xml_file, "r") as f:
                 original_data = f.read()
-            modified_data, zeros_replaced = replace_zeros(
-                original_data, args.zero, args.avgnan
-            )
+            modified_data, zeros_replaced = replace_zeros(original_data, zero_method)
 
             if not args.dry_run:
                 with open(clean_xml_file, "w") as f:
@@ -768,10 +785,6 @@ def main():
             print(f"Zeros replaced: {zeros_replaced}")
             if zeros_replaced == 0:
                 print("No zeros found.")
-
-        if kills == 0 and not args.interpolate and not args.zero:
-            print("No spikes found.")
-            return
 
         if kills == 0 and gaps_filled == 0 and zeros_replaced == 0:
             print("No changes to make.")

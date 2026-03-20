@@ -305,6 +305,7 @@ nav:
   - Miscellaneous:
     - Security information: General/Security.md
     - CLI Scripts: Support/CLI-Tools.md
+    - RRD Spike Remover: Miscellaneous/RRD-Spike-Remover.md
     - Device Notes:
       - Asuswrt-Merlin: Support/Device-Notes/AsuswrtMerlin.md
       - Carel pCOweb: Support/Device-Notes/Carel-pCOweb-Devices.md
