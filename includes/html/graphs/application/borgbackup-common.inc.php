@@ -11,7 +11,6 @@ $unitlen = 4;
 $bigdescrlen = 18;
 $smalldescrlen = 5;
 $nototal = 1;
-$scale_min = 0;
 $scale_max = in_array($metric, ['errored', 'locked', 'locked_for']) ? 1 : null;
 
 if (isset($vars['borgrepo'])) {
