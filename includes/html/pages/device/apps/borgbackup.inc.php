@@ -11,6 +11,13 @@ $baseLink = [
 ];
 
 $logscale = isset($vars['logscale']) && $vars['logscale'] == 1;
+$chunks_logscale = isset($vars['chunks_logscale']) && $vars['chunks_logscale'] == 1;
+
+// Parse format to determine view type
+if (! isset($vars['format'])) {
+    $vars['format'] = 'list_overview';
+}
+[$format, $subformat] = explode('_', basename($vars['format']), 2);
 
 $repos = $app->data['repos'] ?? [];
 if (! empty($repos)) {
@@ -60,19 +67,49 @@ foreach ($repos as $repoName => $repoData) {
         $status = ' (ERRORED)';
     }
 
-    $repoLinks[] = generate_link($label, $baseLink, ['borgrepo' => $repoName]) . $status;
+    $repoLinks[] = generate_link($label, $baseLink, ['borgrepo' => $repoName, 'format' => null]) . $status;
 }
 
-echo generate_link('All Repos', $baseLink) . ' | repos: ' . implode(', ', $repoLinks);
+// Menu navigation
+echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'list_overview', 'borgrepo' => null]) . '">Overview</a>';
+echo ' | ';
+
+// Graph types for per-graph views (excluding locked, locked_for, errored, time_since_last_modified)
+$graphTypes = [
+    'unique_csize' => 'Deduplicated Size',
+    'total_csize' => 'Compressed Size',
+    'total_size' => 'Original Size',
+    'total_chunks' => 'Total Chunks',
+    'total_unique_chunks' => 'Unique Chunks',
+    'unique_size' => 'Unique Chunk Size',
+];
+
+$graphLinks = [];
+foreach ($graphTypes as $graphKey => $graphLabel) {
+    $label = $graphKey;
+    if (isset($subformat) && $subformat === $graphKey) {
+        $label = "<span class=\"pagemenu-selected\">{$graphLabel}</span>";
+    } else {
+        $label = $graphLabel;
+    }
+    $graphLinks[] = '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'graph_' . $graphKey, 'borgrepo' => null]) . '">' . $label . '</a>';
+}
+echo 'Graph Types: ' . implode(' | ', $graphLinks);
 
 print_optionbar_end();
 
-// Display selected repository details
+// Display selected repository details (per-repo view)
 if (isset($vars['borgrepo'])) {
     $currentRepo = $repos[$vars['borgrepo']] ?? [];
 
+    // Repo header - above metadata
+    echo '<div class="panel panel-default">';
+    echo '<div class="panel-heading"><h3 class="panel-title">';
+    echo '<strong>' . htmlspecialchars($vars['borgrepo']) . '</strong>';
+    echo '</h3></div></div>';
+
     if (! empty($currentRepo)) {
-        // Repository details header
+        // Repository metadata header
         print_optionbar_start();
 
         $repoFields = [
@@ -113,77 +150,177 @@ if (isset($vars['borgrepo'])) {
 
     // Graphs for selected repository
     $graphs = [
-        'borgbackup_size' => 'All Sizes',
-        'borgbackup_chunks' => 'All Chunks',
-        'borgbackup_time_since_last_modified' => 'Seconds since last repo update',
-        'borgbackup_errored' => 'Errored Repos',
-        'borgbackup_locked' => 'Locked',
-        'borgbackup_locked_for' => 'Locked For',
-    ];
-} else {
-    // Graphs for all repositories (aggregate view)
-    $graphs = [
         'borgbackup_unique_csize' => 'Deduplicated Size',
         'borgbackup_total_csize' => 'Compressed Size',
         'borgbackup_total_size' => 'Original Size',
-        'borgbackup_total_chunks' => 'Total Chunks',
-        'borgbackup_total_unique_chunks' => 'Unique Chunks',
-        'borgbackup_unique_size' => 'Unique Chunk Size',
+        'borgbackup_unique_size' => 'Size',
         'borgbackup_time_since_last_modified' => 'Seconds since last repo update',
         'borgbackup_errored' => 'Errored Repos',
         'borgbackup_locked' => 'Locked',
         'borgbackup_locked_for' => 'Locked For',
     ];
-}
 
-// Render all graphs
-foreach ($graphs as $graphKey => $graphTitle) {
-    $graph_array = [
-        'height' => '100',
-        'width'  => '215',
-        'to'     => \App\Facades\LibrenmsConfig::get('time.now'),
-        'id'     => $app['app_id'],
-        'type'   => "application_{$graphKey}",
-    ];
+    // Render all graphs
+    foreach ($graphs as $graphKey => $graphTitle) {
+        $graph_array = [
+            'height' => '100',
+            'width'  => '215',
+            'to'     => \App\Facades\LibrenmsConfig::get('time.now'),
+            'id'     => $app['app_id'],
+            'legend' => 'no',
+            'type'   => "application_{$graphKey}",
+        ];
 
-    if (isset($vars['borgrepo'])) {
-        $graph_array['borgrepo'] = $vars['borgrepo'];
-    }
+        if (isset($vars['borgrepo'])) {
+            $graph_array['borgrepo'] = $vars['borgrepo'];
+        }
 
-    if ($graphKey == 'borgbackup_size') {
-        $graph_array['logscale'] = $logscale ? '1' : '0';
-    } elseif ($graphKey == 'borgbackup_chunks') {
-        $graph_array['chunks_logscale'] = $chunks_logscale ? '1' : '0';
-    }
+        if ($graphKey == 'borgbackup_size') {
+            $graph_array['logscale'] = $logscale ? '1' : '0';
+        } elseif ($graphKey == 'borgbackup_chunks') {
+            $graph_array['chunks_logscale'] = $chunks_logscale ? '1' : '0';
+        }
 
-    $chunks_logscale = isset($vars['chunks_logscale']) && $vars['chunks_logscale'] == 1;
+        echo <<<HTML
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <h3 class="panel-title">{$graphTitle}</h3>
+            </div>
+            <div class="panel-body">
+                <div class="row">
+        HTML;
 
-    echo <<<HTML
-    <div class="panel panel-default">
-        <div class="panel-heading">
-            <h3 class="panel-title">{$graphTitle}</h3>
-        </div>
-        <div class="panel-body">
-            <div class="row">
-    HTML;
+        include 'includes/html/print-graphrow.inc.php';
 
-    if ($graphKey == 'borgbackup_size') {
-        $sizeToggleLabel = $logscale ? 'Linear' : 'Log';
-        $newLogscale = $logscale ? '0' : '1';
-        $toggleUrl = \LibreNMS\Util\Url::generate($baseLink, array_merge($vars, ['logscale' => $newLogscale]));
-        echo '<div style="margin-bottom: 10px;"><a href="' . $toggleUrl . '" class="btn btn-default btn-xs">' . $sizeToggleLabel . ' Scale</a></div>';
-    } elseif ($graphKey == 'borgbackup_chunks') {
-        $chunksToggleLabel = $chunks_logscale ? 'Linear' : 'Log';
-        $newChunksLogscale = $chunks_logscale ? '0' : '1';
-        $toggleUrl = \LibreNMS\Util\Url::generate($baseLink, array_merge($vars, ['chunks_logscale' => $newChunksLogscale]));
-        echo '<div style="margin-bottom: 10px;"><a href="' . $toggleUrl . '" class="btn btn-default btn-xs">' . $chunksToggleLabel . ' Scale</a></div>';
-    }
-
-    include 'includes/html/print-graphrow.inc.php';
-
-    echo <<<'HTML'
+        echo <<<'HTML'
+                </div>
             </div>
         </div>
-    </div>
-    HTML;
+        HTML;
+    }
+} elseif ($format == 'list') {
+    // Overview table for all repositories
+    echo '<table class="table table-condensed table-hover">';
+    echo '<thead><tr>';
+    echo '<th>Repository</th><th>Status</th><th>Deduplicated size</th><th>Time since Last Backup</th><th>Deduplicated size Graph</th>';
+    echo '</tr></thead>';
+    echo '<tbody>';
+    $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    foreach ($repos as $repoName => $repoData) {
+        // Repo link - links to individual repo view
+        $repo_link = \LibreNMS\Util\Url::generate([
+            'page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps',
+            'app' => 'borgbackup', 'borgrepo' => $repoName,
+        ]);
+
+        // Status badge - shows Error/Locked/OK based on repo state
+        // errored takes priority over locked
+        if (($repoData['errored'] ?? 0) === 1) {
+            $badge = 'Error';
+            $badge_class = 'label-danger';
+        } elseif (($repoData['locked'] ?? 0) === 1) {
+            $badge = 'Locked';
+            $badge_class = 'label-warning';
+        } else {
+            $badge = 'OK';
+            $badge_class = 'label-success';
+        }
+
+        // Format bytes - convert unique_csize to human readable format (B, KB, MB, GB, TB)
+        $size = $repoData['unique_csize'] ?? 0;
+        $i = 0;
+        while ($size >= 1024 && $i < 4) { $size /= 1024; $i++; }
+        $size_str = round($size, 2) . ' ' . $units[$i];
+
+        // Format duration - convert seconds to minutes/hours/days
+        $diff = (int) ($repoData['time_since_last_modified'] ?? 0);
+        if ($diff < 3600) {
+            $time_str = floor($diff / 60) . ' minutes';
+        } elseif ($diff < 86400) {
+            $time_str = floor($diff / 3600) . ' hours';
+        } else {
+            $time_str = floor($diff / 86400) . ' days';
+        }
+
+        // Output table row with repository info and graph
+        echo '<tr>';
+        echo '<td><a href="' . $repo_link . '">' . htmlspecialchars($repoName) . '</a></td>';
+        echo '<td><span class="label ' . $badge_class . '">' . $badge . '</span></td>';
+        echo '<td>' . $size_str . '</td>';
+        echo '<td>' . $time_str . '</td>';
+        echo '<td>';
+
+        // Graph for this repository (deduplicated size over time) - 24h only
+        $graph_array = [
+            'height' => 100,
+            'width' => 415,
+            'to' => \App\Facades\LibrenmsConfig::get('time.now'),
+            'id' => $app['app_id'],
+            'type' => 'application_borgbackup_unique_csize',
+            'borgrepo' => $repoName,
+            'legend' => 'no',
+            'from' => \App\Facades\LibrenmsConfig::get('time.week'),
+        ];
+
+        $link_array = $graph_array;
+        $link_array['page'] = 'graphs';
+        unset($link_array['height'], $link_array['width']);
+        $link = \LibreNMS\Util\Url::generate($link_array);
+        $graph_img = \LibreNMS\Util\Url::lazyGraphTag($graph_array);
+        echo \LibreNMS\Util\Url::overlibLink($link, $graph_img, "$repoName - Deduplicated Size");
+
+        echo '</td>';
+        echo '</tr>';
+    }
+    echo '</tbody></table>';
+} elseif ($format == 'graph') {
+    // Per-graph-type view - all repos with one graph type
+    $graphTitle = $graphTypes[$subformat] ?? $subformat;
+
+    foreach ($repos as $repoName => $repoData) {
+        // Repo link - links to individual repo view
+        $repo_link = \LibreNMS\Util\Url::generate([
+            'page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps',
+            'app' => 'borgbackup', 'borgrepo' => $repoName,
+        ]);
+
+        // Get the value for this graph type
+        $value = $repoData[$subformat] ?? 0;
+        if (str_contains($subformat, 'size') || str_contains($subformat, 'csize')) {
+            $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+            $i = 0;
+            while ($value >= 1024 && $i < count($units) - 1) {
+                $value /= 1024;
+                $i++;
+            }
+            $value_str = round($value, 2) . ' ' . $units[$i];
+        } elseif (str_contains($subformat, 'chunks')) {
+            $value_str = number_format($repoData[$subformat] ?? 0);
+        } else {
+            $value_str = $value;
+        }
+
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3 class="panel-title">';
+        echo '<a href="' . $repo_link . '" style="color: #0088cc;"><strong>' . htmlspecialchars($repoName) . '</strong></a>';
+        echo ' - <span class="text-muted">' . $value_str . '</span>';
+        echo '</h3></div>';
+        echo '<div class="panel-body"><div class="row">';
+
+        // Graph for this repository and graph type (hide Y scale)
+        $graph_array = [
+            'height' => '100',
+            'width'  => '215',
+            'to'     => \App\Facades\LibrenmsConfig::get('time.now'),
+            'id'     => $app['app_id'],
+            'legend' => 'no',
+            'nototal' => 1,
+            'type'   => 'application_borgbackup_' . $subformat,
+            'borgrepo' => $repoName,
+        ];
+
+        include 'includes/html/print-graphrow.inc.php';
+
+        echo '</div></div></div>';
+    }
 }

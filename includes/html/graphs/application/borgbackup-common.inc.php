@@ -16,7 +16,6 @@ if (isset($vars['borgrepo'])) {
     $name_part = 'repos___' . $vars['borgrepo'] . '___' . $rrdVar;
     $rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, $name_part]);
 
-    require 'includes/html/graphs/generic_stats.inc.php';
 } else {
     $repos = array_keys($app->data['repos'] ?? []);
     sort($repos);
@@ -37,6 +36,5 @@ if (isset($vars['borgrepo'])) {
         }
         $int++;
     }
-
-    require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';
 }
+require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';

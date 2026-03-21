@@ -31,8 +31,6 @@ if (isset($vars['borgrepo'])) {
             ];
         }
     }
-
-    require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';
 } else {
     $repos = array_keys($app->data['repos'] ?? []);
     sort($repos);
@@ -52,5 +50,6 @@ if (isset($vars['borgrepo'])) {
         }
     }
 
-    require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';
+
 }
+require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';
