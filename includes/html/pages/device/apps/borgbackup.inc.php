@@ -205,7 +205,7 @@ if (isset($vars['borgrepo'])) {
     echo '<th>Repository</th><th>Status</th><th>Deduplicated size</th><th>Time since Last Backup</th><th>Deduplicated size Graph</th>';
     echo '</tr></thead>';
     echo '<tbody>';
-    $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
     foreach ($repos as $repoName => $repoData) {
         // Repo link - links to individual repo view
         $repo_link = \LibreNMS\Util\Url::generate([
@@ -226,10 +226,10 @@ if (isset($vars['borgrepo'])) {
             $badge_class = 'label-success';
         }
 
-        // Format bytes - convert unique_csize to human readable format (B, KB, MB, GB, TB)
+        // Format bytes - convert unique_csize to human readable format (B, KB, MB, GB, TB, PB)
         $size = $repoData['unique_csize'] ?? 0;
         $i = 0;
-        while ($size >= 1024 && $i < 4) { $size /= 1024; $i++; }
+        while ($size >= 1024 && $i < 5) { $size /= 1024; $i++; }
         $size_str = round($size, 2) . ' ' . $units[$i];
 
         // Format duration - convert seconds to minutes/hours/days
@@ -284,6 +284,11 @@ if (isset($vars['borgrepo'])) {
             'app' => 'borgbackup', 'borgrepo' => $repoName,
         ]);
 
+        // Check if RRD exists for this repo and metric
+        $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', $repoName);
+        $rrd_filename = Rrd::name($device['hostname'], ['app', 'borgbackup', $app->app_id, 'repos___' . $repo_key . '___' . $subformat]);
+        $has_rrd = Rrd::checkRrdExists($rrd_filename);
+
         // Get the value for this graph type
         $value = $repoData[$subformat] ?? 0;
         if (str_contains($subformat, 'size') || str_contains($subformat, 'csize')) {
@@ -303,23 +308,34 @@ if (isset($vars['borgrepo'])) {
         echo '<div class="panel panel-default">';
         echo '<div class="panel-heading"><h3 class="panel-title">';
         echo '<a href="' . $repo_link . '" style="color: #0088cc;"><strong>' . htmlspecialchars($repoName) . '</strong></a>';
-        echo ' - <span class="text-muted">' . $value_str . '</span>';
+        if ($has_rrd) {
+            echo ' - <span class="text-muted">' . $value_str . '</span>';
+        }
         echo '</h3></div>';
         echo '<div class="panel-body"><div class="row">';
 
-        // Graph for this repository and graph type (hide Y scale)
-        $graph_array = [
-            'height' => '100',
-            'width'  => '215',
-            'to'     => \App\Facades\LibrenmsConfig::get('time.now'),
-            'id'     => $app['app_id'],
-            'legend' => 'no',
-            'nototal' => 1,
-            'type'   => 'application_borgbackup_' . $subformat,
-            'borgrepo' => $repoName,
-        ];
+        if ($has_rrd) {
+            // Graph for this repository and graph type (hide Y scale)
+            $graph_array = [
+                'height' => '100',
+                'width'  => '215',
+                'to'     => \App\Facades\LibrenmsConfig::get('time.now'),
+                'id'     => $app['app_id'],
+                'legend' => 'no',
+                'nototal' => 1,
+                'type'   => 'application_borgbackup_' . $subformat,
+                'borgrepo' => $repoName,
+            ];
 
-        include 'includes/html/print-graphrow.inc.php';
+            include 'includes/html/print-graphrow.inc.php';
+        } else {
+            // Fun "no data" message
+            echo '<div style="text-align: center; padding: 40px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; margin: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">';
+            echo '<div style="font-size: 14px; color: #fff; margin-bottom: 8px;">No RRD data available yet</div>';
+            echo '<div style="font-size: 18px; color: #ffd700; font-weight: bold;">Be patient, my young Padawan</div>';
+            echo '<div style="font-size: 11px; color: rgba(255,255,255,0.7); margin-top: 8px;">The data shall flow once the Force gathers enough measurements</div>';
+            echo '</div>';
+        }
 
         echo '</div></div></div>';
     }
