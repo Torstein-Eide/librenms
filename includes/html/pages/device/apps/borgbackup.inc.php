@@ -121,6 +121,9 @@ if (isset($vars['borgrepo'])) {
             'unique_csize' => 'Deduplicated Size',
             'total_csize' => 'Compressed Size',
             'total_size' => 'Original Size',
+            'total_chunks' => 'Total Chunks',
+            'total_unique_chunks' => 'Unique Chunks',
+            'unique_size' => 'Unique Chunk Size',
         ];
 
         foreach ($repoFields as $field => $label) {
@@ -154,7 +157,9 @@ if (isset($vars['borgrepo'])) {
         'borgbackup_unique_csize' => 'Deduplicated Size',
         'borgbackup_total_csize' => 'Compressed Size',
         'borgbackup_total_size' => 'Original Size',
-        'borgbackup_unique_size' => 'Size',
+        'borgbackup_unique_size' => 'Unique Chunk Size',
+        'borgbackup_total_chunks' => 'Total Chunks',
+        'borgbackup_total_unique_chunks' => 'Unique Chunks',
         'borgbackup_time_since_last_modified' => 'Seconds since last repo update',
         'borgbackup_errored' => 'Errored Repos',
         'borgbackup_locked' => 'Locked',
@@ -182,22 +187,40 @@ if (isset($vars['borgrepo'])) {
             $graph_array['chunks_logscale'] = $chunks_logscale ? '1' : '0';
         }
 
-        echo <<<HTML
-        <div class="panel panel-default">
-            <div class="panel-heading">
-                <h3 class="panel-title">{$graphTitle}</h3>
-            </div>
-            <div class="panel-body">
-                <div class="row">
-        HTML;
+        // Extract metric name from graph key (e.g., borgbackup_unique_csize -> unique_csize)
+        $metric = substr($graphKey, strlen('borgbackup_'));
+        $metricValue = $currentRepo[$metric] ?? null;
+
+        // Format the value for display
+        $value_str = '';
+        if ($metricValue !== null) {
+            if (str_contains($metric, 'size') || str_contains($metric, 'csize')) {
+                $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+                $v = (float) $metricValue;
+                $i = 0;
+                while ($v >= 1024 && $i < count($units) - 1) {
+                    $v /= 1024;
+                    $i++;
+                }
+                $value_str = round($v, 2) . ' ' . $units[$i];
+            } elseif (str_contains($metric, 'chunks')) {
+                $value_str = number_format((int) $metricValue);
+            } else {
+                $value_str = (string) $metricValue;
+            }
+        }
+
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3 class="panel-title">' . $graphTitle;
+        if ($value_str !== '') {
+            echo ' - <span class="text-muted">' . $value_str . '</span>';
+        }
+        echo '</h3></div>';
+        echo '<div class="panel-body"><div class="row">';
 
         include 'includes/html/print-graphrow.inc.php';
 
-        echo <<<'HTML'
-                </div>
-            </div>
-        </div>
-        HTML;
+        echo '</div></div></div>';
     }
 } elseif ($format == 'list') {
     // Overview table for all repositories
