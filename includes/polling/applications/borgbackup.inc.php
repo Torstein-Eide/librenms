@@ -145,7 +145,7 @@ if (strcmp((string) $data['mode'], 'multi') == 0) {
         Log::info('        -> Repository: ' . $repo_name);
 
         // Sanitize repository name for use in RRD names (replace special chars with underscores)
-        $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', $repo_name);
+        $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', (string) $repo_name);
 
         // Check if repository has valid data (total_size > 0)
         $repo_total_size = $repo_info['total_size'] ?? 0;
