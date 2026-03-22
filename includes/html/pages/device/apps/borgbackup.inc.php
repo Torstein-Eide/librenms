@@ -7,7 +7,7 @@ function format_metric_value($value, $metric): string
         return '';
     }
 
-    if (str_contains($metric, 'size') || str_contains($metric, 'csize')) {
+    if (str_contains((string) $metric, 'size') || str_contains((string) $metric, 'csize')) {
         $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
         $v = (float) $value;
         $i = 0;
@@ -19,7 +19,7 @@ function format_metric_value($value, $metric): string
         return round($v, 2) . ' ' . $units[$i];
     }
 
-    if (str_contains($metric, 'chunks')) {
+    if (str_contains((string) $metric, 'chunks')) {
         return number_format((int) $value);
     }
 
@@ -351,8 +351,8 @@ if (isset($vars['borgrepo'])) {
         echo '</div></div></div>';
     }
 
-// Overview tab of all repos
-// ==============================================================================
+    // Overview tab of all repos
+    // ==============================================================================
 } elseif ($format == 'list') {
     // Overview table for all repositories
     echo '<table class="table table-condensed table-hover">';
@@ -365,8 +365,8 @@ if (isset($vars['borgrepo'])) {
     }
     echo '</tbody></table>';
 
-// Per Graph view
-// ==============================================================================
+    // Per Graph view
+    // ==============================================================================
 } elseif ($format == 'graph') {
     // Per-graph-type view - all repos with one graph type
     $graphTitle = $graphTypes[$subformat] ?? $subformat;
