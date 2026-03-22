@@ -1203,7 +1203,7 @@ Apps like BorgBackup need three views: overview table, per-instance detail, and 
     $overviewLabel = ($format == 'list')
         ? '<span class="pagemenu-selected">Overview</span>'
         : 'Overview';
-    echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'list_overview']) . '">' . $overviewLabel . '</a>';
+    echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'list_overview', 'instance' => null]) . '">' . $overviewLabel . '</a>';
     echo ' | ';
 
     $graphTypes = [
@@ -1215,33 +1215,95 @@ Apps like BorgBackup need three views: overview table, per-instance detail, and 
         $label = ($subformat === $graphKey)
             ? '<span class="pagemenu-selected">' . $graphLabel . '</span>'
             : $graphLabel;
-        echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'graph_' . $graphKey]) . '">' . $label . '</a>';
+        echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'graph_' . $graphKey, 'instance' => null]) . '">' . $label . '</a>';
         echo ' | ';
     }
 
     print_optionbar_end();
 
-    // Per-instance view (when instance is selected)
-    if (isset($vars['instance'])) {
-        // Instance header and metadata
+    // Per-instance view (when instance is selected via URL param)
+    // The instance param name is customizable (e.g., 'borgrepo', 'disk', 'source')
+    $instanceParam = $vars['instance_param'] ?? 'instance';  // your param name
+    if (isset($vars[$instanceParam])) {
+        $current = $data[$vars[$instanceParam]] ?? [];
+
+        // Instance header
         echo '<div class="panel panel-default">';
-        echo '<div class="panel-heading"><h3>' . htmlspecialchars($vars['instance']) . '</h3></div></div>';
+        echo '<div class="panel-heading"><h3 class="panel-title"><strong>' . htmlspecialchars($vars[$instanceParam]) . '</strong></h3></div></div>';
+
+        // Instance metadata (optional)
+        if (! empty($current)) {
+            print_optionbar_start();
+            foreach ($metadataFields as $field => $label) {
+                if (isset($current[$field])) {
+                    echo "{$label}: {$current[$field]}<br>\n";
+                }
+            }
+            print_optionbar_end();
+        }
+
         // Render all graphs for this instance
+        foreach ($graphs as $graphKey => $graphTitle) {
+            $graph_array = [
+                'height' => '100',
+                'width' => '215',
+                'to' => \App\Facades\LibrenmsConfig::get('time.now'),
+                'id' => $app['app_id'],
+                'type' => 'application_' . $graphKey,
+                $instanceParam => $vars[$instanceParam],
+            ];
+            echo '<div class="panel panel-default"><div class="panel-heading"><h3 class="panel-title">' . $graphTitle . '</h3></div><div class="panel-body"><div class="row">';
+            include 'includes/html/print-graphrow.inc.php';
+            echo '</div></div></div>';
+        }
     }
     // Overview table (when format=list)
     elseif ($format == 'list') {
         echo '<table class="table table-condensed table-hover">';
-        // Table rows with links to per-instance view
-        echo '</table>';
+        echo '<thead><tr><th>Instance</th><th>Status</th><th>Value</th><th>Graph</th></tr></thead><tbody>';
+        foreach ($instances as $instanceName => $instanceData) {
+            $instance_link = \LibreNMS\Util\Url::generate($baseLink, [$instanceParam => $instanceName]);
+            echo '<tr>';
+            echo '<td><a href="' . $instance_link . '">' . htmlspecialchars($instanceName) . '</a></td>';
+            // ... status badge, value, mini graph ...
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
     }
     // Per-graph view (all instances, one graph type)
     elseif ($format == 'graph') {
-        foreach ($instances as $instance) {
+        foreach ($instances as $instanceName => $instanceData) {
+            $instance_link = \LibreNMS\Util\Url::generate($baseLink, [$instanceParam => $instanceName]);
+
+            // Check if RRD exists before rendering
+            $rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, 'instances___' . $instanceName . '___' . $subformat]);
+            $has_rrd = Rrd::checkRrdExists($rrd_filename);
+
             echo '<div class="panel panel-default">';
-            // Instance name link + current value
-            echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['instance' => $instance]) . '">' . $instance . '</a>';
-            // Single graph type for this instance
-            echo '</div>';
+            echo '<div class="panel-heading"><h3 class="panel-title">';
+            echo '<a href="' . $instance_link . '" style="color: #0088cc;"><strong>' . htmlspecialchars($instanceName) . '</strong></a>';
+            if ($has_rrd) {
+                echo ' - <span class="text-muted">' . format_value($instanceData[$subformat]) . '</span>';
+            }
+            echo '</h3></div>';
+            echo '<div class="panel-body"><div class="row">';
+
+            if ($has_rrd) {
+                $graph_array = [
+                    'height' => '100',
+                    'width' => '215',
+                    'to' => \App\Facades\LibrenmsConfig::get('time.now'),
+                    'id' => $app['app_id'],
+                    'type' => 'application_' . $name . '_' . $subformat,
+                    $instanceParam => $instanceName,
+                    'nototal' => 1,
+                ];
+                include 'includes/html/print-graphrow.inc.php';
+            } else {
+                echo '<div style="text-align: center; padding: 20px; color: #666;">No data available yet</div>';
+            }
+
+            echo '</div></div></div>';
         }
     }
     ```
@@ -1251,6 +1313,10 @@ This pattern combines:
 - **Overview table** showing all instances with mini graphs
 - **Per-instance view** with all graphs for one instance
 - **Per-graph view** with one graph type across all instances
+- **RRD existence check** before rendering graphs
+- **No-data handling** with placeholder message when RRD is missing
+
+The instance param name is customizable (e.g., `borgrepo`, `disk`, `source`). Use whatever makes sense for your app.
 
 ## Example: Minimal App
 
