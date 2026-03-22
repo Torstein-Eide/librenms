@@ -35,7 +35,7 @@ if (isset($vars['borgrepo'])) {
 
     $rrd_list = [];
     foreach ($repos as $repo) {
-        $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', $repo);
+        $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', (string) $repo);
         $rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, 'repos___' . $repo_key . '___' . $metric]);
 
         if (Rrd::checkRrdExists($rrd_filename)) {

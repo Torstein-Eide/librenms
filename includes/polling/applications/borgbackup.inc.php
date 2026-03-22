@@ -151,9 +151,9 @@ if (strcmp((string) $data['mode'], 'multi') == 0) {
         $repo_total_size = $repo_info['total_size'] ?? 0;
         if ($repo_total_size == 0) {
             $repo_error = $repo_info['error'] ?? null;
-            if ($repo_error && strcmp($repo_error, '') !== 0) {
+            if ($repo_error && strcmp((string) $repo_error, '') !== 0) {
                 Log::error('[' . $name . '] Repository "' . $repo_name . '" error: ' . $repo_error);
-                $app_data['errored'][$repo] = trim($repo_error);
+                $app_data['errored'][$repo] = trim((string) $repo_error);
             } else {
                 Log::error('[' . $name . '] Repository "' . $repo_name . '" has total_size=0, skipping');
                 $app_data['errored'][$repo] = 'total_size is 0 - repository may be empty or invalid';

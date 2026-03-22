@@ -248,7 +248,7 @@ if (isset($vars['borgrepo'])) {
 
         // Output table row with repository info and graph
         echo '<tr>';
-        echo '<td><a href="' . $repo_link . '">' . htmlspecialchars($repoName) . '</a></td>';
+        echo '<td><a href="' . $repo_link . '">' . htmlspecialchars((string) $repoName) . '</a></td>';
         echo '<td><span class="label ' . $badge_class . '">' . $badge . '</span></td>';
         echo '<td>' . $size_str . '</td>';
         echo '<td>' . $time_str . '</td>';
@@ -289,7 +289,7 @@ if (isset($vars['borgrepo'])) {
         ]);
 
         // Check if RRD exists for this repo and metric
-        $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', $repoName);
+        $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', (string) $repoName);
         $rrd_filename = Rrd::name($device['hostname'], ['app', 'borgbackup', $app->app_id, 'repos___' . $repo_key . '___' . $subformat]);
         $has_rrd = Rrd::checkRrdExists($rrd_filename);
 
@@ -311,7 +311,7 @@ if (isset($vars['borgrepo'])) {
 
         echo '<div class="panel panel-default">';
         echo '<div class="panel-heading"><h3 class="panel-title">';
-        echo '<a href="' . $repo_link . '" style="color: #0088cc;"><strong>' . htmlspecialchars($repoName) . '</strong></a>';
+        echo '<a href="' . $repo_link . '" style="color: #0088cc;"><strong>' . htmlspecialchars((string) $repoName) . '</strong></a>';
         if ($has_rrd) {
             echo ' - <span class="text-muted">' . $value_str . '</span>';
         }
