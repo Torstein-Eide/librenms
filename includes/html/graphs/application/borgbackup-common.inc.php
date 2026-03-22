@@ -13,39 +13,31 @@ $smalldescrlen = 5;
 $nototal = 1;
 $scale_max = in_array($metric, ['errored', 'locked', 'locked_for']) ? 1 : null;
 
+if (isset($vars['minscale']) && $vars['minscale'] == 1) {
+    $scale_min = '0';
+}
+
+// Build list of repos to display
 if (isset($vars['borgrepo'])) {
-    $repo = $vars['borgrepo'];
-    $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', $repo);
-    $rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, 'repos___' . $repo_key . '___' . $metric]);
-
-    if (Rrd::checkRrdExists($rrd_filename)) {
-        $rrd_list = [
-            [
-                'filename' => $rrd_filename,
-                'descr' => $repo,
-                'ds' => $ds,
-            ],
-        ];
-    }
-
-    require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';
+    $repos = [$vars['borgrepo']];
 } else {
     $repos = array_keys($app->data['repos'] ?? []);
     sort($repos);
-
-    $rrd_list = [];
-    foreach ($repos as $repo) {
-        $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', (string) $repo);
-        $rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, 'repos___' . $repo_key . '___' . $metric]);
-
-        if (Rrd::checkRrdExists($rrd_filename)) {
-            $rrd_list[] = [
-                'filename' => $rrd_filename,
-                'descr' => $repo,
-                'ds' => $ds,
-            ];
-        }
-    }
-
-    require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';
 }
+
+// Build RRD list for each repo
+$rrd_list = [];
+foreach ($repos as $repo) {
+    $repo_key = preg_replace('/[^A-Za-z0-9_\-]/', '_', (string) $repo);
+    $rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, 'repos___' . $repo_key . '___' . $metric]);
+
+    if (Rrd::checkRrdExists($rrd_filename)) {
+        $rrd_list[] = [
+            'filename' => $rrd_filename,
+            'descr' => $repo,
+            'ds' => $ds,
+        ];
+    }
+}
+
+require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';
