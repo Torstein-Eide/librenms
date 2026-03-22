@@ -1092,6 +1092,166 @@ State is stored in `$vars['graph']`. Combine with Pattern 3 (instance selection)
     echo '</div></div></div>';
     ```
 
+### Navigation Button Pattern
+
+Use `print_optionbar_start()/end()` with pipe-separated links. Active items get `<span class="pagemenu-selected">`.
+
+??? example "Navigation button pattern"
+    ```php
+    <?php
+
+    // Build base link array for consistent URL generation
+    $baseLink = [
+        'page'   => 'device',
+        'device' => $device['device_id'],
+        'tab'    => 'apps',
+        'app'    => 'appname',
+    ];
+
+    // Parse URL format to determine current view
+    $vars['format'] ??= 'list_overview';
+    [$format, $subformat] = explode('_', basename($vars['format']), 2);
+
+    print_optionbar_start();
+
+    // Overview link - highlighted when format is 'list'
+    $overviewLabel = ($format == 'list')
+        ? '<span class="pagemenu-selected">Overview</span>'
+        : 'Overview';
+    echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'list_overview']) . '">' . $overviewLabel . '</a>';
+    echo ' | ';
+
+    // Build list of view types with links
+    $viewTypes = [
+        'graph_size'    => 'Size',
+        'graph_count'   => 'Count',
+        'graph_status'  => 'Status',
+    ];
+
+    $links = [];
+    foreach ($viewTypes as $viewKey => $viewLabel) {
+        $label = ($subformat === str_replace('graph_', '', $viewKey))
+            ? '<span class="pagemenu-selected">' . $viewLabel . '</span>'
+            : $viewLabel;
+        $links[] = '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => $viewKey]) . '">' . $label . '</a>';
+    }
+    echo 'View Types: ' . implode(' | ', $links);
+
+    print_optionbar_end();
+    ```
+
+Key points:
+- Use `$baseLink` array for consistent URL generation
+- Parse `$vars['format']` to determine current view (format_subformat pattern)
+- Wrap active item label in `<span class="pagemenu-selected">`
+- Use `\LibreNMS\Util\Url::generate()` or `generate_link()` for URL generation
+- Separate items with ` | ` (pipe + space)
+
+### Pattern 8: Multi-View System (Overview + Per-Instance + Per-Graph)
+
+Apps like BorgBackup need three views: overview table, per-instance detail, and per-graph comparison. Use URL format parsing to route between views.
+
+???+ info "Pattern 8 rendered (Multi-View System)"
+    ```text
+    Overview:
+    +-----------------------------------------------------+
+    | Overview | Deduplicated Size | Compressed Size ... |
+    +-----------------------------------------------------+
+    | Repository    | Status | Size       | Graph        |
+    +-----------------------------------------------------+
+    | repo1         | OK     | 1.5 TB     | [graph]      |
+    | repo2         | OK     | 800 GB     | [graph]      |
+    +-----------------------------------------------------+
+
+    Per-instance (click repo):
+    +-----------------------------------------------------+
+    | Overview | Deduplicated Size | Compressed Size ... |
+    +-----------------------------------------------------+
+    | repo1                                          [X] |
+    +-----------------------------------------------------+
+    | Deduplicated Size | Compressed Size | ...           |
+    | [graphs for this instance]                         |
+    +-----------------------------------------------------+
+
+    Per-graph (click metric):
+    +-----------------------------------------------------+
+    | Overview | Deduplicated Size | Compressed Size ... |
+    +-----------------------------------------------------+
+    | repo1 - 1.5 TB     | repo2 - 800 GB                |
+    | [~~~~graph~~~~]    | [~~~~graph~~~~]                |
+    +-----------------------------------------------------+
+    ```
+
+??? example "Pattern 8: Multi-View System"
+    ```php
+    <?php
+
+    print_optionbar_start();
+
+    $baseLink = [
+        'page'   => 'device',
+        'device' => $device['device_id'],
+        'tab'    => 'apps',
+        'app'    => 'appname',
+    ];
+
+    // Parse URL format: format_subformat
+    $vars['format'] ??= 'list_overview';
+    [$format, $subformat] = explode('_', basename($vars['format']), 2);
+
+    // Navigation bar
+    $overviewLabel = ($format == 'list')
+        ? '<span class="pagemenu-selected">Overview</span>'
+        : 'Overview';
+    echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'list_overview']) . '">' . $overviewLabel . '</a>';
+    echo ' | ';
+
+    $graphTypes = [
+        'unique_csize' => 'Deduplicated Size',
+        'total_csize' => 'Compressed Size',
+    ];
+
+    foreach ($graphTypes as $graphKey => $graphLabel) {
+        $label = ($subformat === $graphKey)
+            ? '<span class="pagemenu-selected">' . $graphLabel . '</span>'
+            : $graphLabel;
+        echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['format' => 'graph_' . $graphKey]) . '">' . $label . '</a>';
+        echo ' | ';
+    }
+
+    print_optionbar_end();
+
+    // Per-instance view (when instance is selected)
+    if (isset($vars['instance'])) {
+        // Instance header and metadata
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3>' . htmlspecialchars($vars['instance']) . '</h3></div></div>';
+        // Render all graphs for this instance
+    }
+    // Overview table (when format=list)
+    elseif ($format == 'list') {
+        echo '<table class="table table-condensed table-hover">';
+        // Table rows with links to per-instance view
+        echo '</table>';
+    }
+    // Per-graph view (all instances, one graph type)
+    elseif ($format == 'graph') {
+        foreach ($instances as $instance) {
+            echo '<div class="panel panel-default">';
+            // Instance name link + current value
+            echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, ['instance' => $instance]) . '">' . $instance . '</a>';
+            // Single graph type for this instance
+            echo '</div>';
+        }
+    }
+    ```
+
+This pattern combines:
+- **URL format parsing** (`format_subformat`) for view routing
+- **Overview table** showing all instances with mini graphs
+- **Per-instance view** with all graphs for one instance
+- **Per-graph view** with one graph type across all instances
+
 ## Example: Minimal App
 
 ### 1. Polling file (`includes/polling/applications/myapp.inc.php`)
