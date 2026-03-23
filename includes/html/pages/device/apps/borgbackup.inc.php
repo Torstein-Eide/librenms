@@ -228,7 +228,6 @@ echo '<a href="' . \LibreNMS\Util\Url::generate($baseLink, $toggleVars) . '">' .
 
 print_optionbar_end();
 
-
 // Display selected repository details (per-repo view)
 // ==============================================================================
 if (isset($vars['borgrepo'])) {
