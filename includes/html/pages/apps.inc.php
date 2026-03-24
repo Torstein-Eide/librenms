@@ -415,6 +415,11 @@ $graphs['chronyd'] = [
     'frequency',
     'root',
 ];
+$graphs['btrfs'] = [
+    'overall',
+    'errors',
+    'status',
+];
 $graphs['cape'] = [
     'status',
     'pending',

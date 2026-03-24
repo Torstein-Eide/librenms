@@ -3,10 +3,9 @@
 $name = 'btrfs';
 $unit_text = 'bytes';
 $colours = 'psychedelic';
-$dostack = 1;
 $printtotal = 0;
-$addarea = 1;
-$transparency = 15;
+$nototal = 1;
+$graph_params->scale_min = 0;
 
 $fs_rrd_id = $app->data['fs_rrd_key'][$vars['fs']] ?? $vars['fs'];
 $rrd_filename = \App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id]);
@@ -31,12 +30,8 @@ $rrd_list = [
         'filename' => $rrd_filename,
         'descr' => 'Unallocated',
         'ds' => 'usage_unallocated',
-    ],
-    [
-        'filename' => $rrd_filename,
-        'descr' => 'Device Size',
-        'ds' => 'usage_device_size',
+        'colour' => '99999955',
     ],
 ];
 
-require 'includes/html/graphs/generic_multi_line.inc.php';
+require 'includes/html/graphs/generic_multi_simplex_seperated.inc.php';
