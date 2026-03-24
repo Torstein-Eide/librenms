@@ -6,6 +6,10 @@ use LibreNMS\Util\Url;
 
 require_once __DIR__ . '/../btrfs-common.inc.php';
 
+// Global btrfs apps page.
+// Renders cross-device filesystem summaries using poller-persisted app->data.
+// Uses shared btrfs helpers for formatting and status semantics to match device page behavior.
+
 $user = Auth::user();
 if (! $user instanceof User) {
     return;
@@ -18,19 +22,7 @@ $apps = Application::query()
     ->get()
     ->sortBy(fn ($app) => $app->device?->hostname ?? '');
 
-echo '<style>
-.btrfs-sticky-first th:first-child,
-.btrfs-sticky-first td:first-child {
-    position: sticky;
-    left: 0;
-    z-index: 2;
-    background: #fff;
-}
-.btrfs-sticky-first thead th:first-child {
-    z-index: 3;
-    background: #f5f5f5;
-}
-</style>';
+$btrfs_print_sticky_first_css();
 
 
 
@@ -45,9 +37,10 @@ if ($apps->isEmpty()) {
     return;
 }
 
+// Global overview table: one row per (device, filesystem).
 echo '<div class="table-responsive">';
 echo '<table class="table table-condensed table-striped table-hover btrfs-sticky-first">';
-echo '<thead><tr><th>Device</th><th>Filesystem</th><th>IO</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>Total Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Data Ratio</th><th>Metadata Ratio</th><th>Devices</th><th>Combined Status</th></tr></thead>';
+echo '<thead><tr><th>Device</th><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Data Ratio</th><th>Metadata Ratio</th><th>Devices</th><th>Combined Status</th></tr></thead>';
 echo '<tbody>';
 
 foreach ($apps as $app) {
@@ -57,27 +50,29 @@ foreach ($apps as $app) {
     }
 
     $filesystems = $app->data['filesystems'] ?? [];
+    $filesystemMeta = $app->data['filesystem_meta'] ?? [];
     $filesystemTables = $app->data['filesystem_tables'] ?? [];
     $deviceMap = $app->data['device_map'] ?? [];
-    $commandTables = $app->data['command_tables'] ?? [];
+    $scrubStatusFs = $app->data['scrub_status_fs'] ?? [];
 
     foreach ($filesystems as $fs) {
+        // Build one summary row for this filesystem on this device.
         $fsData = $filesystemTables[$fs] ?? [];
         $fsDevices = $deviceMap[$fs] ?? [];
-        $showRows = $commandTables[$fs]['filesystem_show'] ?? [];
-
-        $displayName = $btrfs_display_fs_name($fs, $showRows);
+        $fsLabel = trim((string) ($filesystemMeta[$fs]['label'] ?? ''));
+        $displayName = $fsLabel !== '' ? $fsLabel . ' (' . $fs . ')' : (string) $fs;
 
         $ioState = $btrfs_status_from_code($fsData['io_status_code'] ?? null);
         $scrubState = $btrfs_status_from_code($fsData['scrub_status_code'] ?? null);
         $balanceState = $btrfs_status_from_code($fsData['balance_status_code'] ?? null);
 
-        $scrubRows = $commandTables[$fs]['scrub_status'] ?? [];
-        $scrubProgressText = $btrfs_scrub_progress_text($scrubRows);
+        $scrubStatus = $scrubStatusFs[$fs] ?? [];
+        $scrubProgressText = is_array($scrubStatus) && count($scrubStatus) > 0
+            ? $btrfs_scrub_progress_text_from_status($scrubStatus)
+            : 'N/A';
 
         $deviceTables = $app->data['device_tables'][$fs] ?? [];
-        $scrubTables = $app->data['scrub_tables'][$fs] ?? [];
-        $totalErrors = $btrfs_total_errors($deviceTables, $scrubTables);
+        $totalErrors = $btrfs_total_io_errors($deviceTables);
 
         $usedPercentText = $btrfs_used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
 
@@ -133,6 +128,7 @@ $graphTypes = [
     'btrfs_fs_data_types' => 'Per Data Type',
 ];
 
+// Device-grouped filesystem panels with quick mini-graphs.
 foreach ($apps as $app) {
     $device = $app->device;
     if (! $device) {
@@ -140,16 +136,17 @@ foreach ($apps as $app) {
     }
 
     $filesystems = $app->data['filesystems'] ?? [];
+    $filesystemMeta = $app->data['filesystem_meta'] ?? [];
     $filesystemTables = $app->data['filesystem_tables'] ?? [];
-    $commandTables = $app->data['command_tables'] ?? [];
     echo '<div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">' . Url::deviceLink($device) . '</h3></div>';
     echo '<div class="panel-body">';
 
     foreach ($filesystems as $fs) {
+        // Render filesystem header + status + four mini-graphs.
         $fsData = $filesystemTables[$fs] ?? [];
-        $showRows = $commandTables[$fs]['filesystem_show'] ?? [];
-        $displayFs = $btrfs_display_fs_name((string) $fs, $showRows);
+        $fsLabel = trim((string) ($filesystemMeta[$fs]['label'] ?? ''));
+        $displayFs = $fsLabel !== '' ? $fsLabel . ' (' . $fs . ')' : (string) $fs;
         $headerLink = Url::generate([
             'page' => 'device',
             'device' => $device->device_id,

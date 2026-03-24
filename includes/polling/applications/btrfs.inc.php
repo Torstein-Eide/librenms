@@ -5,21 +5,54 @@ use LibreNMS\Enum\Severity;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\RRD\RrdDefinition;
 
+// Poller responsibilities for btrfs app data:
+// - parse unix-agent JSON payload into stable table/metric structures
+// - publish per-filesystem/per-device/app-level RRD datasets
+// - maintain synthetic btrfs state sensors (IO/Scrub/Balance)
+// - store compact app->data used by device/global btrfs pages
+//
+// High-level flow:
+//
+//   json_app_get() payload
+//            |
+//            v
+//   define helpers + RRD/state metadata
+//            |
+//            v
+//   ensure state indexes/translations (idempotent)
+//            |
+//            v
+//   for each filesystem:
+//     - normalize overall metrics
+//     - build canonical structured app data
+//     - compute IO/Scrub/Balance status codes
+//     - write filesystem RRD
+//     - upsert filesystem state sensors
+//            |
+//            v
+//   for each device in filesystem:
+//     - extract io/scrub/usage stats
+//     - write device + dynamic type RRDs
+//     - compute device status codes
+//     - upsert device state sensors
+//            |
+//            v
+//   aggregate app-level totals + overall RRD
+//            |
+//            v
+//   persist compact app->data + update_application()
 $name = 'btrfs';
 
-$safe_id = static function (string $value): string {
-    $base = preg_replace('/[^A-Za-z0-9._-]/', '_', $value);
-    $base = trim((string) $base, '_');
-    if ($base === '') {
-        $base = 'id';
-    }
+$normalize_id = static function (string $value): string {
+    // Keep IDs filename-safe and readable (v1 naming, no hash suffix).
+    $id = preg_replace('/[^A-Za-z0-9._-]/', '_', $value);
+    $id = trim((string) $id, '_');
 
-    $base = substr($base, 0, 32);
-    $hash = substr(hash('crc32b', $value), 0, 8);
-
-    return $base . '_' . $hash;
+    return $id === '' ? 'id' : $id;
 };
 
+// Split flattened command rows into overview/device tables expected by page renderers.
+// Keep this in poller so UI rendering stays lightweight and deterministic.
 function btrfs_command_table_split(string $command_name, array $rows): array
 {
     $overview_rows = [];
@@ -147,6 +180,10 @@ function btrfs_command_table_split(string $command_name, array $rows): array
             $device_key = 'Device ' . ((int) $index + 1);
         }
 
+        if (str_contains(strtolower((string) $device_key), '<missing disk>')) {
+            $device_key = '<missing disk>';
+        }
+
         $normalized_devices[$device_key] = $metrics;
     }
 
@@ -260,26 +297,6 @@ try {
 
 $filesystems = $btrfs['filesystems'] ?? [];
 
-$flatten_values = static function ($value, string $prefix = '') use (&$flatten_values): array {
-    if (! is_array($value)) {
-        return $prefix === '' ? [] : [$prefix => $value];
-    }
-
-    $rows = [];
-    foreach ($value as $key => $child) {
-        $segment = is_int($key) ? '[' . $key . ']' : (string) $key;
-        $path = $prefix === '' ? $segment : $prefix . '.' . $segment;
-
-        if (is_array($child)) {
-            $rows += $flatten_values($child, $path);
-        } else {
-            $rows[$path] = $child;
-        }
-    }
-
-    return $rows;
-};
-
 $fs_space_datasets = [
     'device_size' => 'device_size_bytes',
     'device_allocated' => 'device_allocated_bytes',
@@ -311,6 +328,8 @@ $fs_rrd_def
     ->addDataset('balance_status_code', 'GAUGE', 0);
 
 $get_balance_status_code = static function (array $fs): int {
+    // Status code map: 0=OK, 1=Running, 2=N/A, 3=Error.
+    // For balance, rc=0 indicates no active balance and maps to N/A.
     $command = $fs['commands']['balance_status'] ?? null;
     if (! is_array($command)) {
         return 2; // NA
@@ -353,6 +372,8 @@ $get_balance_status_code = static function (array $fs): int {
 };
 
 $normalize_overall = static function (array $fs): array {
+    // Normalize filesystem_usage.overall to stable field names consumed by
+    // metrics, RRD writes, and page tables.
     $overall = $fs['commands']['filesystem_usage']['data']['overall'] ?? [];
 
     return [
@@ -372,37 +393,89 @@ $normalize_overall = static function (array $fs): array {
     ];
 };
 
-$extract_device_stats = static function (array $fs): array {
-    $entries = $fs['commands']['device_stats']['data']['device-stats'] ?? [];
-    if (! is_array($entries)) {
+$normalize_device_path = static function (?string $path): ?string {
+    if (! is_string($path)) {
+        return null;
+    }
+
+    $trimmed = trim($path);
+    if ($trimmed === '') {
+        return null;
+    }
+
+    if (str_contains(strtolower($trimmed), '<missing disk>')) {
+        return '<missing disk>';
+    }
+
+    return $trimmed;
+};
+
+$extract_device_stats = static function (array $fs) use ($normalize_device_path): array {
+    // Extract per-device IO error counters from devinfo only.
+    // Current parser stores devinfo at filesystem root (`$fs['devinfo']`).
+    // Keep a legacy fallback for older command-wrapped layouts.
+    $devinfo = $fs['devinfo'] ?? ($fs['commands']['devinfo']['data']['devinfo'] ?? []);
+    if (! is_array($devinfo)) {
         return [];
     }
 
+    $path_by_devid = [];
+    $show_devices = $fs['commands']['filesystem_show']['data']['devices'] ?? [];
+    if (is_array($show_devices)) {
+        foreach ($show_devices as $show_device) {
+            if (! is_array($show_device)) {
+                continue;
+            }
+
+            $show_devid = $show_device['devid'] ?? null;
+            $show_path = $normalize_device_path($show_device['path'] ?? null);
+            if (! is_scalar($show_devid) || (string) $show_devid === '' || ! is_string($show_path) || $show_path === '') {
+                continue;
+            }
+
+            $path_by_devid[(string) $show_devid] = $show_path;
+        }
+    }
+
     $devices = [];
-    foreach ($entries as $entry) {
+    foreach ($devinfo as $devinfo_key => $entry) {
         if (! is_array($entry)) {
             continue;
         }
 
-        $path = $entry['device'] ?? null;
-        if (! is_string($path) || $path === '') {
+        $devid = (string) (is_scalar($devinfo_key) ? $devinfo_key : ($entry['id'] ?? ''));
+        if ($devid === '') {
             continue;
         }
 
+        $is_missing = ((int) ($entry['missing'] ?? 0) === 1);
+        $path = $path_by_devid[$devid] ?? ($is_missing ? '<missing disk>' : null);
+        if (! is_string($path) || $path === '') {
+            $path = 'devid-' . $devid;
+        }
+
+        $error_stats = $entry['error_stats'] ?? [];
+        if (! is_array($error_stats)) {
+            $error_stats = [];
+        }
+
         $devices[$path] = [
-            'devid' => $entry['devid'] ?? null,
-            'corruption_errs' => $entry['corruption_errs'] ?? null,
-            'flush_io_errs' => $entry['flush_io_errs'] ?? null,
-            'generation_errs' => $entry['generation_errs'] ?? null,
-            'read_io_errs' => $entry['read_io_errs'] ?? null,
-            'write_io_errs' => $entry['write_io_errs'] ?? null,
+            'devid' => $devid,
+            'missing' => $is_missing,
+            'corruption_errs' => $error_stats['corruption_errs'] ?? null,
+            'flush_io_errs' => $error_stats['flush_errs'] ?? null,
+            'generation_errs' => $error_stats['generation_errs'] ?? null,
+            'read_io_errs' => $error_stats['read_errs'] ?? null,
+            'write_io_errs' => $error_stats['write_errs'] ?? null,
         ];
     }
 
     return $devices;
 };
 
-$extract_scrub_device_stats = static function (array $fs): array {
+$extract_scrub_device_stats = static function (array $fs) use ($normalize_device_path): array {
+    // Extract scrub per-device counters from scrub_status_devices only.
+    // This keeps scrub device semantics consistent across versions.
     $devices = [];
     $raw_devices = $fs['commands']['scrub_status_devices']['data']['devices'] ?? [];
 
@@ -415,9 +488,9 @@ $extract_scrub_device_stats = static function (array $fs): array {
             continue;
         }
 
-        $path = $entry['path'] ?? null;
+        $path = $normalize_device_path($entry['path'] ?? null);
         if (! is_string($path) || $path === '') {
-            $path = is_string($key) ? $key : null;
+            $path = $normalize_device_path(is_string($key) ? $key : null);
         }
         if (! is_string($path) || $path === '') {
             continue;
@@ -456,7 +529,9 @@ $extract_scrub_device_stats = static function (array $fs): array {
     return $devices;
 };
 
-$extract_device_usage = static function (array $fs): array {
+$extract_device_usage = static function (array $fs) use ($normalize_device_path): array {
+    // Build per-device usage totals and capture dynamic type buckets
+    // (data_*, metadata_*, system_*) for dedicated RRD series.
     $entries = $fs['commands']['device_usage']['data']['devices'] ?? [];
     if (! is_array($entries)) {
         return [];
@@ -468,7 +543,7 @@ $extract_device_usage = static function (array $fs): array {
             continue;
         }
 
-        $path = $entry['path'] ?? null;
+        $path = $normalize_device_path($entry['path'] ?? null);
         if (! is_string($path) || $path === '') {
             continue;
         }
@@ -509,6 +584,7 @@ $extract_device_usage = static function (array $fs): array {
 };
 
 $extract_usage_type_totals = static function (array $fs): array {
+    // Aggregate dynamic usage types across devices for filesystem-level graphs.
     $entries = $fs['commands']['device_usage']['data']['devices'] ?? [];
     if (! is_array($entries)) {
         return [];
@@ -536,6 +612,55 @@ $extract_usage_type_totals = static function (array $fs): array {
     return $totals;
 };
 
+$filesystem_has_missing_device = static function (array $fs): bool {
+    $missing_bytes = $fs['commands']['filesystem_usage']['data']['overall']['device_missing'] ?? 0;
+    if (is_numeric($missing_bytes) && (float) $missing_bytes > 0) {
+        return true;
+    }
+
+    $devices = $fs['commands']['filesystem_show']['data']['devices'] ?? [];
+    if (! is_array($devices)) {
+        return false;
+    }
+
+    foreach ($devices as $device_entry) {
+        if (! is_array($device_entry)) {
+            continue;
+        }
+
+        $path = strtolower((string) ($device_entry['path'] ?? ''));
+        if ($path !== '' && str_contains($path, '<missing disk>')) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+$extract_filesystem_uuid = static function (array $fs): string {
+    // Preferred UUID source is filesystem_show.
+    // Redundant fallbacks handle parser/output drift across btrfs versions.
+    $candidates = [
+        $fs['commands']['filesystem_show']['data']['uuid'] ?? null,
+        $fs['commands']['scrub_status']['data']['uuid'] ?? null,
+        $fs['commands']['scrub_status_devices']['data']['uuid'] ?? null,
+        $fs['uuid'] ?? null,
+    ];
+
+    foreach ($candidates as $candidate) {
+        if (! is_string($candidate)) {
+            continue;
+        }
+
+        $uuid = trim($candidate);
+        if ($uuid !== '') {
+            return $uuid;
+        }
+    }
+
+    return '';
+};
+
 $device_rrd_def = RrdDefinition::make()
     ->addDataset('io_d_corruption', 'DERIVE', 0)
     ->addDataset('io_d_flush', 'DERIVE', 0)
@@ -547,12 +672,23 @@ $device_rrd_def = RrdDefinition::make()
     ->addDataset('io_c_generation', 'COUNTER', 0)
     ->addDataset('io_c_read', 'COUNTER', 0)
     ->addDataset('io_c_write', 'COUNTER', 0)
+    ->addDataset('io_t_corruption', 'GAUGE', 0)
+    ->addDataset('io_t_flush', 'GAUGE', 0)
+    ->addDataset('io_t_generation', 'GAUGE', 0)
+    ->addDataset('io_t_read', 'GAUGE', 0)
+    ->addDataset('io_t_write', 'GAUGE', 0)
     ->addDataset('scrub_c_read', 'COUNTER', 0)
     ->addDataset('scrub_c_csum', 'COUNTER', 0)
     ->addDataset('scrub_c_verify', 'COUNTER', 0)
     ->addDataset('scrub_c_uncorrectable', 'COUNTER', 0)
     ->addDataset('scrub_c_unverified', 'COUNTER', 0)
     ->addDataset('scrub_c_corrected', 'COUNTER', 0)
+    ->addDataset('scrub_t_read', 'GAUGE', 0)
+    ->addDataset('scrub_t_csum', 'GAUGE', 0)
+    ->addDataset('scrub_t_verify', 'GAUGE', 0)
+    ->addDataset('scrub_t_uncorrectable', 'GAUGE', 0)
+    ->addDataset('scrub_t_unverified', 'GAUGE', 0)
+    ->addDataset('scrub_t_corrected', 'GAUGE', 0)
     ->addDataset('scrub_d_read', 'DERIVE', 0)
     ->addDataset('scrub_d_csum', 'DERIVE', 0)
     ->addDataset('scrub_d_verify', 'DERIVE', 0)
@@ -584,6 +720,8 @@ $io_error_keys = ['corruption_errs', 'flush_io_errs', 'generation_errs', 'read_i
 $scrub_error_keys = ['read_errors', 'csum_errors', 'verify_errors', 'uncorrectable_errors', 'unverified_errors', 'missing', 'device_missing'];
 
 $ensure_state_index = static function (string $state_name, array $states): ?int {
+    // Ensure state index/translations exist for synthetic state sensors.
+    // Writes are idempotent and only occur for missing/changed rows.
     $state_index_id = dbFetchCell('SELECT `state_index_id` FROM `state_indexes` WHERE `state_name` = ?', [$state_name]);
     $created_index = false;
 
@@ -655,6 +793,7 @@ $status_states = [
     ['value' => 1, 'generic' => 1, 'graph' => 0, 'descr' => 'Running'],
     ['value' => 2, 'generic' => 3, 'graph' => 0, 'descr' => 'N/A'],
     ['value' => 3, 'generic' => 2, 'graph' => 0, 'descr' => 'Error'],
+    ['value' => 4, 'generic' => 2, 'graph' => 0, 'descr' => 'Missing'],
 ];
 
 $io_state_index_id = $ensure_state_index('btrfsIoStatusState', $status_states);
@@ -662,6 +801,8 @@ $scrub_state_index_id = $ensure_state_index('btrfsScrubStatusState', $status_sta
 $balance_state_index_id = $ensure_state_index('btrfsBalanceStatusState', $status_states);
 
 $upsert_state_sensor = static function (array $device, string $sensor_index, string $sensor_type, string $sensor_descr, int $sensor_current, ?int $state_index_id, string $sensor_group): void {
+    // Idempotent sensor upsert keyed by (device, class, poller_type, type, sensor_index).
+    // This preserves sensor identity across polls so state history and RRD continuity remain intact.
     $sensor_id = dbFetchCell(
         'SELECT `sensor_id` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `sensor_index` = ?',
         [$device['device_id'], 'state', 'agent', $sensor_type, $sensor_index]
@@ -690,6 +831,7 @@ $upsert_state_sensor = static function (array $device, string $sensor_index, str
 
     $sensor_rrd_name = get_sensor_rrd_name($device, $data);
     $sensor_rrd_def = RrdDefinition::make()->addDataset('sensor', 'GAUGE');
+    // Keep standard sensor RRD output for compatibility with Health/State views.
     app('Datastore')->put($device, 'sensor', [
         'sensor_class' => 'state',
         'sensor_type' => $sensor_type,
@@ -711,6 +853,7 @@ $upsert_state_sensor = static function (array $device, string $sensor_index, str
 };
 
 $delete_state_sensor = static function (array $device, string $sensor_index, string $sensor_type): void {
+    // Remove obsolete synthetic sensor and state mapping rows.
     dbDelete(
         'sensors_to_state_indexes',
         '`sensor_id` IN (SELECT `sensor_id` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `sensor_index` = ?)',
@@ -724,6 +867,7 @@ $delete_state_sensor = static function (array $device, string $sensor_index, str
 };
 
 $cleanup_legacy_btrfs_state_sensors = static function (array $device): void {
+    // Cleanup legacy group='btrfs' sensors from older iterations.
     $legacy_types = ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'];
 
     foreach ($legacy_types as $sensor_type) {
@@ -744,12 +888,16 @@ $cleanup_legacy_btrfs_state_sensors($device);
 
 $metrics = [];
 $device_map = [];
-$command_tables = [];
-$command_splits = [];
+$filesystem_meta = [];
 $filesystem_tables = [];
 $filesystem_data_types = [];
 $device_tables = [];
 $scrub_tables = [];
+$scrub_status_fs = [];
+$scrub_status_devices = [];
+$balance_status_fs = [];
+$filesystem_uuid = [];
+$old_filesystem_uuid = $app->data['filesystem_uuid'] ?? [];
 $fs_rrd_key = [];
 $dev_rrd_key = [];
 $device_error_seen = $app->data['device_error_seen'] ?? [];
@@ -759,6 +907,7 @@ $overview_totals = array_fill_keys(array_keys($fs_space_datasets), 0);
 unset($overview_totals['data_ratio'], $overview_totals['metadata_ratio']); // ratios don't sum meaningfully
 
 foreach ($filesystems as $fs) {
+    // First pass: compute app-level overview totals across filesystems.
     $overall = $normalize_overall($fs);
     foreach ($overview_totals as $ds => $unused) {
         $key = $fs_space_datasets[$ds];
@@ -771,9 +920,11 @@ foreach ($filesystems as $fs) {
 // Per filesystem
 $fs_names = [];
 $app_has_data = false;
+$app_has_missing = false;
 $app_has_running = false;
 $app_has_error = false;
 $app_io_has_data = false;
+$app_io_missing = false;
 $app_io_has_error = false;
 $app_scrub_has_data = false;
 $app_scrub_has_error = false;
@@ -784,9 +935,12 @@ $app_balance_running = false;
 $app_io_errors_total = 0.0;
 $app_scrub_errors_total = 0.0;
 foreach ($filesystems as $fs_name => $fs) {
+    // Main per-filesystem pass: parse command payloads, write RRD data,
+    // compute status codes, and sync synthetic state sensors.
     $fs_names[] = $fs_name;
     $overall = $normalize_overall($fs);
-    $fs_label = trim((string) ($fs['commands']['filesystem_show']['data']['label'] ?? ''));
+    $fs_show = $fs['commands']['filesystem_show']['data'] ?? [];
+    $fs_label = trim((string) ($fs_show['label'] ?? ''));
     if ($fs_label !== '') {
         $fs_display_name = $fs_label;
     } elseif ($fs_name === '/') {
@@ -794,50 +948,91 @@ foreach ($filesystems as $fs_name => $fs) {
     } else {
         $fs_display_name = $fs_name;
     }
-    $fs_uuid = (string) ($fs['commands']['filesystem_show']['data']['uuid'] ?? '');
+
+    $filesystem_meta[$fs_name] = [
+        'mountpoint' => $fs['mountpoint'] ?? $fs_name,
+        'label' => $fs_label,
+        'total_devices' => $fs_show['total_devices'] ?? null,
+        'fs_bytes_used' => $fs_show['fs_bytes_used'] ?? null,
+    ];
+
+    $fs_uuid = $extract_filesystem_uuid($fs);
+    if ($fs_uuid === '' && isset($old_filesystem_uuid[$fs_name]) && is_string($old_filesystem_uuid[$fs_name])) {
+        // Preserve last known UUID if current payload omits it.
+        $fs_uuid = $old_filesystem_uuid[$fs_name];
+    }
+    $filesystem_uuid[$fs_name] = $fs_uuid;
     $fs_uuid_compact = preg_replace('/[^A-Fa-f0-9]/', '', $fs_uuid);
-    $fs_rrd_id = strlen((string) $fs_uuid_compact) >= 6
-        ? strtolower(substr((string) $fs_uuid_compact, 0, 6))
-        : $safe_id((string) $fs_name);
+    $fs_rrd_id = strlen((string) $fs_uuid_compact) >= 10
+        ? strtolower(substr((string) $fs_uuid_compact, 0, 10))
+        : $normalize_id((string) $fs_name);
     $fs_rrd_key[$fs_name] = $fs_rrd_id;
 
-    $commands = $fs['commands'] ?? [];
-    foreach ($commands as $command_name => $command) {
-        $command_data = $command['data'] ?? null;
-        $flattened = $flatten_values($command_data);
-
-        $command_rows = [];
-        foreach ($flattened as $key => $value) {
-            if (is_bool($value)) {
-                $value = $value ? 'true' : 'false';
-            } elseif ($value === null) {
-                $value = 'null';
-            } elseif (! is_scalar($value)) {
-                $value = json_encode($value);
-            } else {
-                $value = (string) $value;
-            }
-
-            $command_rows[] = ['key' => (string) $key, 'value' => $value];
-        }
-
-        $command_tables[$fs_name][$command_name] = $command_rows;
-        $command_splits[$fs_name][$command_name] = btrfs_command_table_split($command_name, $command_rows);
-    }
-
+    // app_id comes from the existing applications row for this device/app_type
+    // (discovered and loaded by LibreNMS before this poller include runs).
+    // Example filename segment: app-btrfs-13-* where 13 === $app->app_id.
     $rrd_name = ['app', $name, $app->app_id, $fs_rrd_id];
     $fields = [];
     foreach ($fs_space_datasets as $ds => $key) {
         $fields[$ds] = $overall[$key] ?? null;
     }
 
-    $fs_metric_prefix = 'fs_' . $safe_id((string) $fs_name) . '_';
+    $fs_metric_prefix = 'fs_' . $fs_rrd_id . '_';
 
     $devices = $extract_device_stats($fs);
     $scrub_devices = $extract_scrub_device_stats($fs);
     $usage_devices = $extract_device_usage($fs);
     $usage_type_totals = $extract_usage_type_totals($fs);
     $filesystem_data_types[$fs_name] = $usage_type_totals;
+
+    $fs_scrub_status = $fs['commands']['scrub_status']['data'] ?? [];
+    $scrub_status_fs[$fs_name] = is_array($fs_scrub_status) ? $fs_scrub_status : [];
+
+    $raw_scrub_devices = $fs['commands']['scrub_status_devices']['data']['devices'] ?? [];
+    $scrub_status_devices[$fs_name] = [];
+    if (is_array($raw_scrub_devices)) {
+        foreach ($raw_scrub_devices as $raw_key => $raw_entry) {
+            if (! is_array($raw_entry)) {
+                continue;
+            }
+
+            $raw_id = $raw_entry['id'] ?? null;
+            if (! is_scalar($raw_id) || (string) $raw_id === '') {
+                if (is_scalar($raw_key) && (string) $raw_key !== '') {
+                    $raw_id = (string) $raw_key;
+                }
+            }
+
+            if (! is_scalar($raw_id) || (string) $raw_id === '') {
+                continue;
+            }
+
+            $scrub_status_devices[$fs_name][(string) $raw_id] = $raw_entry;
+        }
+    }
+
+    $fs_balance_status = $fs['commands']['balance_status']['data'] ?? [];
+    $balance_status_fs[$fs_name] = is_array($fs_balance_status) ? $fs_balance_status : [];
+
+    $show_devices_by_path = [];
+    $show_devices = $fs['commands']['filesystem_show']['data']['devices'] ?? [];
+    if (is_array($show_devices)) {
+        foreach ($show_devices as $show_device) {
+            if (! is_array($show_device)) {
+                continue;
+            }
+
+            $show_path = $normalize_device_path($show_device['path'] ?? null);
+            $show_devid = $show_device['devid'] ?? null;
+            if (! is_string($show_path) || $show_path === '' || ! is_scalar($show_devid) || (string) $show_devid === '') {
+                continue;
+            }
+
+            $show_devices_by_path[$show_path] = (string) $show_devid;
+        }
+    }
+
+    $fs_has_missing = $filesystem_has_missing_device($fs);
 
     $has_device_data = count($devices) > 0;
     $has_scrub_data = count($scrub_devices) > 0 || isset($fs['commands']['scrub_status']);
@@ -874,6 +1069,11 @@ foreach ($filesystems as $fs_name => $fs) {
 
     $io_status_code = $has_device_data ? ($io_has_error ? 3 : 0) : 2;
     $scrub_status_code = $has_scrub_data ? ($scrub_has_error ? 3 : ($scrub_is_running ? 1 : 0)) : 2;
+    if ($fs_has_missing) {
+        // Missing device should dominate IO state, but keep scrub state driven
+        // by scrub output so scrub overview can still show running/error/ok.
+        $io_status_code = 4;
+    }
 
     $usage_totals = [
         'usage_device_size' => 0,
@@ -896,7 +1096,8 @@ foreach ($filesystems as $fs_name => $fs) {
     }
 
     foreach ($usage_type_totals as $type_key => $type_value) {
-        $type_id = $safe_id((string) $type_key);
+        // Write filesystem-level dynamic type series to isolated one-DS RRDs.
+        $type_id = $normalize_id((string) $type_key);
         $type_rrd_name = ['app', $name, $app->app_id, $fs_rrd_id, 'type_' . $type_id];
         $type_tags = ['name' => $name, 'app_id' => $app->app_id, 'rrd_def' => $dynamic_type_rrd_def, 'rrd_name' => $type_rrd_name];
         app('Datastore')->put($device, 'app', $type_tags, ['value' => $type_value]);
@@ -914,10 +1115,12 @@ foreach ($filesystems as $fs_name => $fs) {
     $metrics[$fs_metric_prefix . 'balance_status_code'] = $balance_status_code;
 
     $app_has_data = $app_has_data || $io_status_code !== 2 || $scrub_status_code !== 2 || $balance_status_code !== 2;
+    $app_has_missing = $app_has_missing || $io_status_code === 4;
     $app_has_running = $app_has_running || $scrub_status_code === 1 || $balance_status_code === 1;
-    $app_has_error = $app_has_error || $io_status_code === 3 || $scrub_status_code === 3 || $balance_status_code === 3;
+    $app_has_error = $app_has_error || $io_status_code === 3 || $scrub_status_code === 3 || $balance_status_code === 3 || $io_status_code === 4 || $scrub_status_code === 4 || $balance_status_code === 4;
     $app_io_has_data = $app_io_has_data || $io_status_code !== 2;
-    $app_io_has_error = $app_io_has_error || $io_status_code === 3;
+    $app_io_missing = $app_io_missing || $io_status_code === 4;
+    $app_io_has_error = $app_io_has_error || $io_status_code === 3 || $io_status_code === 4;
     $app_scrub_has_data = $app_scrub_has_data || $scrub_status_code !== 2;
     $app_scrub_has_error = $app_scrub_has_error || $scrub_status_code === 3;
     $app_scrub_running = $app_scrub_running || $scrub_status_code === 1;
@@ -965,16 +1168,27 @@ foreach ($filesystems as $fs_name => $fs) {
         $metrics[$fs_metric_prefix . $field] = $value;
     }
 
-    $all_dev_paths = array_unique(array_merge(array_keys($devices), array_keys($scrub_devices), array_keys($usage_devices)));
+    $all_dev_paths = array_unique(array_merge(
+        array_keys($devices),
+        array_keys($scrub_devices),
+        array_keys($usage_devices),
+        array_keys($show_devices_by_path)
+    ));
 
     foreach ($all_dev_paths as $dev_path) {
         $dev_stats = $devices[$dev_path] ?? [];
         $scrub_stats = $scrub_devices[$dev_path] ?? [];
         $usage_stats = $usage_devices[$dev_path] ?? [];
-        $device_numeric_id = $dev_stats['devid'] ?? null;
-        $dev_id = (is_scalar($device_numeric_id) && (string) $device_numeric_id !== '')
-            ? (string) $device_numeric_id
-            : $safe_id((string) $dev_path);
+        $device_numeric_id = $dev_stats['devid'] ?? $usage_stats['id'] ?? $scrub_stats['id'] ?? $show_devices_by_path[$dev_path] ?? null;
+        if (! is_scalar($device_numeric_id) || (string) $device_numeric_id === '') {
+            continue;
+        }
+        $dev_id = (string) $device_numeric_id;
+
+        if (! isset($dev_stats['missing']) && str_contains(strtolower((string) $dev_path), '<missing disk>')) {
+            $dev_stats['missing'] = true;
+        }
+
         $device_map[$fs_name][$dev_id] = $dev_path;
         $dev_rrd_key[$fs_name][$dev_id] = $dev_id;
 
@@ -990,12 +1204,23 @@ foreach ($filesystems as $fs_name => $fs) {
             'io_c_generation' => $dev_stats['generation_errs'] ?? null,
             'io_c_read' => $dev_stats['read_io_errs'] ?? null,
             'io_c_write' => $dev_stats['write_io_errs'] ?? null,
+            'io_t_corruption' => $dev_stats['corruption_errs'] ?? null,
+            'io_t_flush' => $dev_stats['flush_io_errs'] ?? null,
+            'io_t_generation' => $dev_stats['generation_errs'] ?? null,
+            'io_t_read' => $dev_stats['read_io_errs'] ?? null,
+            'io_t_write' => $dev_stats['write_io_errs'] ?? null,
             'scrub_c_read' => $scrub_stats['read_errors'] ?? null,
             'scrub_c_csum' => $scrub_stats['csum_errors'] ?? null,
             'scrub_c_verify' => $scrub_stats['verify_errors'] ?? null,
             'scrub_c_uncorrectable' => $scrub_stats['uncorrectable_errors'] ?? null,
             'scrub_c_unverified' => $scrub_stats['unverified_errors'] ?? null,
             'scrub_c_corrected' => $scrub_stats['corrected_errors'] ?? null,
+            'scrub_t_read' => $scrub_stats['read_errors'] ?? null,
+            'scrub_t_csum' => $scrub_stats['csum_errors'] ?? null,
+            'scrub_t_verify' => $scrub_stats['verify_errors'] ?? null,
+            'scrub_t_uncorrectable' => $scrub_stats['uncorrectable_errors'] ?? null,
+            'scrub_t_unverified' => $scrub_stats['unverified_errors'] ?? null,
+            'scrub_t_corrected' => $scrub_stats['corrected_errors'] ?? null,
             'scrub_d_read' => $scrub_stats['read_errors'] ?? null,
             'scrub_d_csum' => $scrub_stats['csum_errors'] ?? null,
             'scrub_d_verify' => $scrub_stats['verify_errors'] ?? null,
@@ -1014,12 +1239,13 @@ foreach ($filesystems as $fs_name => $fs) {
 
         $dev_type_values = $usage_stats['type_values'] ?? [];
         if (is_array($dev_type_values)) {
+            // Write per-device dynamic type series to isolated one-DS RRDs.
             foreach ($dev_type_values as $type_key => $type_value) {
                 if (! is_numeric($type_value)) {
                     continue;
                 }
 
-                $type_id = $safe_id((string) $type_key);
+                $type_id = $normalize_id((string) $type_key);
                 $dev_type_rrd_name = ['app', $name, $app->app_id, $fs_rrd_id, 'device_' . $dev_id, 'type_' . $type_id];
                 $dev_type_tags = ['name' => $name, 'app_id' => $app->app_id, 'rrd_def' => $dynamic_type_rrd_def, 'rrd_name' => $dev_type_rrd_name];
                 app('Datastore')->put($device, 'app', $dev_type_tags, ['value' => $type_value]);
@@ -1063,6 +1289,7 @@ foreach ($filesystems as $fs_name => $fs) {
         $io_errs += $dev_stats['write_io_errs'] ?? 0;
 
         if ($io_errs > 0 && empty($device_error_seen[$fs_name][$dev_id])) {
+            // Log only first observed device-error transition to limit noise.
             Eventlog::log("BTRFS device errors detected on $fs_name ($dev_path)", $device['device_id'], 'application', Severity::Error);
             $device_error_seen[$fs_name][$dev_id] = 1;
         }
@@ -1090,6 +1317,9 @@ foreach ($filesystems as $fs_name => $fs) {
         }
         $dev_scrub_is_running = strtolower((string) ($scrub_stats['status'] ?? '')) === 'running';
         $dev_scrub_status_code = count($scrub_stats) > 0 ? ($dev_scrub_has_error ? 3 : ($dev_scrub_is_running ? 1 : 0)) : 2;
+        if (($dev_stats['missing'] ?? false) || $dev_path === '<missing disk>') {
+            $dev_io_status_code = 4;
+        }
 
         $app_io_errors_total += (float) ($dev_stats['corruption_errs'] ?? 0)
             + (float) ($dev_stats['flush_io_errs'] ?? 0)
@@ -1136,19 +1366,21 @@ if (count($added_filesystems) > 0 || count($removed_filesystems) > 0) {
     Eventlog::log($log_message, $device['device_id'], 'application');
 }
 
-$app_status_code = $app_has_error ? 3 : ($app_has_running ? 1 : ($app_has_data ? 0 : 2));
+$app_status_code = $app_has_missing ? 4 : ($app_has_error ? 3 : ($app_has_running ? 1 : ($app_has_data ? 0 : 2)));
 $metrics['status_code'] = $app_status_code;
-$app_io_status_code = $app_io_has_error ? 3 : ($app_io_has_data ? 0 : 2);
+$app_io_status_code = $app_io_missing ? 4 : ($app_io_has_error ? 3 : ($app_io_has_data ? 0 : 2));
 $app_scrub_status_code = $app_scrub_has_error ? 3 : ($app_scrub_running ? 1 : ($app_scrub_has_data ? 0 : 2));
 $app_balance_status_code = $app_balance_has_error ? 3 : ($app_balance_running ? 1 : ($app_balance_has_data ? 0 : 2));
 $app_status_text = match ($app_status_code) {
     1 => 'Running',
     2 => 'N/A',
     3 => 'Error',
+    4 => 'Missing',
     default => 'OK',
 };
 
 $overall_fields = [
+    // App-level aggregate timeseries for /apps/app=btrfs/ overview graphs.
     'used' => $overview_totals['used'] ?? 0,
     'free_estimated' => $overview_totals['free_estimated'] ?? 0,
     'device_size' => $overview_totals['device_size'] ?? 0,
@@ -1170,17 +1402,22 @@ foreach ($overall_fields as $field => $value) {
     $metrics['overall_' . $field] = $value;
 }
 
+// Persist only structures needed for UI rendering/navigation; avoid heavy debug payloads.
+// This payload is consumed by both device and global btrfs pages.
 $app->data = [
+    'schema_version' => 2,
     'filesystems' => $fs_names,
+    'filesystem_meta' => $filesystem_meta,
     'device_map' => $device_map,
-    'command_tables' => $command_tables,
-    'command_splits' => $command_splits,
     'filesystem_tables' => $filesystem_tables,
     'filesystem_data_types' => $filesystem_data_types,
     'fs_rrd_key' => $fs_rrd_key,
     'dev_rrd_key' => $dev_rrd_key,
     'device_tables' => $device_tables,
-    'scrub_tables' => $scrub_tables,
+    'scrub_status_fs' => $scrub_status_fs,
+    'scrub_status_devices' => $scrub_status_devices,
+    'balance_status_fs' => $balance_status_fs,
+    'filesystem_uuid' => $filesystem_uuid,
     'device_error_seen' => $device_error_seen,
     'btrfs_progs_version' => $btrfs['btrfs_version']['version'] ?? null,
     'btrfs_progs_features' => $btrfs['btrfs_version']['features'] ?? null,

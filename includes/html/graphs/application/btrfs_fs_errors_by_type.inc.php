@@ -22,17 +22,17 @@ if (! is_array($device_map) || count($device_map) === 0) {
 }
 
 $error_types = [
-    'io_c_corruption' => 'IO Corruption',
-    'io_c_flush' => 'IO Flush',
-    'io_c_generation' => 'IO Generation',
-    'io_c_read' => 'IO Read',
-    'io_c_write' => 'IO Write',
-    'scrub_c_read' => 'Scrub Read',
-    'scrub_c_csum' => 'Scrub Csum',
-    'scrub_c_verify' => 'Scrub Verify',
-    'scrub_c_uncorrectable' => 'Scrub Uncorrectable',
-    'scrub_c_unverified' => 'Scrub Unverified',
-    'scrub_c_corrected' => 'Scrub Corrected',
+    'io_t_corruption' => 'IO Corruption',
+    'io_t_flush' => 'IO Flush',
+    'io_t_generation' => 'IO Generation',
+    'io_t_read' => 'IO Read',
+    'io_t_write' => 'IO Write',
+    'scrub_t_read' => 'Scrub Read',
+    'scrub_t_csum' => 'Scrub Csum',
+    'scrub_t_verify' => 'Scrub Verify',
+    'scrub_t_uncorrectable' => 'Scrub Uncorrectable',
+    'scrub_t_unverified' => 'Scrub Unverified',
+    'scrub_t_corrected' => 'Scrub Corrected',
 ];
 
 $build_sum_expr = static function (array $ids): ?string {
