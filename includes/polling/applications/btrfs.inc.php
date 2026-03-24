@@ -462,6 +462,8 @@ $extract_scrub_device_stats = static function (array $fs): array {
             'uncorrectable_errors' => $entry['uncorrectable_errors'] ?? null,
             'unverified_errors' => $entry['unverified_errors'] ?? null,
             'corrected_errors' => $entry['corrected_errors'] ?? null,
+            'missing' => $entry['missing'] ?? null,
+            'device_missing' => $entry['device_missing'] ?? null,
             'last_physical' => $entry['last_physical'] ?? null,
         ];
     }
@@ -582,6 +584,17 @@ $device_rrd_def = RrdDefinition::make()
 $dynamic_type_rrd_def = RrdDefinition::make()
     ->addDataset('value', 'GAUGE', 0);
 
+$overall_rrd_def = RrdDefinition::make()
+    ->addDataset('used', 'GAUGE', 0)
+    ->addDataset('free_estimated', 'GAUGE', 0)
+    ->addDataset('device_size', 'GAUGE', 0)
+    ->addDataset('io_errors_total', 'GAUGE', 0)
+    ->addDataset('scrub_errors_total', 'GAUGE', 0)
+    ->addDataset('status_code', 'GAUGE', 0)
+    ->addDataset('io_status_code', 'GAUGE', 0)
+    ->addDataset('scrub_status_code', 'GAUGE', 0)
+    ->addDataset('balance_status_code', 'GAUGE', 0);
+
 $io_error_keys = ['corruption_errs', 'flush_io_errs', 'generation_errs', 'read_io_errs', 'write_io_errs'];
 $scrub_error_keys = ['read_errors', 'csum_errors', 'verify_errors', 'uncorrectable_errors', 'unverified_errors', 'missing', 'device_missing'];
 
@@ -693,6 +706,25 @@ $delete_state_sensor = static function (array $device, string $sensor_index, str
     );
 };
 
+$cleanup_legacy_btrfs_state_sensors = static function (array $device): void {
+    $legacy_types = ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'];
+
+    foreach ($legacy_types as $sensor_type) {
+        dbDelete(
+            'sensors_to_state_indexes',
+            '`sensor_id` IN (SELECT `sensor_id` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `group` = ?)',
+            [$device['device_id'], 'state', 'agent', $sensor_type, 'btrfs']
+        );
+        dbDelete(
+            'sensors',
+            '`device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `group` = ?',
+            [$device['device_id'], 'state', 'agent', $sensor_type, 'btrfs']
+        );
+    }
+};
+
+$cleanup_legacy_btrfs_state_sensors($device);
+
 $metrics = [];
 $device_map = [];
 $command_tables = [];
@@ -723,6 +755,16 @@ $fs_names = [];
 $app_has_data = false;
 $app_has_running = false;
 $app_has_error = false;
+$app_io_has_data = false;
+$app_io_has_error = false;
+$app_scrub_has_data = false;
+$app_scrub_has_error = false;
+$app_scrub_running = false;
+$app_balance_has_data = false;
+$app_balance_has_error = false;
+$app_balance_running = false;
+$app_io_errors_total = 0.0;
+$app_scrub_errors_total = 0.0;
 foreach ($filesystems as $fs_name => $fs) {
     $fs_names[] = $fs_name;
     $overall = $normalize_overall($fs);
@@ -856,6 +898,14 @@ foreach ($filesystems as $fs_name => $fs) {
     $app_has_data = $app_has_data || $io_status_code !== 2 || $scrub_status_code !== 2 || $balance_status_code !== 2;
     $app_has_running = $app_has_running || $scrub_status_code === 1 || $balance_status_code === 1;
     $app_has_error = $app_has_error || $io_status_code === 3 || $scrub_status_code === 3 || $balance_status_code === 3;
+    $app_io_has_data = $app_io_has_data || $io_status_code !== 2;
+    $app_io_has_error = $app_io_has_error || $io_status_code === 3;
+    $app_scrub_has_data = $app_scrub_has_data || $scrub_status_code !== 2;
+    $app_scrub_has_error = $app_scrub_has_error || $scrub_status_code === 3;
+    $app_scrub_running = $app_scrub_running || $scrub_status_code === 1;
+    $app_balance_has_data = $app_balance_has_data || $balance_status_code !== 2;
+    $app_balance_has_error = $app_balance_has_error || $balance_status_code === 3;
+    $app_balance_running = $app_balance_running || $balance_status_code === 1;
 
     $upsert_state_sensor(
         $device,
@@ -1023,6 +1073,19 @@ foreach ($filesystems as $fs_name => $fs) {
         $dev_scrub_is_running = strtolower((string) ($scrub_stats['status'] ?? '')) === 'running';
         $dev_scrub_status_code = count($scrub_stats) > 0 ? ($dev_scrub_has_error ? 3 : ($dev_scrub_is_running ? 1 : 0)) : 2;
 
+        $app_io_errors_total += (float) ($dev_stats['corruption_errs'] ?? 0)
+            + (float) ($dev_stats['flush_io_errs'] ?? 0)
+            + (float) ($dev_stats['generation_errs'] ?? 0)
+            + (float) ($dev_stats['read_io_errs'] ?? 0)
+            + (float) ($dev_stats['write_io_errs'] ?? 0);
+        $app_scrub_errors_total += (float) ($scrub_stats['read_errors'] ?? 0)
+            + (float) ($scrub_stats['csum_errors'] ?? 0)
+            + (float) ($scrub_stats['verify_errors'] ?? 0)
+            + (float) ($scrub_stats['uncorrectable_errors'] ?? 0)
+            + (float) ($scrub_stats['unverified_errors'] ?? 0)
+            + (float) ($scrub_stats['missing'] ?? 0)
+            + (float) ($scrub_stats['device_missing'] ?? 0);
+
         $upsert_state_sensor(
             $device,
             $fs_rrd_id . '.dev.' . $dev_id . '.io',
@@ -1058,14 +1121,41 @@ if (count($added_filesystems) > 0 || count($removed_filesystems) > 0) {
 $json_keys = array_values(array_unique($collect_keys($all_return)));
 sort($json_keys);
 
+dbUpdate(['app_instance' => ''], 'applications', '`app_id` = ?', [$app->app_id]);
+
 $app_status_code = $app_has_error ? 3 : ($app_has_running ? 1 : ($app_has_data ? 0 : 2));
 $metrics['status_code'] = $app_status_code;
+$app_io_status_code = $app_io_has_error ? 3 : ($app_io_has_data ? 0 : 2);
+$app_scrub_status_code = $app_scrub_has_error ? 3 : ($app_scrub_running ? 1 : ($app_scrub_has_data ? 0 : 2));
+$app_balance_status_code = $app_balance_has_error ? 3 : ($app_balance_running ? 1 : ($app_balance_has_data ? 0 : 2));
 $app_status_text = match ($app_status_code) {
     1 => 'Running',
     2 => 'N/A',
     3 => 'Error',
     default => 'OK',
 };
+
+$overall_fields = [
+    'used' => $overview_totals['used'] ?? 0,
+    'free_estimated' => $overview_totals['free_estimated'] ?? 0,
+    'device_size' => $overview_totals['device_size'] ?? 0,
+    'io_errors_total' => $app_io_errors_total,
+    'scrub_errors_total' => $app_scrub_errors_total,
+    'status_code' => $app_status_code,
+    'io_status_code' => $app_io_status_code,
+    'scrub_status_code' => $app_scrub_status_code,
+    'balance_status_code' => $app_balance_status_code,
+];
+$overall_tags = [
+    'name' => $name,
+    'app_id' => $app->app_id,
+    'rrd_def' => $overall_rrd_def,
+    'rrd_name' => ['app', $name, $app->app_id, 'overall'],
+];
+app('Datastore')->put($device, 'app', $overall_tags, $overall_fields);
+foreach ($overall_fields as $field => $value) {
+    $metrics['overall_' . $field] = $value;
+}
 
 $app->data = [
     'filesystems' => $fs_names,
