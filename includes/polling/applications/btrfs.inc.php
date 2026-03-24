@@ -63,6 +63,31 @@ try {
 
 $filesystems = $btrfs['filesystems'] ?? [];
 
+$delete_all_btrfs_state_sensors = static function (array $device): void {
+    $sensor_types = ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'];
+
+    dbDelete(
+        'sensors_to_state_indexes',
+        '`sensor_id` IN (SELECT `sensor_id` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` IN (?,?,?))',
+        [$device['device_id'], 'state', 'agent', $sensor_types[0], $sensor_types[1], $sensor_types[2]]
+    );
+    dbDelete(
+        'sensors',
+        '`device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` IN (?,?,?)',
+        [$device['device_id'], 'state', 'agent', $sensor_types[0], $sensor_types[1], $sensor_types[2]]
+    );
+};
+
+$btrfs_dev_version_raw = $all_return['btrfs_dev_version'] ?? ($all_return['version'] ?? null);
+$btrfs_dev_version = is_numeric($btrfs_dev_version_raw) ? (int) $btrfs_dev_version_raw : 0;
+if ($btrfs_dev_version < 1) {
+    $delete_all_btrfs_state_sensors($device);
+    $app->data = [];
+    update_application($app, 'Unsupported btrfs agent payload version', ['status_code' => 2]);
+
+    return;
+}
+
 $fs_space_datasets = [
     'device_size' => 'device_size_bytes',
     'device_allocated' => 'device_allocated_bytes',
@@ -176,7 +201,11 @@ $normalize_device_path = static function (?string $path): ?string {
     return $trimmed;
 };
 
-$extract_device_stats = static function (array $fs) use ($normalize_device_path): array {
+$missing_device_key = static function (string $devid): string {
+    return '<missing disk #' . $devid . '>';
+};
+
+$extract_device_stats = static function (array $fs) use ($normalize_device_path, $missing_device_key): array {
     // Extract per-device IO error counters from devinfo only.
     // Current parser stores devinfo at filesystem root (`$fs['devinfo']`).
     // Keep a legacy fallback for older command-wrapped layouts.
@@ -199,7 +228,12 @@ $extract_device_stats = static function (array $fs) use ($normalize_device_path)
                 continue;
             }
 
-            $path_by_devid[(string) $show_devid] = $show_path;
+            $show_devid = (string) $show_devid;
+            if ($show_path === '<missing disk>') {
+                $show_path = $missing_device_key($show_devid);
+            }
+
+            $path_by_devid[$show_devid] = $show_path;
         }
     }
 
@@ -215,7 +249,7 @@ $extract_device_stats = static function (array $fs) use ($normalize_device_path)
         }
 
         $is_missing = ((int) ($entry['missing'] ?? 0) === 1);
-        $path = $path_by_devid[$devid] ?? ($is_missing ? '<missing disk>' : null);
+        $path = $path_by_devid[$devid] ?? ($is_missing ? $missing_device_key($devid) : null);
         if (! is_string($path) || $path === '') {
             $path = 'devid-' . $devid;
         }
@@ -239,7 +273,7 @@ $extract_device_stats = static function (array $fs) use ($normalize_device_path)
     return $devices;
 };
 
-$extract_scrub_device_stats = static function (array $fs) use ($normalize_device_path): array {
+$extract_scrub_device_stats = static function (array $fs) use ($normalize_device_path, $missing_device_key): array {
     // Extract scrub per-device counters from scrub_status_devices only.
     // This keeps scrub device semantics consistent across versions.
     $devices = [];
@@ -254,9 +288,23 @@ $extract_scrub_device_stats = static function (array $fs) use ($normalize_device
             continue;
         }
 
+        $devid = $entry['id'] ?? null;
+        if (! is_scalar($devid) || (string) $devid === '') {
+            if (is_scalar($key) && (string) $key !== '') {
+                $devid = (string) $key;
+            }
+        }
+        $devid = is_scalar($devid) ? (string) $devid : null;
+
         $path = $normalize_device_path($entry['path'] ?? null);
+        if ($path === '<missing disk>' && is_string($devid) && $devid !== '') {
+            $path = $missing_device_key($devid);
+        }
         if (! is_string($path) || $path === '') {
             $path = $normalize_device_path(is_string($key) ? $key : null);
+        }
+        if ($path === '<missing disk>' && is_string($devid) && $devid !== '') {
+            $path = $missing_device_key($devid);
         }
         if (! is_string($path) || $path === '') {
             continue;
@@ -264,7 +312,7 @@ $extract_scrub_device_stats = static function (array $fs) use ($normalize_device
 
         $devices[$path] = [
             'path' => $entry['path'] ?? $path,
-            'id' => $entry['id'] ?? null,
+            'id' => $devid ?? ($entry['id'] ?? null),
             'section' => $entry['section'] ?? null,
             'has_status_suffix' => $entry['has_status_suffix'] ?? null,
             'has_stats' => $entry['has_stats'] ?? null,
@@ -295,7 +343,7 @@ $extract_scrub_device_stats = static function (array $fs) use ($normalize_device
     return $devices;
 };
 
-$extract_device_usage = static function (array $fs) use ($normalize_device_path): array {
+$extract_device_usage = static function (array $fs) use ($normalize_device_path, $missing_device_key): array {
     // Build per-device usage totals and capture dynamic type buckets
     // (data_*, metadata_*, system_*) for dedicated RRD series.
     $entries = $fs['commands']['device_usage']['data']['devices'] ?? [];
@@ -309,7 +357,13 @@ $extract_device_usage = static function (array $fs) use ($normalize_device_path)
             continue;
         }
 
+        $devid = $entry['id'] ?? null;
+        $devid = is_scalar($devid) && (string) $devid !== '' ? (string) $devid : null;
+
         $path = $normalize_device_path($entry['path'] ?? null);
+        if ($path === '<missing disk>' && is_string($devid) && $devid !== '') {
+            $path = $missing_device_key($devid);
+        }
         if (! is_string($path) || $path === '') {
             continue;
         }
@@ -650,6 +704,30 @@ $cleanup_legacy_btrfs_state_sensors = static function (array $device): void {
     }
 };
 
+$cleanup_obsolete_btrfs_state_sensors = static function (array $device, array $expected_sensor_indexes): void {
+    $sensor_types = ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'];
+    $rows = dbFetchRows(
+        'SELECT `sensor_id`, `sensor_type`, `sensor_index` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` IN (?,?,?)',
+        [$device['device_id'], 'state', 'agent', $sensor_types[0], $sensor_types[1], $sensor_types[2]]
+    );
+
+    foreach ($rows as $row) {
+        $sensor_id = $row['sensor_id'] ?? null;
+        $sensor_type = (string) ($row['sensor_type'] ?? '');
+        $sensor_index = (string) ($row['sensor_index'] ?? '');
+        if (! is_numeric($sensor_id) || $sensor_type === '' || $sensor_index === '') {
+            continue;
+        }
+
+        if (isset($expected_sensor_indexes[$sensor_type][$sensor_index])) {
+            continue;
+        }
+
+        dbDelete('sensors_to_state_indexes', '`sensor_id` = ?', [$sensor_id]);
+        dbDelete('sensors', '`sensor_id` = ?', [$sensor_id]);
+    }
+};
+
 $cleanup_legacy_btrfs_state_sensors($device);
 
 $metrics = [];
@@ -658,7 +736,6 @@ $filesystem_meta = [];
 $filesystem_tables = [];
 $filesystem_data_types = [];
 $device_tables = [];
-$scrub_tables = [];
 $scrub_status_fs = [];
 $scrub_status_devices = [];
 $balance_status_fs = [];
@@ -667,6 +744,11 @@ $old_filesystem_uuid = $app->data['filesystem_uuid'] ?? [];
 $fs_rrd_key = [];
 $dev_rrd_key = [];
 $device_error_seen = $app->data['device_error_seen'] ?? [];
+$expected_sensor_indexes = [
+    'btrfsIoStatusState' => [],
+    'btrfsScrubStatusState' => [],
+    'btrfsBalanceStatusState' => [],
+];
 
 // Overview (sum across all filesystems)
 $overview_totals = array_fill_keys(array_keys($fs_space_datasets), 0);
@@ -794,7 +876,12 @@ foreach ($filesystems as $fs_name => $fs) {
                 continue;
             }
 
-            $show_devices_by_path[$show_path] = (string) $show_devid;
+            $show_devid = (string) $show_devid;
+            if ($show_path === '<missing disk>') {
+                $show_path = $missing_device_key($show_devid);
+            }
+
+            $show_devices_by_path[$show_path] = $show_devid;
         }
     }
 
@@ -903,6 +990,7 @@ foreach ($filesystems as $fs_name => $fs) {
         $io_state_index_id,
         'btrfs filesystems'
     );
+    $expected_sensor_indexes['btrfsIoStatusState'][(string) $fs_rrd_id . '.io'] = true;
     $upsert_state_sensor(
         $device,
         $fs_rrd_id . '.scrub',
@@ -912,6 +1000,7 @@ foreach ($filesystems as $fs_name => $fs) {
         $scrub_state_index_id,
         'btrfs filesystems'
     );
+    $expected_sensor_indexes['btrfsScrubStatusState'][(string) $fs_rrd_id . '.scrub'] = true;
     if ($publish_balance_state) {
         $upsert_state_sensor(
             $device,
@@ -922,6 +1011,7 @@ foreach ($filesystems as $fs_name => $fs) {
             $balance_state_index_id,
             'btrfs filesystems'
         );
+        $expected_sensor_indexes['btrfsBalanceStatusState'][(string) $fs_rrd_id . '.balance'] = true;
     } else {
         $delete_state_sensor($device, $fs_rrd_id . '.balance', 'btrfsBalanceStatusState');
     }
@@ -1033,21 +1123,6 @@ foreach ($filesystems as $fs_name => $fs) {
             'usage_metadata' => $usage_stats['metadata_bytes'] ?? null,
             'usage_system' => $usage_stats['system_bytes'] ?? null,
         ];
-        $scrub_tables[$fs_name][$dev_id] = array_merge(
-            $scrub_stats,
-            [
-                // Backward-compatible aliases used by status checks
-                'scrub_read_errors' => $scrub_stats['read_errors'] ?? null,
-                'scrub_csum_errors' => $scrub_stats['csum_errors'] ?? null,
-                'scrub_verify_errors' => $scrub_stats['verify_errors'] ?? null,
-                'scrub_uncorrectable_errors' => $scrub_stats['uncorrectable_errors'] ?? null,
-                'scrub_unverified_errors' => $scrub_stats['unverified_errors'] ?? null,
-                'scrub_corrected_errors' => $scrub_stats['corrected_errors'] ?? null,
-                'scrub_missing' => $scrub_stats['missing'] ?? null,
-                'scrub_device_missing' => $scrub_stats['device_missing'] ?? null,
-            ]
-        );
-
         $io_errs = $dev_stats['corruption_errs'] ?? 0;
         $io_errs += $dev_stats['flush_io_errs'] ?? 0;
         $io_errs += $dev_stats['generation_errs'] ?? 0;
@@ -1083,7 +1158,7 @@ foreach ($filesystems as $fs_name => $fs) {
         }
         $dev_scrub_is_running = strtolower((string) ($scrub_stats['status'] ?? '')) === 'running';
         $dev_scrub_status_code = count($scrub_stats) > 0 ? ($dev_scrub_has_error ? 3 : ($dev_scrub_is_running ? 1 : 0)) : 2;
-        if (($dev_stats['missing'] ?? false) || $dev_path === '<missing disk>') {
+        if (($dev_stats['missing'] ?? false) || str_contains(strtolower((string) $dev_path), '<missing disk>')) {
             $dev_io_status_code = 4;
         }
 
@@ -1109,6 +1184,7 @@ foreach ($filesystems as $fs_name => $fs) {
             $io_state_index_id,
             'btrfs devices'
         );
+        $expected_sensor_indexes['btrfsIoStatusState'][(string) $fs_rrd_id . '.dev.' . $dev_id . '.io'] = true;
         $upsert_state_sensor(
             $device,
             $fs_rrd_id . '.dev.' . $dev_id . '.scrub',
@@ -1118,8 +1194,11 @@ foreach ($filesystems as $fs_name => $fs) {
             $scrub_state_index_id,
             'btrfs devices'
         );
+        $expected_sensor_indexes['btrfsScrubStatusState'][(string) $fs_rrd_id . '.dev.' . $dev_id . '.scrub'] = true;
     }
 }
+
+$cleanup_obsolete_btrfs_state_sensors($device, $expected_sensor_indexes);
 
 // check for added or removed filesystems
 $old_filesystems = $app->data['filesystems'] ?? [];
@@ -1189,6 +1268,7 @@ $app->data = [
     'btrfs_progs_features' => $btrfs['btrfs_version']['features'] ?? null,
     'status_code' => $app_status_code,
     'status_text' => $app_status_text,
+    'btrfs_dev_version' => $btrfs_dev_version,
     'version' => $all_return['version'] ?? null,
 ];
 
