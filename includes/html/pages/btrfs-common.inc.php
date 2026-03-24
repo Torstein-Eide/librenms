@@ -33,6 +33,25 @@ $btrfs_status_from_code = static function ($value): string {
     };
 };
 
+$btrfs_combine_state_code = static function (array $codes): int {
+    $normalized = [];
+    foreach ($codes as $code) {
+        $normalized[] = is_numeric($code) ? (int) $code : 2;
+    }
+
+    if (in_array(3, $normalized, true)) {
+        return 3;
+    }
+    if (in_array(1, $normalized, true)) {
+        return 1;
+    }
+    if (in_array(0, $normalized, true)) {
+        return 0;
+    }
+
+    return 2;
+};
+
 $btrfs_get_row_value = static function (array $rows, string $wanted_key): ?string {
     foreach ($rows as $row) {
         if (($row['key'] ?? null) === $wanted_key) {

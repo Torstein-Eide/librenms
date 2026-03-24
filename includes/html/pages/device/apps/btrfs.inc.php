@@ -197,30 +197,6 @@ $to_bool = static function ($value): ?bool {
     return null;
 };
 
-// Produce a human-readable scrub status string from scrub metadata metrics.
-// Handles the "has_stats", "no_stats_available", and "has_status_suffix" flags
-// that btrfs scrub emits in different versions.
-$format_scrub_status = static function (array $metrics) use ($to_bool): string {
-    $status = trim((string) ($metrics['status'] ?? ''));
-    $has_status_suffix = $to_bool($metrics['has_status_suffix'] ?? null);
-    $has_stats = $to_bool($metrics['has_stats'] ?? null);
-    $no_stats_available = $to_bool($metrics['no_stats_available'] ?? null);
-
-    if ($has_stats === false || $no_stats_available === true) {
-        return 'No stats available';
-    }
-
-    if ($status === '') {
-        $status = 'Unknown';
-    }
-
-    if ($has_status_suffix === true && strtolower($status) !== 'running') {
-        return $status . ' (suffix)';
-    }
-
-    return $status;
-};
-
 // Generate a Bootstrap label badge HTML string for a given state.
 // States: ok (gray), running (gray), warning (orange), error (red).
 // NOTE: Keep normal states neutral (`label-default`) instead of green success.
@@ -234,20 +210,6 @@ $state_code_from_sensor = static function (string $sensor_type, string $sensor_i
     }
 
     return is_numeric($fallback) ? (int) $fallback : 2;
-};
-
-$combine_state_codes = static function (array $codes): string {
-    if (in_array(3, $codes, true)) {
-        return 'error';
-    }
-    if (in_array(1, $codes, true)) {
-        return 'running';
-    }
-    if (in_array(0, $codes, true)) {
-        return 'ok';
-    }
-
-    return 'na';
 };
 
 // Reorder an associative array so that a list of preferred keys appears first,
@@ -268,23 +230,6 @@ $ordered_metric_pairs = static function (array $metrics, array $preferred_order)
 
     return $ordered;
 };
-
-// Preferred metric ordering for the filesystem overview table.
-$filesystem_metric_order = [
-    'device_size',
-    'device_allocated',
-    'device_unallocated',
-    'used',
-    'free_estimated',
-    'free_estimated_min',
-    'free_statfs_df',
-    'global_reserve',
-    'global_reserve_used',
-    'device_missing',
-    'device_slack',
-    'data_ratio',
-    'metadata_ratio',
-];
 
 // Preferred metric ordering for the per-device view table.
 $device_metric_order = [
@@ -925,7 +870,8 @@ if ($is_overview && count($filesystems) > 0) {
         $io_code = $state_code_from_sensor('btrfsIoStatusState', (string) $fs_rrd_id . '.io', $fs_data['io_status_code'] ?? null);
         $scrub_code = $state_code_from_sensor('btrfsScrubStatusState', (string) $fs_rrd_id . '.scrub', $fs_data['scrub_status_code'] ?? null);
         $balance_code = $state_code_from_sensor('btrfsBalanceStatusState', (string) $fs_rrd_id . '.balance', $fs_data['balance_status_code'] ?? null);
-        $overall_state = $combine_state_codes([$io_code, $scrub_code, $balance_code]);
+        $overall_code = $btrfs_combine_state_code([$io_code, $scrub_code, $balance_code]);
+        $overall_state = $status_from_code($overall_code);
 
         $fs_link = \LibreNMS\Util\Url::generate([
             'page' => 'device',
@@ -1079,7 +1025,7 @@ if (isset($selected_fs, $selected_dev) && isset($device_tables[$selected_fs][$se
     $dev_rrd_id = $dev_rrd_key[$selected_fs][$selected_dev] ?? $selected_dev;
     $dev_io_code = $state_code_from_sensor('btrfsIoStatusState', (string) $selected_fs_rrd_id . '.dev.' . $dev_rrd_id . '.io', null);
     $dev_scrub_code = $state_code_from_sensor('btrfsScrubStatusState', (string) $selected_fs_rrd_id . '.dev.' . $dev_rrd_id . '.scrub', null);
-    $dev_state = $combine_state_codes([$dev_io_code, $dev_scrub_code]);
+    $dev_state = $status_from_code($btrfs_combine_state_code([$dev_io_code, $dev_scrub_code]));
 
     echo '<div class="col-md-4">';
     echo '<div class="panel panel-default">';
@@ -1163,6 +1109,7 @@ if (isset($selected_fs) && isset($command_tables[$selected_fs]) && is_array($com
     // Render Balance panel first (before scrub panels), per-filesystem only.
     if (! isset($selected_dev) && isset($fs_commands['balance_status']) && is_array($fs_commands['balance_status'])) {
         $balance_split = $command_splits[$selected_fs]['balance_status'] ?? [];
+        $balance_split = array_merge(['overview' => [], 'devices' => [], 'device_columns' => []], $balance_split);
         $balance_status_code = $state_code_from_sensor(
             'btrfsBalanceStatusState',
             (string) $selected_fs_rrd_id . '.balance',
@@ -1259,9 +1206,7 @@ if (isset($selected_fs) && isset($command_tables[$selected_fs]) && is_array($com
             continue;
         }
 
-        $panel_title = $command_name === 'device_usage'
-            ? $format_command_name($command_name)
-            : $format_command_name($command_name);
+        $panel_title = $format_command_name($command_name);
         $render_generic_panel(
             $command_name,
             $panel_title,

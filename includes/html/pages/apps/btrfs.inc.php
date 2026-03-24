@@ -161,18 +161,11 @@ foreach ($apps as $app) {
         $totalText = $btrfs_format_metric($fsData['device_size'] ?? null, 'device_size');
         $usedPercentText = $btrfs_used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
 
-        $overallCode = $fsData['io_status_code'] ?? 2;
-        if (is_numeric($fsData['scrub_status_code'] ?? null) && (int) $fsData['scrub_status_code'] === 3) {
-            $overallCode = 3;
-        } elseif (is_numeric($fsData['balance_status_code'] ?? null) && (int) $fsData['balance_status_code'] === 3) {
-            $overallCode = 3;
-        } elseif ((int) $overallCode !== 3) {
-            if ((int) ($fsData['scrub_status_code'] ?? 2) === 1 || (int) ($fsData['balance_status_code'] ?? 2) === 1) {
-                $overallCode = 1;
-            } elseif ((int) $overallCode === 2 && ((int) ($fsData['scrub_status_code'] ?? 2) === 0 || (int) ($fsData['balance_status_code'] ?? 2) === 0)) {
-                $overallCode = 0;
-            }
-        }
+        $overallCode = $btrfs_combine_state_code([
+            $fsData['io_status_code'] ?? 2,
+            $fsData['scrub_status_code'] ?? 2,
+            $fsData['balance_status_code'] ?? 2,
+        ]);
         $overallState = $btrfs_status_from_code($overallCode);
 
         echo '<div class="panel panel-default" style="margin-bottom: 10px;">';
