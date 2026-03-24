@@ -1,9 +1,39 @@
 <?php
 
+// Shared view helpers for btrfs device/global pages.
+// Keep display/status helpers centralized here to avoid page drift.
+
+$btrfs_print_sticky_first_css = static function (): void {
+    static $printed = false;
+    if ($printed) {
+        return;
+    }
+
+    $printed = true;
+
+    echo '<style>
+.btrfs-sticky-first th:first-child,
+.btrfs-sticky-first td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #fff;
+}
+.btrfs-sticky-first thead th:first-child {
+    z-index: 3;
+    background: #f5f5f5;
+}
+</style>';
+};
+
 $btrfs_status_badge = static function (string $state): string {
+    // Map logical state to neutral/alert badge styling.
     $state_lc = strtolower($state);
     if ($state_lc === 'error') {
         $badge = 'Error';
+        $class = 'label-danger';
+    } elseif ($state_lc === 'missing') {
+        $badge = 'Missing';
         $class = 'label-danger';
     } elseif ($state_lc === 'running') {
         $badge = 'Running';
@@ -23,22 +53,29 @@ $btrfs_status_badge = static function (string $state): string {
 };
 
 $btrfs_status_from_code = static function ($value): string {
+    // Convert numeric status codes to logical state strings.
     $code = is_numeric($value) ? (int) $value : 2;
 
     return match ($code) {
         0 => 'ok',
         1 => 'running',
         3 => 'error',
+        4 => 'missing',
         default => 'na',
     };
 };
 
 $btrfs_combine_state_code = static function (array $codes): int {
+    // Collapse multiple status codes to one with precedence:
+    // Missing > Error > Running > OK > N/A.
     $normalized = [];
     foreach ($codes as $code) {
         $normalized[] = is_numeric($code) ? (int) $code : 2;
     }
 
+    if (in_array(4, $normalized, true)) {
+        return 4;
+    }
     if (in_array(3, $normalized, true)) {
         return 3;
     }
@@ -52,34 +89,22 @@ $btrfs_combine_state_code = static function (array $codes): int {
     return 2;
 };
 
-$btrfs_get_row_value = static function (array $rows, string $wanted_key): ?string {
-    foreach ($rows as $row) {
-        if (($row['key'] ?? null) === $wanted_key) {
-            return (string) ($row['value'] ?? '');
-        }
-    }
-
-    return null;
-};
-
-$btrfs_display_fs_name = static function (string $fs, array $show_rows) use ($btrfs_get_row_value): string {
-    $label = $btrfs_get_row_value($show_rows, 'label');
-
-    return ! empty($label) ? $label . ' (' . $fs . ')' : $fs;
-};
-
-$btrfs_scrub_progress_text = static function (array $scrub_rows) use ($btrfs_get_row_value): string {
+$btrfs_scrub_progress_text_from_status = static function (array $scrub_status): string {
     $scrub_progress = null;
-    foreach ($scrub_rows as $scrub_row) {
-        if (($scrub_row['key'] ?? null) === 'bytes_scrubbed.progress' && is_numeric($scrub_row['value'] ?? null)) {
-            $scrub_progress = (float) $scrub_row['value'];
-            break;
+
+    if (is_array($scrub_status['bytes_scrubbed'] ?? null)) {
+        $progress = $scrub_status['bytes_scrubbed']['progress'] ?? null;
+        if (is_numeric($progress)) {
+            $scrub_progress = (float) $progress;
         }
     }
 
     if ($scrub_progress === null) {
-        $bytes_scrubbed = $btrfs_get_row_value($scrub_rows, 'bytes_scrubbed.bytes');
-        $total_to_scrub = $btrfs_get_row_value($scrub_rows, 'total_to_scrub');
+        $bytes_scrubbed = $scrub_status['bytes_scrubbed'] ?? null;
+        if (is_array($bytes_scrubbed)) {
+            $bytes_scrubbed = $bytes_scrubbed['bytes'] ?? null;
+        }
+        $total_to_scrub = $scrub_status['total_to_scrub'] ?? null;
         if (is_numeric($bytes_scrubbed) && is_numeric($total_to_scrub) && (float) $total_to_scrub > 0) {
             $scrub_progress = ((float) $bytes_scrubbed / (float) $total_to_scrub) * 100;
         }
@@ -90,7 +115,8 @@ $btrfs_scrub_progress_text = static function (array $scrub_rows) use ($btrfs_get
         : rtrim(rtrim(number_format($scrub_progress, 2, '.', ''), '0'), '.') . '%';
 };
 
-$btrfs_total_errors = static function (array $device_tables, array $scrub_tables): float {
+$btrfs_total_io_errors = static function (array $device_tables): float {
+    // Aggregate IO error counters for filesystem summary views.
     $total_errors = 0.0;
     foreach ($device_tables as $dev_stats) {
         $total_errors += (float) ($dev_stats['corruption_errs'] ?? 0)
@@ -99,20 +125,12 @@ $btrfs_total_errors = static function (array $device_tables, array $scrub_tables
             + (float) ($dev_stats['read_io_errs'] ?? 0)
             + (float) ($dev_stats['write_io_errs'] ?? 0);
     }
-    foreach ($scrub_tables as $scrub_stats) {
-        $total_errors += (float) ($scrub_stats['read_errors'] ?? 0)
-            + (float) ($scrub_stats['csum_errors'] ?? 0)
-            + (float) ($scrub_stats['verify_errors'] ?? 0)
-            + (float) ($scrub_stats['uncorrectable_errors'] ?? 0)
-            + (float) ($scrub_stats['unverified_errors'] ?? 0)
-            + (float) ($scrub_stats['missing'] ?? 0)
-            + (float) ($scrub_stats['device_missing'] ?? 0);
-    }
 
     return $total_errors;
 };
 
 $btrfs_used_percent_text = static function ($used_value, $size_value): string {
+    // Return used percentage text when total size is known.
     $used = (float) ($used_value ?? 0);
     $size = (float) ($size_value ?? 0);
 
@@ -122,6 +140,7 @@ $btrfs_used_percent_text = static function ($used_value, $size_value): string {
 };
 
 $btrfs_format_metric = static function ($value, string $metric, string $null_text = 'N/A'): string {
+    // Generic metric formatter shared by global and device pages.
     if ($value === null || $value === '') {
         return $null_text;
     }

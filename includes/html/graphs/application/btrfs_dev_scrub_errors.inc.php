@@ -1,7 +1,7 @@
 <?php
 
 $name = 'btrfs';
-$unit_text = 'errors/s';
+$unit_text = 'errors';
 $colours = 'psychedelic';
 $dostack = 0;
 $printtotal = 0;
@@ -16,32 +16,32 @@ $rrd_list = [
     [
         'filename' => $rrd_filename,
         'descr' => 'Scrub Read',
-        'ds' => 'scrub_c_read',
+        'ds' => 'scrub_t_read',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Scrub Csum',
-        'ds' => 'scrub_c_csum',
+        'ds' => 'scrub_t_csum',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Scrub Verify',
-        'ds' => 'scrub_c_verify',
+        'ds' => 'scrub_t_verify',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Scrub Uncorrectable',
-        'ds' => 'scrub_c_uncorrectable',
+        'ds' => 'scrub_t_uncorrectable',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Scrub Unverified',
-        'ds' => 'scrub_c_unverified',
+        'ds' => 'scrub_t_unverified',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Scrub Corrected',
-        'ds' => 'scrub_c_corrected',
+        'ds' => 'scrub_t_corrected',
     ],
 ];
 

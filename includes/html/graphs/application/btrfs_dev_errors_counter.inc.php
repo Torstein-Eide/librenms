@@ -1,7 +1,7 @@
 <?php
 
 $name = 'btrfs';
-$unit_text = 'errors/s';
+$unit_text = 'errors';
 $colours = 'psychedelic';
 $dostack = 0;
 $printtotal = 0;
@@ -16,27 +16,27 @@ $rrd_list = [
     [
         'filename' => $rrd_filename,
         'descr' => 'Corruption',
-        'ds' => 'io_c_corruption',
+        'ds' => 'io_t_corruption',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Flush IO',
-        'ds' => 'io_c_flush',
+        'ds' => 'io_t_flush',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Generation',
-        'ds' => 'io_c_generation',
+        'ds' => 'io_t_generation',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Read IO',
-        'ds' => 'io_c_read',
+        'ds' => 'io_t_read',
     ],
     [
         'filename' => $rrd_filename,
         'descr' => 'Write IO',
-        'ds' => 'io_c_write',
+        'ds' => 'io_t_write',
     ],
 ];
 

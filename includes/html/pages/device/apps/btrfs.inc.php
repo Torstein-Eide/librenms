@@ -6,6 +6,8 @@ require_once __DIR__ . '/../../btrfs-common.inc.php';
 // Btrfs Application Page
 // Renders the device/app page for Btrfs monitoring.
 // Three views: Overview (all filesystems), Per-filesystem, Per-device.
+// Data source contract: consumes normalized app->data emitted by poller btrfs.inc.php.
+// Status rendering rule: prefer live state sensors, then fall back to stored poller status codes.
 // =============================================================================
 
 // -----------------------------------------------------------------------------
@@ -23,35 +25,27 @@ $selected_fs = $vars['fs'] ?? null;
 $selected_dev = $vars['dev'] ?? null;
 $is_overview = ! isset($selected_fs);
 
-echo '<style>
-.btrfs-sticky-first th:first-child,
-.btrfs-sticky-first td:first-child {
-    position: sticky;
-    left: 0;
-    z-index: 2;
-    background: #fff;
-}
-.btrfs-sticky-first thead th:first-child {
-    z-index: 3;
-    background: #f5f5f5;
-}
-</style>';
+$btrfs_print_sticky_first_css();
 
+// Poller-provided datasets used throughout this page.
 // Load all data from app->data that was populated by the poller.
-// Each dataset is a flat key-value table stored as an array of rows
-// with 'key' and 'value' fields.
+// Uses canonical structured keys (filesystem/device/scrub/balance maps).
 $filesystems = $app->data['filesystems'] ?? [];
+$filesystem_meta = $app->data['filesystem_meta'] ?? [];
 $device_map = $app->data['device_map'] ?? [];
-$command_tables = $app->data['command_tables'] ?? [];
-$command_splits = $app->data['command_splits'] ?? [];
 $filesystem_tables = $app->data['filesystem_tables'] ?? [];
 $device_tables = $app->data['device_tables'] ?? [];
-$scrub_tables = $app->data['scrub_tables'] ?? [];
+$scrub_status_fs = $app->data['scrub_status_fs'] ?? [];
+$scrub_status_devices = $app->data['scrub_status_devices'] ?? [];
+$balance_status_fs = $app->data['balance_status_fs'] ?? [];
+$filesystem_uuid = $app->data['filesystem_uuid'] ?? [];
 $fs_rrd_key = $app->data['fs_rrd_key'] ?? [];
 $dev_rrd_key = $app->data['dev_rrd_key'] ?? [];
 sort($filesystems);
 
 $state_sensor_values = [];
+// Load live sensor_current values so UI can show freshest state even if app->data
+// was produced in a previous poll cycle.
 $btrfs_state_sensors = App\Models\Sensor::where('device_id', $device['device_id'])
     ->where('sensor_class', 'state')
     ->where('poller_type', 'agent')
@@ -151,9 +145,6 @@ $format_command_name = static function (string $command_name): string {
     return ucwords(str_replace('_', ' ', $command_name));
 };
 
-// Find a specific key's value in a flat key-value table (array of rows).
-$get_command_value = $btrfs_get_row_value;
-
 // Format a value for table display: handles null/empty, booleans, and numeric formatting.
 $format_display_value = static function ($value, string $key) use ($format_metric_value): string {
     if ($value === null || $value === '') {
@@ -205,6 +196,7 @@ $status_badge = $btrfs_status_badge;
 $status_from_code = $btrfs_status_from_code;
 
 $state_code_from_sensor = static function (string $sensor_type, string $sensor_index, $fallback = null) use ($state_sensor_values): int {
+    // Prefer live sensor value when present, otherwise use poller snapshot code.
     if (isset($state_sensor_values[$sensor_type][$sensor_index]) && is_numeric($state_sensor_values[$sensor_type][$sensor_index])) {
         return (int) $state_sensor_values[$sensor_type][$sensor_index];
     }
@@ -260,403 +252,7 @@ $scrub_counter_columns = [
     'last_physical',
 ];
 
-// Render the Scrub Overview panel (filesystem-wide scrub totals).
-// Shows the key-value table for scrub overview metrics with special formatting
-// for bytes_scrubbed, total_to_scrub, and duration.
-$render_scrub_overview_panel = static function (array $split, array $rows, string $badge, string $panel_col_class) use ($format_display_name, $format_display_value): void {
-    echo '<div class="' . $panel_col_class . '">';
-    echo '<div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Scrub Overview<div class="pull-right">' . $badge . '</div></h3></div>';
-    echo '<div class="panel-body">';
-
-    if (count($rows) === 0) {
-        echo '<em>No data returned</em>';
-    } else {
-        $overview_map = [];
-        foreach ($split['overview'] as $overview_row) {
-            $overview_map[$overview_row['key']] = $overview_row['value'];
-        }
-
-        echo '<div class="table-responsive">';
-        echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
-        echo '<thead><tr><th>Key</th><th>Value</th></tr></thead>';
-        echo '<tbody>';
-        foreach ($split['overview'] as $overview_row) {
-            $key = $overview_row['key'];
-            $value = $overview_row['value'];
-
-            // Skip status and progress rows; shown in the panel header badge
-            if ($key === 'status' || $key === 'bytes_scrubbed.progress') {
-                continue;
-            }
-
-            // bytes_scrubbed.bytes: show value with progress percentage
-            if ($key === 'bytes_scrubbed.bytes') {
-                $progress = $overview_map['bytes_scrubbed.progress'] ?? null;
-                $formatted = $format_display_value($value, 'bytes');
-                if (is_numeric($progress)) {
-                    $progress_text = rtrim(rtrim(number_format((float) $progress, 2, '.', ''), '0'), '.');
-                    $value = "$formatted (" . $progress_text . '%)';
-                } else {
-                    $value = $formatted;
-                }
-                $key = 'bytes_scrubbed';
-            } elseif ($key === 'total_to_scrub') {
-                $value = $format_display_value($value, 'bytes');
-            } elseif ($key === 'duration') {
-                // Fall back to calculating progress from old-style flat keys when
-                // bytes_scrubbed.bytes is not available (new-style already shows progress).
-                if (! isset($overview_map['bytes_scrubbed.bytes'])) {
-                    $bytes_scrubbed = $overview_map['bytes_scrubbed'] ?? null;
-                    $total_to_scrub = $overview_map['total_to_scrub'] ?? null;
-                    $bytes_scrubbed_num = LibreNMS\Util\Number::toBytes((string) ($bytes_scrubbed ?? ''));
-                    $total_to_scrub_num = LibreNMS\Util\Number::toBytes((string) ($total_to_scrub ?? ''));
-                    if (! is_nan($bytes_scrubbed_num) && ! is_nan($total_to_scrub_num) && $total_to_scrub_num > 0) {
-                        $progress = ($bytes_scrubbed_num / $total_to_scrub_num) * 100;
-                        $value = rtrim(rtrim(number_format($progress, 2, '.', ''), '0'), '.') . '%';
-                    }
-                }
-            }
-
-            echo '<tr>';
-            echo '<td>' . htmlspecialchars($format_display_name($key)) . '</td>';
-            echo '<td>' . htmlspecialchars($value) . '</td>';
-            echo '</tr>';
-        }
-        echo '</tbody>';
-        echo '</table>';
-        echo '</div>';
-    }
-
-    echo '</div>';
-    echo '</div>';
-    echo '</div>';
-};
-
-// Render Scrub Per Device panel for the filesystem view (all devices, full-width).
-$render_scrub_per_device_fs_panel = static function (
-    array $split,
-    ?string $selected_dev_path,
-    array $path_to_dev_id,
-    array $link_array,
-    string $selected_fs
-) use ($to_bool, $scrub_counter_columns, $format_display_name, $format_display_value, $status_badge): void {
-    $devices = $split['devices'];
-    $hidden_columns = ['path', 'id', 'section', 'has_status_suffix', 'has_stats', 'no_stats_available', 'last_physical'];
-
-    echo '<div class="col-md-12">';
-    echo '<div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Scrub Per Device</h3></div>';
-    echo '<div class="panel-body">';
-
-    if (isset($selected_dev_path) && $selected_dev_path !== '' && isset($devices[$selected_dev_path])) {
-        $devices = [$selected_dev_path => $devices[$selected_dev_path]];
-    }
-
-    if (count($devices) > 0) {
-        echo '<div class="table-responsive">';
-        echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
-        echo '<thead><tr><th>Device</th>';
-        foreach ($split['device_columns'] as $column) {
-            if (in_array($column, $hidden_columns, true)) {
-                continue;
-            }
-            echo '<th>' . htmlspecialchars($format_display_name($column)) . '</th>';
-        }
-        echo '</tr></thead>';
-        echo '<tbody>';
-
-        foreach ($devices as $device_name => $metrics) {
-            echo '<tr>';
-            if (isset($path_to_dev_id[$device_name])) {
-                echo '<td>' . generate_link(htmlspecialchars($device_name), $link_array, ['fs' => $selected_fs, 'dev' => $path_to_dev_id[$device_name]]) . '</td>';
-            } else {
-                echo '<td>' . htmlspecialchars($device_name) . '</td>';
-            }
-
-            $has_stats = $to_bool($metrics['has_stats'] ?? null);
-            $no_stats_available = $to_bool($metrics['no_stats_available'] ?? null);
-            $hide_counters = $has_stats === false || $no_stats_available === true;
-            foreach ($split['device_columns'] as $column) {
-                if (in_array($column, $hidden_columns, true)) {
-                    continue;
-                }
-                $value = $metrics[$column] ?? '';
-                $display_value = $format_display_value($value, $column);
-                if ($hide_counters && in_array($column, $scrub_counter_columns, true)) {
-                    $display_value = '';
-                }
-                if ($column === 'status') {
-                    echo '<td>' . $status_badge((string) $value) . '</td>';
-                } else {
-                    echo '<td>' . htmlspecialchars($display_value) . '</td>';
-                }
-            }
-            echo '</tr>';
-        }
-
-        echo '</tbody>';
-        echo '</table>';
-        echo '</div>';
-    } else {
-        echo '<p class="text-muted">No per-device scrub details were reported.</p>';
-    }
-
-    echo '</div>';
-    echo '</div>';
-    echo '</div>';
-};
-
-// Render Scrub Per Device panel for the per-device view (single device).
-$render_scrub_per_device_panel = static function (
-    array $split,
-    string $panel_col_class,
-    ?string $selected_dev_path
-) use ($to_bool, $scrub_counter_columns, $format_display_name, $format_display_value, $status_badge): void {
-    $devices = $split['devices'];
-    $hidden_columns = ['path', 'id', 'section', 'has_status_suffix', 'has_stats', 'no_stats_available', 'last_physical'];
-
-    echo '<div class="' . $panel_col_class . '">';
-    echo '<div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Scrub Per Device</h3></div>';
-    echo '<div class="panel-body">';
-
-    if (isset($selected_dev_path) && $selected_dev_path !== '' && isset($devices[$selected_dev_path])) {
-        $devices = [$selected_dev_path => $devices[$selected_dev_path]];
-    }
-
-    if (count($devices) > 0) {
-        $single_metrics = reset($devices);
-        echo '<div class="table-responsive">';
-        echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
-        echo '<thead><tr><th>Metric</th><th>Value</th></tr></thead>';
-        echo '<tbody>';
-
-        foreach ($split['device_columns'] as $column) {
-            if (in_array($column, $hidden_columns, true)) {
-                continue;
-            }
-            $has_stats = $to_bool($single_metrics['has_stats'] ?? null);
-            $no_stats_available = $to_bool($single_metrics['no_stats_available'] ?? null);
-            $hide_counters = $has_stats === false || $no_stats_available === true;
-            $value = $single_metrics[$column] ?? '';
-            $display_value = $format_display_value($value, $column);
-            if ($hide_counters && in_array($column, $scrub_counter_columns, true)) {
-                $display_value = '';
-            }
-            echo '<tr>';
-            echo '<td>' . htmlspecialchars($format_display_name($column)) . '</td>';
-            if ($column === 'status') {
-                echo '<td>' . $status_badge((string) $value) . '</td>';
-            } else {
-                echo '<td>' . htmlspecialchars($display_value) . '</td>';
-            }
-            echo '</tr>';
-        }
-
-        echo '</tbody>';
-        echo '</table>';
-        echo '</div>';
-    } else {
-        echo '<p class="text-muted">No per-device scrub details were reported.</p>';
-    }
-
-    echo '</div>';
-    echo '</div>';
-    echo '</div>';
-};
-
-// Render a generic command panel with optional overview and per-device tables.
-// Used for device_usage, device_stats, and other commands.
-$render_generic_panel = static function (
-    string $command_name,
-    string $panel_title,
-    ?string $panel_badge,
-    string $panel_col_class,
-    array $split,
-    ?string $selected_dev,
-    ?string $selected_dev_path,
-    array $path_to_dev_id,
-    array $link_array,
-    string $selected_fs
-) use ($format_display_name, $format_display_value): void {
-    echo '<div class="' . $panel_col_class . '">';
-    echo '<div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">' . $panel_title;
-    if (! empty($panel_badge)) {
-        echo '<div class="pull-right">' . $panel_badge . '</div>';
-    }
-    echo '</h3></div>';
-    echo '<div class="panel-body">';
-
-    if (count($split['overview']) === 0 && count($split['devices']) === 0) {
-        echo '<em>No data returned</em>';
-    } else {
-        $has_overview = count($split['overview']) > 0;
-
-        if ($has_overview) {
-            echo '<h4>Overview</h4>';
-            echo '<div class="table-responsive">';
-            echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
-            echo '<thead><tr><th>Key</th><th>Value</th></tr></thead>';
-            echo '<tbody>';
-            foreach ($split['overview'] as $overview_row) {
-                echo '<tr>';
-                echo '<td>' . htmlspecialchars($format_display_name($overview_row['key'])) . '</td>';
-                echo '<td>' . htmlspecialchars($format_display_value($overview_row['value'], $overview_row['key'])) . '</td>';
-                echo '</tr>';
-            }
-            echo '</tbody>';
-            echo '</table>';
-            echo '</div>';
-        }
-
-        if (count($split['devices']) > 0) {
-            if ($has_overview) {
-                echo '<h4>Per Device</h4>';
-            }
-
-            $devices = $split['devices'];
-            if (isset($selected_dev_path) && $selected_dev_path !== '' && isset($devices[$selected_dev_path])) {
-                $devices = [$selected_dev_path => $devices[$selected_dev_path]];
-            }
-
-            if (isset($selected_dev) && count($devices) === 1) {
-                $single_metrics = reset($devices);
-                echo '<div class="table-responsive">';
-                echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
-                echo '<thead><tr><th>Metric</th><th>Value</th></tr></thead>';
-                echo '<tbody>';
-
-                foreach ($split['device_columns'] as $column) {
-                    $value = $single_metrics[$column] ?? '';
-                    echo '<tr>';
-                    echo '<td>' . htmlspecialchars($format_display_name($column)) . '</td>';
-                    echo '<td>' . htmlspecialchars($format_display_value($value, $column)) . '</td>';
-                    echo '</tr>';
-                }
-
-                echo '</tbody>';
-                echo '</table>';
-                echo '</div>';
-            } else {
-                echo '<div class="table-responsive">';
-                echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
-                echo '<thead><tr><th>Device</th>';
-                foreach ($split['device_columns'] as $column) {
-                    echo '<th>' . htmlspecialchars($format_display_name($column)) . '</th>';
-                }
-                echo '</tr></thead>';
-                echo '<tbody>';
-
-                foreach ($devices as $device_name => $metrics) {
-                    echo '<tr>';
-                    if (isset($path_to_dev_id[$device_name])) {
-                        echo '<td>' . generate_link(htmlspecialchars($device_name), $link_array, ['fs' => $selected_fs, 'dev' => $path_to_dev_id[$device_name]]) . '</td>';
-                    } else {
-                        echo '<td>' . htmlspecialchars($device_name) . '</td>';
-                    }
-
-                    foreach ($split['device_columns'] as $column) {
-                        $value = $metrics[$column] ?? '';
-                        echo '<td>' . htmlspecialchars($format_display_value($value, $column)) . '</td>';
-                    }
-                    echo '</tr>';
-                }
-
-                echo '</tbody>';
-                echo '</table>';
-                echo '</div>';
-            }
-        }
-    }
-
-    echo '</div>';
-    echo '</div>';
-    echo '</div>';
-};
-
-// Render the Balance panel HTML.
-// Takes the already-split balance data so the caller controls the split call.
-// Outputs the panel div directly.
-$render_balance_panel = static function (array $split, array $rows, string $panel_col_class, ?string $selected_dev, int $balance_status_code) use ($status_badge, $format_display_name, $format_display_value): void {
-    $state = match ($balance_status_code) {
-        0 => 'ok',
-        1 => 'running',
-        2 => 'na',
-        3 => 'error',
-        default => 'na',
-    };
-    $badge = $status_badge($state);
-
-    $overview_rows = [];
-    foreach ($split['overview'] as $row) {
-        $key = $row['key'];
-        if ($key !== 'path' && $key !== 'status') {
-            $overview_rows[] = $row;
-        }
-    }
-
-    $profiles = $split['devices'];
-    $has_profiles = count($profiles) > 0;
-    $has_overview = count($overview_rows) > 0 || $has_profiles;
-    $show_overview = ! isset($selected_dev) && ($has_overview || count($rows) === 0);
-    $is_idle = $balance_status_code !== 1;
-
-    echo '<div class="' . $panel_col_class . '">';
-    echo '<div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Balance<div class="pull-right">' . $badge . '</div></h3></div>';
-    echo '<div class="panel-body">';
-
-    if ($is_idle && ! $has_profiles) {
-        echo '<p class="text-muted">No balance operation running.</p>';
-    }
-
-    if ($show_overview) {
-        if (count($overview_rows) > 0) {
-            echo '<div class="table-responsive">';
-            echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
-            echo '<thead><tr><th>Key</th><th>Value</th></tr></thead>';
-            echo '<tbody>';
-            foreach ($overview_rows as $row) {
-                echo '<tr>';
-                echo '<td>' . htmlspecialchars($format_display_name($row['key'])) . '</td>';
-                echo '<td>' . htmlspecialchars($format_display_value($row['value'], $row['key'])) . '</td>';
-                echo '</tr>';
-            }
-            echo '</tbody>';
-            echo '</table>';
-            echo '</div>';
-        }
-
-        if ($has_profiles) {
-            echo '<h4>Profiles</h4>';
-            echo '<div class="table-responsive">';
-            echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
-            echo '<thead><tr>';
-            foreach ($split['device_columns'] as $column) {
-                echo '<th>' . htmlspecialchars($format_display_name($column)) . '</th>';
-            }
-            echo '</tr></thead>';
-            echo '<tbody>';
-            foreach ($profiles as $profile) {
-                echo '<tr>';
-                foreach ($split['device_columns'] as $column) {
-                    $value = $profile[$column] ?? '';
-                    echo '<td>' . htmlspecialchars($format_display_value($value, $column)) . '</td>';
-                }
-                echo '</tr>';
-            }
-            echo '</tbody>';
-            echo '</table>';
-            echo '</div>';
-        }
-    }
-
-    echo '</div>';
-    echo '</div>';
-    echo '</div>';
-};
+require_once __DIR__ . '/btrfs-panels.inc.php';
 
 // -----------------------------------------------------------------------------
 // Section 3: Navigation Bar (print_optionbar)
@@ -674,8 +270,7 @@ echo generate_link($overview_label, $link_array);
 if (count($filesystems) > 0) {
     echo ' | Filesystems: ';
     foreach ($filesystems as $index => $fs) {
-        $show_rows = $command_tables[$fs]['filesystem_show'] ?? [];
-        $filesystem_label = $get_command_value($show_rows, 'label');
+        $filesystem_label = $filesystem_meta[$fs]['label'] ?? null;
         if (! empty($filesystem_label)) {
             $display_fs = (string) $filesystem_label;
         } elseif ($fs === '/') {
@@ -698,6 +293,7 @@ if (count($filesystems) > 0) {
 
 // Device links (shown only when a filesystem is selected)
 if (isset($selected_fs) && isset($device_map[$selected_fs]) && count($device_map[$selected_fs]) > 0) {
+    // Device submenu is scoped to the currently selected filesystem.
     echo ' | Devices: ';
     $devices = $device_map[$selected_fs];
     asort($devices);
@@ -717,6 +313,7 @@ if (isset($selected_fs) && isset($device_map[$selected_fs]) && count($device_map
 
 // Graph types menu (shown when a filesystem is selected)
 if (isset($selected_fs)) {
+    // Graph menu is context-sensitive: filesystem graphs vs per-device graphs.
     echo ' | Graphs: ';
 
     // Add "All" link when a specific graph is selected
@@ -770,6 +367,26 @@ if (isset($selected_fs)) {
 
 print_optionbar_end();
 
+$debug_payload = [
+    'app_id' => $app->app_id,
+    'selected_fs' => $selected_fs,
+    'selected_dev' => $selected_dev,
+    'schema_version' => $app->data['schema_version'] ?? null,
+    'filesystem_meta' => isset($selected_fs) ? ($filesystem_meta[$selected_fs] ?? []) : $filesystem_meta,
+    'device_map' => isset($selected_fs) ? ($device_map[$selected_fs] ?? []) : $device_map,
+    'device_tables' => isset($selected_fs) ? ($device_tables[$selected_fs] ?? []) : $device_tables,
+    'scrub_status_fs' => isset($selected_fs) ? ($scrub_status_fs[$selected_fs] ?? []) : $scrub_status_fs,
+    'scrub_status_devices' => isset($selected_fs) ? ($scrub_status_devices[$selected_fs] ?? []) : $scrub_status_devices,
+    'balance_status_fs' => isset($selected_fs) ? ($balance_status_fs[$selected_fs] ?? []) : $balance_status_fs,
+];
+
+echo '<div class="panel panel-warning">';
+echo '<div class="panel-heading"><h3 class="panel-title">Debug (app->data from database)</h3></div>';
+echo '<div class="panel-body">';
+echo '<pre style="max-height:420px;overflow:auto;">' . htmlspecialchars((string) json_encode($debug_payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) . '</pre>';
+echo '</div>';
+echo '</div>';
+
 // -----------------------------------------------------------------------------
 // Section 4: Overview Page (when no filesystem is selected)
 // Shows filesystem summary table.
@@ -777,23 +394,27 @@ print_optionbar_end();
 
 // Filesystem summary table
 if ($is_overview && count($filesystems) > 0) {
+    // Top-level filesystem table (one row per filesystem on this device).
     echo '<div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">Filesystems Overview</h3></div>';
     echo '<div class="panel-body">';
     echo '<div class="table-responsive">';
     echo '<table class="table table-condensed table-striped table-hover btrfs-sticky-first">';
-    echo '<thead><tr><th>Filesystem</th><th>IO</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>Total Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Data Ratio</th><th>Metadata Ratio</th><th>Devices</th><th>Combined Status</th></tr></thead>';
+    echo '<thead><tr><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Data Ratio</th><th>Metadata Ratio</th><th>Devices</th><th>Combined Status</th></tr></thead>';
     echo '<tbody>';
 
     foreach ($filesystems as $fs) {
+        // Resolve display name + status + summary metrics for one filesystem row.
         $fs_data = $filesystem_tables[$fs] ?? [];
         $fs_devices = $device_map[$fs] ?? [];
-        $show_rows = $command_tables[$fs]['filesystem_show'] ?? [];
-        $display_name = $btrfs_display_fs_name((string) $fs, $show_rows);
-        $scrub_rows = $command_tables[$fs]['scrub_status'] ?? [];
-        $scrub_progress_text = $btrfs_scrub_progress_text($scrub_rows);
+        $fs_label = trim((string) ($filesystem_meta[$fs]['label'] ?? ''));
+        $display_name = $fs_label !== '' ? $fs_label . ' (' . $fs . ')' : (string) $fs;
+        $scrub_status = $scrub_status_fs[$fs] ?? [];
+        $scrub_progress_text = is_array($scrub_status) && count($scrub_status) > 0
+            ? $btrfs_scrub_progress_text_from_status($scrub_status)
+            : 'N/A';
 
-        $total_errors = $btrfs_total_errors($device_tables[$fs] ?? [], $scrub_tables[$fs] ?? []);
+        $total_errors = $btrfs_total_io_errors($device_tables[$fs] ?? []);
 
         $used_percent_text = $btrfs_used_percent_text($fs_data['used'] ?? null, $fs_data['device_size'] ?? null);
 
@@ -854,9 +475,10 @@ if ($is_overview && count($filesystems) > 0) {
     ];
 
     foreach ($filesystems as $fs) {
+        // Per-filesystem graph panel block under overview table.
         $fs_data = $filesystem_tables[$fs] ?? [];
-        $show_rows = $command_tables[$fs]['filesystem_show'] ?? [];
-        $display_name = $btrfs_display_fs_name((string) $fs, $show_rows);
+        $fs_label = trim((string) ($filesystem_meta[$fs]['label'] ?? ''));
+        $display_name = $fs_label !== '' ? $fs_label . ' (' . $fs . ')' : (string) $fs;
 
         $used_value = (float) ($fs_data['used'] ?? 0);
         $size_value = (float) ($fs_data['device_size'] ?? 0);
@@ -922,9 +544,8 @@ if (isset($selected_fs)) {
 // Per-filesystem Overview Panel: shows filesystem label, UUID, and key metrics
 // in a multi-column table that adapts to screen size.
 if (isset($selected_fs) && ! isset($selected_dev) && isset($filesystem_tables[$selected_fs])) {
-    $show_rows = $command_tables[$selected_fs]['filesystem_show'] ?? [];
-    $filesystem_label = $get_command_value($show_rows, 'label');
-    $filesystem_uuid = $get_command_value($show_rows, 'uuid');
+    $filesystem_label = $filesystem_meta[$selected_fs]['label'] ?? null;
+    $selected_fs_uuid = (string) ($filesystem_uuid[$selected_fs] ?? '');
     if ($filesystem_label === null) {
         $filesystem_label = '';
     }
@@ -957,8 +578,8 @@ if (isset($selected_fs) && ! isset($selected_dev) && isset($filesystem_tables[$s
     echo '<div class="panel-heading"><h3 class="panel-title">Overview</h3></div>';
     echo '<div class="panel-body">';
     echo '<p><strong>Filesystem:</strong> ' . htmlspecialchars((string) $fs_title) . '</p>';
-    if (! empty($filesystem_uuid)) {
-        echo '<p><strong>UUID:</strong> ' . htmlspecialchars((string) $filesystem_uuid) . '</p>';
+    if ($selected_fs_uuid !== '') {
+        echo '<p><strong>UUID:</strong> ' . htmlspecialchars($selected_fs_uuid) . '</p>';
     }
 
     // Renders the metric pairs table in a variable number of columns
@@ -1056,14 +677,35 @@ if (isset($selected_fs, $selected_dev) && isset($device_tables[$selected_fs][$se
 }
 
 // -----------------------------------------------------------------------------
-// Section 6: Command Panels
-// Iterates over all command tables for the selected filesystem and renders
-// a panel for each. Balance is rendered first (before scrub panels).
-// scrub_status renders as two separate panels: Scrub Overview and Scrub Per Device.
+// Section 6: Detail Panels
+// Renders canonical structured panels for selected filesystem:
+// Balance, Device Usage, Device Stats, Scrub Overview, Scrub Per Device.
 // -----------------------------------------------------------------------------
 
-if (isset($selected_fs) && isset($command_tables[$selected_fs]) && is_array($command_tables[$selected_fs])) {
+if (isset($selected_fs) && isset($filesystem_tables[$selected_fs])) {
     $selected_fs_rrd_id = $fs_rrd_key[$selected_fs] ?? $selected_fs;
+    $flatten_assoc_rows = static function (array $data, string $prefix = '') use (&$flatten_assoc_rows): array {
+        $rows = [];
+        foreach ($data as $key => $value) {
+            $segment = is_int($key) ? '[' . $key . ']' : (string) $key;
+            $path = $prefix === '' ? $segment : $prefix . '.' . $segment;
+
+            if (is_array($value)) {
+                $rows = array_merge($rows, $flatten_assoc_rows($value, $path));
+                continue;
+            }
+
+            if (is_bool($value)) {
+                $rows[] = ['key' => $path, 'value' => $value ? 'true' : 'false'];
+            } elseif ($value === null) {
+                $rows[] = ['key' => $path, 'value' => 'null'];
+            } else {
+                $rows[] = ['key' => $path, 'value' => (string) $value];
+            }
+        }
+
+        return $rows;
+    };
     // Build a reverse map from device path to device ID for generating links.
     $path_to_dev_id = [];
     foreach ($device_map[$selected_fs] ?? [] as $dev_id => $dev_path) {
@@ -1071,154 +713,144 @@ if (isset($selected_fs) && isset($command_tables[$selected_fs]) && is_array($com
     }
     $selected_dev_path = isset($selected_dev, $device_map[$selected_fs][$selected_dev]) ? (string) $device_map[$selected_fs][$selected_dev] : null;
 
-    $fs_commands = $command_tables[$selected_fs];
+    // Balance panel
+    if (! isset($selected_dev)) {
+        $balance_data = $balance_status_fs[$selected_fs] ?? [];
+        $balance_split = ['overview' => [], 'devices' => [], 'device_columns' => []];
+        if (is_array($balance_data)) {
+            foreach ($balance_data as $key => $value) {
+                if ($key === 'profiles' || $key === 'lines') {
+                    continue;
+                }
 
-    // Merge scrub_status_devices into scrub_status if present.
-    // The poller may store them separately; we consolidate here for rendering.
-    if (isset($fs_commands['scrub_status_devices']) && is_array($fs_commands['scrub_status_devices'])) {
-        if (! isset($fs_commands['scrub_status']) || ! is_array($fs_commands['scrub_status'])) {
-            $fs_commands['scrub_status'] = [];
-        }
+                if (is_array($value)) {
+                    $balance_split['overview'] = array_merge($balance_split['overview'], $flatten_assoc_rows([$key => $value]));
+                } elseif (is_bool($value)) {
+                    $balance_split['overview'][] = ['key' => (string) $key, 'value' => $value ? 'true' : 'false'];
+                } elseif ($value === null) {
+                    $balance_split['overview'][] = ['key' => (string) $key, 'value' => 'null'];
+                } else {
+                    $balance_split['overview'][] = ['key' => (string) $key, 'value' => (string) $value];
+                }
+            }
 
-        foreach ($fs_commands['scrub_status_devices'] as $row) {
-            $row_key = (string) ($row['key'] ?? '');
-            if (str_starts_with($row_key, 'devices.')) {
-                $fs_commands['scrub_status'][] = $row;
+            $profiles = $balance_data['profiles'] ?? [];
+            if (is_array($profiles)) {
+                foreach ($profiles as $index => $profile) {
+                    if (! is_array($profile)) {
+                        continue;
+                    }
+                    $balance_split['devices'][(string) $index] = $profile;
+                    foreach ($profile as $column => $unused) {
+                        if (! in_array((string) $column, $balance_split['device_columns'], true)) {
+                            $balance_split['device_columns'][] = (string) $column;
+                        }
+                    }
+                }
             }
         }
 
-        unset($fs_commands['scrub_status_devices']);
-    }
-
-    // Reorder command tables: device_usage, device_stats, scrub_status first,
-    // then any remaining commands in original order.
-    $command_order = ['device_usage', 'device_stats', 'scrub_status'];
-    $ordered_fs_commands = [];
-    foreach ($command_order as $ordered_name) {
-        if (isset($fs_commands[$ordered_name])) {
-            $ordered_fs_commands[$ordered_name] = $fs_commands[$ordered_name];
-        }
-    }
-
-    foreach ($fs_commands as $name => $rows) {
-        if (! isset($ordered_fs_commands[$name])) {
-            $ordered_fs_commands[$name] = $rows;
-        }
-    }
-
-    // Render Balance panel first (before scrub panels), per-filesystem only.
-    if (! isset($selected_dev) && isset($fs_commands['balance_status']) && is_array($fs_commands['balance_status'])) {
-        $balance_split = $command_splits[$selected_fs]['balance_status'] ?? [];
-        $balance_split = array_merge(['overview' => [], 'devices' => [], 'device_columns' => []], $balance_split);
         $balance_status_code = $state_code_from_sensor(
             'btrfsBalanceStatusState',
             (string) $selected_fs_rrd_id . '.balance',
             $filesystem_tables[$selected_fs]['balance_status_code'] ?? 2
         );
-        $render_balance_panel($balance_split, $fs_commands['balance_status'], $panel_col_class, $selected_dev, $balance_status_code);
+        $render_balance_panel($balance_split, $balance_split['overview'], $panel_col_class, $selected_dev, $balance_status_code);
     }
 
-    foreach ($ordered_fs_commands as $command_name => $rows) {
-        // balance_status is rendered before the loop
-        if ($command_name === 'balance_status') {
-            continue;
-        }
-        // filesystem_show and filesystem_usage are already shown in the Overview panel
-        if (in_array($command_name, ['filesystem_show', 'filesystem_usage'], true)) {
-            continue;
-        }
-
-        // device_stats is only shown on the overview page, not in per-device view
-        if (isset($selected_dev) && $command_name === 'device_stats') {
+    // Device usage panel
+    $usage_split = ['overview' => [], 'devices' => [], 'device_columns' => ['id', 'device_size', 'device_slack', 'usage_data', 'usage_metadata', 'usage_system', 'usage_unallocated']];
+    foreach (($device_map[$selected_fs] ?? []) as $dev_id => $dev_path) {
+        $dev_stats = $device_tables[$selected_fs][$dev_id] ?? [];
+        if (! is_array($dev_stats) || count($dev_stats) === 0) {
             continue;
         }
 
-        // Split command data into overview and per-device sections
-        $split = $command_splits[$selected_fs][$command_name] ?? ['overview' => [], 'devices' => [], 'device_columns' => []];
-        if ($command_name === 'scrub_status' && isset($command_splits[$selected_fs]['scrub_status_devices'])) {
-            $scrub_devices_split = $command_splits[$selected_fs]['scrub_status_devices'];
-            if (! empty($scrub_devices_split['devices'])) {
-                $split['devices'] = $scrub_devices_split['devices'];
-                $split['device_columns'] = $scrub_devices_split['device_columns'] ?? [];
+        $usage_split['devices'][(string) $dev_path] = [
+            'id' => (string) $dev_id,
+            'device_size' => $dev_stats['usage_size'] ?? null,
+            'device_slack' => $dev_stats['usage_slack'] ?? null,
+            'usage_data' => $dev_stats['usage_data'] ?? null,
+            'usage_metadata' => $dev_stats['usage_metadata'] ?? null,
+            'usage_system' => $dev_stats['usage_system'] ?? null,
+            'usage_unallocated' => $dev_stats['usage_unallocated'] ?? null,
+        ];
+    }
+    $render_generic_panel('device_usage', 'Device Usage', null, $panel_col_class, $usage_split, $selected_dev, $selected_dev_path, $path_to_dev_id, $link_array, $selected_fs);
+
+    // Device IO stats panel (filesystem view only)
+    if (! isset($selected_dev)) {
+        $stats_split = ['overview' => [], 'devices' => [], 'device_columns' => ['corruption_errs', 'flush_io_errs', 'generation_errs', 'read_io_errs', 'write_io_errs']];
+        foreach (($device_map[$selected_fs] ?? []) as $dev_id => $dev_path) {
+            $dev_stats = $device_tables[$selected_fs][$dev_id] ?? [];
+            if (! is_array($dev_stats) || count($dev_stats) === 0) {
+                continue;
             }
+
+            $stats_split['devices'][(string) $dev_path] = [
+                'corruption_errs' => $dev_stats['corruption_errs'] ?? null,
+                'flush_io_errs' => $dev_stats['flush_io_errs'] ?? null,
+                'generation_errs' => $dev_stats['generation_errs'] ?? null,
+                'read_io_errs' => $dev_stats['read_io_errs'] ?? null,
+                'write_io_errs' => $dev_stats['write_io_errs'] ?? null,
+            ];
         }
 
-        $command_state = count($rows) === 0 ? 'na' : 'ok';
-        if ($command_name === 'scrub_status') {
-            $scrub_status_code = $state_code_from_sensor(
-                'btrfsScrubStatusState',
-                (string) $selected_fs_rrd_id . '.scrub',
-                $filesystem_tables[$selected_fs]['scrub_status_code'] ?? null
-            );
-            $command_state = $status_from_code($scrub_status_code);
-        } elseif ($command_name === 'device_stats') {
-            $io_status_code = $state_code_from_sensor(
-                'btrfsIoStatusState',
-                (string) $selected_fs_rrd_id . '.io',
-                $filesystem_tables[$selected_fs]['io_status_code'] ?? null
-            );
-            $command_state = $status_from_code($io_status_code);
-        }
-        $command_badge = $status_badge($command_state);
+        $io_status_code = $state_code_from_sensor(
+            'btrfsIoStatusState',
+            (string) $selected_fs_rrd_id . '.io',
+            $filesystem_tables[$selected_fs]['io_status_code'] ?? null
+        );
+        $io_badge = $status_badge($status_from_code($io_status_code));
+        $render_generic_panel('device_stats', 'Device Stats', $io_badge, $panel_col_class, $stats_split, $selected_dev, $selected_dev_path, $path_to_dev_id, $link_array, $selected_fs);
+    }
 
-        // ---------------------------------------------------------------------
-        // scrub_status renders as two separate panels: Scrub Overview
-        // (filesystem-wide totals) and Scrub Per Device (per-device counters).
-        // ---------------------------------------------------------------------
-        if ($command_name === 'scrub_status') {
-            $scrub_split = $split;
-            $scrub_from_tables = $scrub_tables[$selected_fs] ?? [];
-            if (is_array($scrub_from_tables) && count($scrub_from_tables) > 0) {
-                $scrub_split['devices'] = [];
-                $scrub_split['device_columns'] = [];
+    // Scrub panels
+    $scrub_status_code = $state_code_from_sensor(
+        'btrfsScrubStatusState',
+        (string) $selected_fs_rrd_id . '.scrub',
+        $filesystem_tables[$selected_fs]['scrub_status_code'] ?? null
+    );
+    $scrub_badge = $status_badge($status_from_code($scrub_status_code));
 
-                foreach ($scrub_from_tables as $dev_id => $scrub_metrics) {
-                    if (! is_array($scrub_metrics)) {
-                        continue;
-                    }
+    $scrub_status_fs_data = $scrub_status_fs[$selected_fs] ?? [];
+    $scrub_status_devices_data = $scrub_status_devices[$selected_fs] ?? [];
 
-                    $dev_path = (string) ($device_map[$selected_fs][$dev_id] ?? $dev_id);
-                    $scrub_split['devices'][$dev_path] = $scrub_metrics;
+    $scrub_split = [
+        'overview' => is_array($scrub_status_fs_data) ? $flatten_assoc_rows($scrub_status_fs_data) : [],
+        'devices' => [],
+        'device_columns' => [],
+    ];
 
-                    foreach ($scrub_metrics as $metric_key => $unused_metric_value) {
-                        if (! in_array($metric_key, $scrub_split['device_columns'], true)) {
-                            $scrub_split['device_columns'][] = $metric_key;
-                        }
-                    }
+    if (is_array($scrub_status_devices_data) && count($scrub_status_devices_data) > 0) {
+        foreach ($scrub_status_devices_data as $dev_id => $scrub_metrics) {
+            if (! is_array($scrub_metrics)) {
+                continue;
+            }
+
+            $dev_id_str = (string) $dev_id;
+            $dev_path = (string) ($device_map[$selected_fs][$dev_id_str] ?? ($scrub_metrics['path'] ?? $dev_id_str));
+            $scrub_split['devices'][$dev_path] = $scrub_metrics;
+
+            foreach ($scrub_metrics as $metric_key => $unused_metric_value) {
+                if (! in_array($metric_key, $scrub_split['device_columns'], true)) {
+                    $scrub_split['device_columns'][] = $metric_key;
                 }
             }
-
-            $has_overview = count($split['overview']) > 0;
-            $show_scrub_overview = ! isset($selected_dev) && ($has_overview || count($rows) === 0);
-
-            // ---- Scrub Overview Panel ----
-            if ($show_scrub_overview) {
-                $render_scrub_overview_panel($split, $rows, $command_badge, $panel_col_class);
-            }
-
-            // ---- Scrub Per Device Panel ----
-            if (isset($selected_dev)) {
-                $render_scrub_per_device_panel($scrub_split, $panel_col_class, $selected_dev_path);
-            } else {
-                $render_scrub_per_device_fs_panel($scrub_split, $selected_dev_path, $path_to_dev_id, $link_array, $selected_fs);
-            }
-
-            continue;
         }
+    }
 
-        $panel_title = $format_command_name($command_name);
-        $render_generic_panel(
-            $command_name,
-            $panel_title,
-            $command_name === 'device_usage' ? null : $command_badge,
-            $panel_col_class,
-            $split,
-            $selected_dev,
-            $selected_dev_path,
-            $path_to_dev_id,
-            $link_array,
-            $selected_fs
-        );
+    $scrub_rows = $scrub_split['overview'];
+    $has_scrub_overview = count($scrub_split['overview']) > 0;
+    $show_scrub_overview = ! isset($selected_dev) && ($has_scrub_overview || count($scrub_rows) === 0);
+    if ($show_scrub_overview) {
+        $render_scrub_overview_panel($scrub_split, $scrub_rows, $scrub_badge, $panel_col_class);
+    }
+
+    if (isset($selected_dev)) {
+        $render_scrub_per_device_panel($scrub_split, $panel_col_class, $selected_dev_path);
+    } else {
+        $render_scrub_per_device_fs_panel($scrub_split, $selected_dev_path, $path_to_dev_id, $link_array, $selected_fs);
     }
 }
 
@@ -1266,6 +898,7 @@ if (! $is_overview) {
 }
 
 foreach ($graphs as $key => $text) {
+    // Bottom graph panels for selected filesystem/device context.
     $graph_array = [];
     $graph_array['height'] = '100';
     $graph_array['width'] = '215';
