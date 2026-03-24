@@ -260,25 +260,6 @@ try {
 
 $filesystems = $btrfs['filesystems'] ?? [];
 
-$collect_keys = static function ($value, string $prefix = '') use (&$collect_keys): array {
-    if (! is_array($value)) {
-        return $prefix === '' ? [] : [$prefix];
-    }
-
-    $keys = [];
-    foreach ($value as $key => $child) {
-        $segment = is_int($key) ? '[]' : (string) $key;
-        $path = $prefix === '' ? $segment : $prefix . '.' . $segment;
-
-        $keys[] = $path;
-        if (is_array($child)) {
-            $keys = array_merge($keys, $collect_keys($child, $path));
-        }
-    }
-
-    return $keys;
-};
-
 $flatten_values = static function ($value, string $prefix = '') use (&$flatten_values): array {
     if (! is_array($value)) {
         return $prefix === '' ? [] : [$prefix => $value];
@@ -1155,11 +1136,6 @@ if (count($added_filesystems) > 0 || count($removed_filesystems) > 0) {
     Eventlog::log($log_message, $device['device_id'], 'application');
 }
 
-$json_keys = array_values(array_unique($collect_keys($all_return)));
-sort($json_keys);
-
-dbUpdate(['app_instance' => ''], 'applications', '`app_id` = ?', [$app->app_id]);
-
 $app_status_code = $app_has_error ? 3 : ($app_has_running ? 1 : ($app_has_data ? 0 : 2));
 $metrics['status_code'] = $app_status_code;
 $app_io_status_code = $app_io_has_error ? 3 : ($app_io_has_data ? 0 : 2);
@@ -1208,7 +1184,6 @@ $app->data = [
     'device_error_seen' => $device_error_seen,
     'btrfs_progs_version' => $btrfs['btrfs_version']['version'] ?? null,
     'btrfs_progs_features' => $btrfs['btrfs_version']['features'] ?? null,
-    'json_keys' => $json_keys,
     'status_code' => $app_status_code,
     'status_text' => $app_status_text,
     'version' => $all_return['version'] ?? null,
