@@ -335,6 +335,10 @@ $get_balance_status_code = static function (array $fs): int {
         return 2; // NA
     }
 
+    if (is_numeric($command['rc'] ?? null) && (int) $command['rc'] === 0) {
+        return 2; // NA
+    }
+
     $data = $command['data'] ?? [];
     if (! is_array($data)) {
         return 2; // NA
@@ -600,34 +604,66 @@ $scrub_error_keys = ['read_errors', 'csum_errors', 'verify_errors', 'uncorrectab
 
 $ensure_state_index = static function (string $state_name, array $states): ?int {
     $state_index_id = dbFetchCell('SELECT `state_index_id` FROM `state_indexes` WHERE `state_name` = ?', [$state_name]);
+    $created_index = false;
 
     if (! $state_index_id) {
         $state_index_id = dbInsert(['state_name' => $state_name], 'state_indexes');
+        $created_index = (bool) $state_index_id;
     }
 
     if (! $state_index_id) {
         return null;
     }
 
-    foreach ($states as $state) {
-        $existing = dbFetchCell(
-            'SELECT `state_translation_id` FROM `state_translations` WHERE `state_index_id` = ? AND `state_value` = ?',
-            [$state_index_id, $state['value']]
-        );
+    // Idempotent sync to reduce DB churn:
+    // 1) Read all existing translations for this state index once.
+    // 2) Compare expected vs stored values in memory.
+    // 3) Write only missing rows or rows with changed fields.
+    // Unchanged rows are intentionally skipped.
+    $existing_translations = dbFetchRows(
+        'SELECT `state_translation_id`, `state_value`, `state_descr`, `state_draw_graph`, `state_generic_value` FROM `state_translations` WHERE `state_index_id` = ?',
+        [$state_index_id]
+    );
+    $translations_by_value = [];
+    foreach ($existing_translations as $row) {
+        $translations_by_value[(int) $row['state_value']] = $row;
+    }
 
+    $created = 0;
+    $updated = 0;
+
+    foreach ($states as $state) {
+        $state_value = (int) $state['value'];
+        $existing = $translations_by_value[$state_value] ?? null;
         $translation = [
             'state_index_id' => $state_index_id,
             'state_descr' => $state['descr'],
             'state_draw_graph' => $state['graph'],
-            'state_value' => $state['value'],
+            'state_value' => $state_value,
             'state_generic_value' => $state['generic'],
         ];
 
         if ($existing) {
-            dbUpdate($translation, 'state_translations', '`state_translation_id` = ?', [$existing]);
+            $needs_update = (string) $existing['state_descr'] !== (string) $translation['state_descr']
+                || (int) $existing['state_draw_graph'] !== (int) $translation['state_draw_graph']
+                || (int) $existing['state_generic_value'] !== (int) $translation['state_generic_value'];
+
+            if ($needs_update) {
+                dbUpdate($translation, 'state_translations', '`state_translation_id` = ?', [(int) $existing['state_translation_id']]);
+                $updated++;
+            }
         } else {
             dbInsert($translation, 'state_translations');
+            $created++;
         }
+    }
+
+    if ($created_index || $created > 0 || $updated > 0) {
+        echo ' btrfs-state: ' . $state_name
+            . ' index=' . (int) $state_index_id
+            . ' created_index=' . ($created_index ? 'yes' : 'no')
+            . ' created=' . $created
+            . ' updated=' . $updated . PHP_EOL;
     }
 
     return (int) $state_index_id;
@@ -728,6 +764,7 @@ $cleanup_legacy_btrfs_state_sensors($device);
 $metrics = [];
 $device_map = [];
 $command_tables = [];
+$command_splits = [];
 $filesystem_tables = [];
 $filesystem_data_types = [];
 $device_tables = [];

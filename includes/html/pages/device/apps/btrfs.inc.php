@@ -1,6 +1,8 @@
 <?php
 
 // =============================================================================
+
+require_once __DIR__ . '/../../btrfs-common.inc.php';
 // Btrfs Application Page
 // Renders the device/app page for Btrfs monitoring.
 // Three views: Overview (all filesystems), Per-filesystem, Per-device.
@@ -150,15 +152,7 @@ $format_command_name = static function (string $command_name): string {
 };
 
 // Find a specific key's value in a flat key-value table (array of rows).
-$get_command_value = static function (array $rows, string $wanted_key): ?string {
-    foreach ($rows as $row) {
-        if (($row['key'] ?? null) === $wanted_key) {
-            return (string) ($row['value'] ?? '');
-        }
-    }
-
-    return null;
-};
+$get_command_value = $btrfs_get_row_value;
 
 // Format a value for table display: handles null/empty, booleans, and numeric formatting.
 $format_display_value = static function ($value, string $key) use ($format_metric_value): string {
@@ -174,9 +168,7 @@ $format_display_value = static function ($value, string $key) use ($format_metri
     }
 
     if ($key === 'duration' && is_numeric($value)) {
-        $percent = rtrim(rtrim(number_format((float) $value, 2, '.', ''), '0'), '.');
-
-        return $percent . '%';
+        return \LibreNMS\Util\Time::formatInterval((int) round((float) $value));
     }
 
     return $format_metric_value($value, $key);
@@ -233,38 +225,8 @@ $format_scrub_status = static function (array $metrics) use ($to_bool): string {
 // States: ok (gray), running (gray), warning (orange), error (red).
 // NOTE: Keep normal states neutral (`label-default`) instead of green success.
 // This follows ISA-101 HMI guidance: reserve high-salience colors for abnormal conditions.
-$status_badge = static function (string $state): string {
-    $state_lc = strtolower($state);
-    if ($state_lc === 'error') {
-        $badge = 'Error';
-        $class = 'label-danger';
-    } elseif ($state_lc === 'running') {
-        $badge = 'Running';
-        $class = 'label-default';
-    } elseif ($state_lc === 'na') {
-        $badge = 'N/A';
-        $class = 'label-default';
-    } elseif ($state_lc === 'warning') {
-        $badge = 'Warning';
-        $class = 'label-warning';
-    } else {
-        $badge = ucfirst($state_lc === 'ok' ? 'OK' : $state);
-        $class = 'label-default';
-    }
-
-    return '<span class="label ' . $class . '">' . htmlspecialchars($badge) . '</span>';
-};
-
-$status_from_code = static function ($value): string {
-    $code = is_numeric($value) ? (int) $value : 2;
-
-    return match ($code) {
-        0 => 'ok',
-        1 => 'running',
-        3 => 'error',
-        default => 'na',
-    };
-};
+$status_badge = $btrfs_status_badge;
+$status_from_code = $btrfs_status_from_code;
 
 $state_code_from_sensor = static function (string $sensor_type, string $sensor_index, $fallback = null) use ($state_sensor_values): int {
     if (isset($state_sensor_values[$sensor_type][$sensor_index]) && is_numeric($state_sensor_values[$sensor_type][$sensor_index])) {
@@ -674,6 +636,7 @@ $render_generic_panel = static function (
 // Outputs the panel div directly.
 $render_balance_panel = static function (array $split, array $rows, string $panel_col_class, ?string $selected_dev, int $balance_status_code) use ($status_badge, $format_display_name, $format_display_value): void {
     $state = match ($balance_status_code) {
+        0 => 'ok',
         1 => 'running',
         2 => 'na',
         3 => 'error',
@@ -726,19 +689,13 @@ $render_balance_panel = static function (array $split, array $rows, string $pane
             echo '<div class="table-responsive">';
             echo '<table class="table table-condensed table-striped btrfs-sticky-first">';
             echo '<thead><tr>';
-            if (! isset($selected_dev)) {
-                echo '<th>#</th>';
-            }
             foreach ($split['device_columns'] as $column) {
                 echo '<th>' . htmlspecialchars($format_display_name($column)) . '</th>';
             }
             echo '</tr></thead>';
             echo '<tbody>';
-            foreach ($profiles as $profile_index => $profile) {
+            foreach ($profiles as $profile) {
                 echo '<tr>';
-                if (! isset($selected_dev)) {
-                    echo '<td>' . ((int) $profile_index + 1) . '</td>';
-                }
                 foreach ($split['device_columns'] as $column) {
                     $value = $profile[$column] ?? '';
                     echo '<td>' . htmlspecialchars($format_display_value($value, $column)) . '</td>';
@@ -887,50 +844,13 @@ if ($is_overview && count($filesystems) > 0) {
         $fs_data = $filesystem_tables[$fs] ?? [];
         $fs_devices = $device_map[$fs] ?? [];
         $show_rows = $command_tables[$fs]['filesystem_show'] ?? [];
-        $label = $get_command_value($show_rows, 'label');
-        $display_name = ! empty($label) ? $label . ' (' . $fs . ')' : $fs;
+        $display_name = $btrfs_display_fs_name((string) $fs, $show_rows);
         $scrub_rows = $command_tables[$fs]['scrub_status'] ?? [];
-        $scrub_progress = null;
-        foreach ($scrub_rows as $scrub_row) {
-            if (($scrub_row['key'] ?? null) === 'bytes_scrubbed.progress' && is_numeric($scrub_row['value'] ?? null)) {
-                $scrub_progress = (float) $scrub_row['value'];
-                break;
-            }
-        }
-        if ($scrub_progress === null) {
-            $bytes_scrubbed = $get_command_value($scrub_rows, 'bytes_scrubbed.bytes');
-            $total_to_scrub = $get_command_value($scrub_rows, 'total_to_scrub');
-            if (is_numeric($bytes_scrubbed) && is_numeric($total_to_scrub) && (float) $total_to_scrub > 0) {
-                $scrub_progress = ((float) $bytes_scrubbed / (float) $total_to_scrub) * 100;
-            }
-        }
-        $scrub_progress_text = $scrub_progress === null
-            ? 'N/A'
-            : rtrim(rtrim(number_format($scrub_progress, 2, '.', ''), '0'), '.') . '%';
+        $scrub_progress_text = $btrfs_scrub_progress_text($scrub_rows);
 
-        $total_errors = 0.0;
-        foreach (($device_tables[$fs] ?? []) as $dev_stats) {
-            $total_errors += (float) ($dev_stats['corruption_errs'] ?? 0)
-                + (float) ($dev_stats['flush_io_errs'] ?? 0)
-                + (float) ($dev_stats['generation_errs'] ?? 0)
-                + (float) ($dev_stats['read_io_errs'] ?? 0)
-                + (float) ($dev_stats['write_io_errs'] ?? 0);
-        }
-        foreach (($scrub_tables[$fs] ?? []) as $scrub_stats) {
-            $total_errors += (float) ($scrub_stats['read_errors'] ?? 0)
-                + (float) ($scrub_stats['csum_errors'] ?? 0)
-                + (float) ($scrub_stats['verify_errors'] ?? 0)
-                + (float) ($scrub_stats['uncorrectable_errors'] ?? 0)
-                + (float) ($scrub_stats['unverified_errors'] ?? 0)
-                + (float) ($scrub_stats['missing'] ?? 0)
-                + (float) ($scrub_stats['device_missing'] ?? 0);
-        }
+        $total_errors = $btrfs_total_errors($device_tables[$fs] ?? [], $scrub_tables[$fs] ?? []);
 
-        $used_value = (float) ($fs_data['used'] ?? 0);
-        $size_value = (float) ($fs_data['device_size'] ?? 0);
-        $used_percent_text = $size_value > 0
-            ? rtrim(rtrim(number_format(($used_value / $size_value) * 100, 2, '.', ''), '0'), '.') . '%'
-            : 'N/A';
+        $used_percent_text = $btrfs_used_percent_text($fs_data['used'] ?? null, $fs_data['device_size'] ?? null);
 
         $fs_rrd_id = $fs_rrd_key[$fs] ?? $fs;
         $io_code = $state_code_from_sensor('btrfsIoStatusState', (string) $fs_rrd_id . '.io', $fs_data['io_status_code'] ?? null);
@@ -991,8 +911,7 @@ if ($is_overview && count($filesystems) > 0) {
     foreach ($filesystems as $fs) {
         $fs_data = $filesystem_tables[$fs] ?? [];
         $show_rows = $command_tables[$fs]['filesystem_show'] ?? [];
-        $label = $get_command_value($show_rows, 'label');
-        $display_name = ! empty($label) ? (string) $label . ' (' . (string) $fs . ')' : (string) $fs;
+        $display_name = $btrfs_display_fs_name((string) $fs, $show_rows);
 
         $used_value = (float) ($fs_data['used'] ?? 0);
         $size_value = (float) ($fs_data['device_size'] ?? 0);
