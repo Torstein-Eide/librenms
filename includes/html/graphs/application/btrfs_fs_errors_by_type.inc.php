@@ -61,8 +61,10 @@ foreach ($error_types as $ds => $descr) {
         }
 
         $def_id = 'd' . $type_index . '_' . $dev_index;
+        $safe_def_id = 'z' . $type_index . '_' . $dev_index;
         $rrd_options[] = 'DEF:' . $def_id . '=' . $rrd_filename . ':' . $ds . ':AVERAGE';
-        $def_ids[] = $def_id;
+        $rrd_options[] = 'CDEF:' . $safe_def_id . '=' . $def_id . ',UN,0,' . $def_id . ',IF';
+        $def_ids[] = $safe_def_id;
         $dev_index++;
     }
 

@@ -59,8 +59,10 @@ foreach ($device_map as $dev_id => $dev_path) {
     $def_ids = [];
     foreach ($error_ds as $ds_index => $ds) {
         $def_id = 'd' . $dev_index . '_' . $ds_index;
+        $safe_def_id = 'z' . $dev_index . '_' . $ds_index;
         $rrd_options[] = 'DEF:' . $def_id . '=' . $rrd_filename . ':' . $ds . ':AVERAGE';
-        $def_ids[] = $def_id;
+        $rrd_options[] = 'CDEF:' . $safe_def_id . '=' . $def_id . ',UN,0,' . $def_id . ',IF';
+        $def_ids[] = $safe_def_id;
     }
 
     $sum_expr = $build_sum_expr($def_ids);
