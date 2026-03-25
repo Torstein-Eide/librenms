@@ -9,16 +9,10 @@ $graph_params->base = 1024;
 $iter = '1';
 
 $safe_id = static function (string $value): string {
-    $base = preg_replace('/[^A-Za-z0-9._-]/', '_', $value);
-    $base = trim((string) $base, '_');
-    if ($base === '') {
-        $base = 'id';
-    }
+    $id = preg_replace('/[^A-Za-z0-9._-]/', '_', $value);
+    $id = trim((string) $id, '_');
 
-    $base = substr($base, 0, 32);
-    $hash = substr(hash('crc32b', $value), 0, 8);
-
-    return $base . '_' . $hash;
+    return $id === '' ? 'id' : $id;
 };
 
 $known_types = [

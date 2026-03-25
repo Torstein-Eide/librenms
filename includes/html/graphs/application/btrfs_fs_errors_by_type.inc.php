@@ -15,7 +15,6 @@ if (! is_string($fs) || $fs === '') {
 
 $fs_rrd_id = $app->data['fs_rrd_key'][$fs] ?? $fs;
 $device_map = $app->data['device_map'][$fs] ?? [];
-$dev_rrd_key = $app->data['dev_rrd_key'][$fs] ?? [];
 
 if (! is_array($device_map) || count($device_map) === 0) {
     return;
@@ -56,8 +55,7 @@ foreach ($error_types as $ds => $descr) {
     $dev_index = 0;
 
     foreach ($device_map as $dev_id => $unused_dev_path) {
-        $dev_rrd_id = $dev_rrd_key[$dev_id] ?? $dev_id;
-        $rrd_filename = \App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id, 'device_' . $dev_rrd_id]);
+        $rrd_filename = \App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id, 'device_' . $dev_id]);
         if (! \App\Facades\Rrd::checkRrdExists($rrd_filename)) {
             continue;
         }
