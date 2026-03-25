@@ -35,6 +35,7 @@ $filesystem_meta = $app->data['filesystem_meta'] ?? [];
 $device_map = $app->data['device_map'] ?? [];
 $filesystem_tables = $app->data['filesystem_tables'] ?? [];
 $device_tables = $app->data['device_tables'] ?? [];
+$device_metadata = $app->data['device_metadata'] ?? [];
 $scrub_status_fs = $app->data['scrub_status_fs'] ?? [];
 $scrub_status_devices = $app->data['scrub_status_devices'] ?? [];
 $balance_status_fs = $app->data['balance_status_fs'] ?? [];
@@ -56,19 +57,6 @@ foreach ($btrfs_state_sensors as $state_sensor) {
     $state_sensor_values[$state_sensor->sensor_type][$state_sensor->sensor_index] = (int) $state_sensor->sensor_current;
 }
 
-// Debug box: print full app->data payload currently stored in DB for this btrfs app.
-$debug_payload_json = json_encode($app->data ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-if ($debug_payload_json === false) {
-    $debug_payload_json = '{}';
-}
-
-echo '<div class="panel panel-default">';
-echo '<div class="panel-heading"><h3 class="panel-title">Debug: btrfs applications.data (db)</h3></div>';
-echo '<div class="panel-body">';
-echo '<pre style="max-height: 420px; overflow: auto; margin-bottom: 0;">' . htmlspecialchars($debug_payload_json) . '</pre>';
-echo '</div>';
-echo '</div>';
-
 // -----------------------------------------------------------------------------
 // Section 2: Formatting Helper Closures
 // These closures handle conversion of raw poller values into human-readable
@@ -87,6 +75,8 @@ $is_byte_metric = static fn (string $metric): bool => str_contains($metric, 'siz
     || str_contains($metric, 'unallocated')
     || str_starts_with($metric, 'profile_')
     || str_starts_with($metric, 'usage_')
+    || str_starts_with($metric, 'usage.')
+    || str_starts_with($metric, 'raid_profiles.')
     || str_contains($metric, 'bytes')
     || str_starts_with($metric, 'data_')
     || str_starts_with($metric, 'metadata_')
@@ -310,6 +300,12 @@ $device_metric_order = [
     'path',
     'devid',
     'missing',
+    'device.vendor',
+    'device.model',
+    'device.serial',
+    'backing.devnode',
+    'backing.model',
+    'backing.serial',
     'errors.write_io_errs',
     'errors.read_io_errs',
     'errors.flush_io_errs',
@@ -659,9 +655,41 @@ if (isset($selected_fs) && ! isset($selected_dev) && isset($filesystem_tables[$s
 // Per-Device Metrics Panel: shown when a device is selected alongside a filesystem.
 if (isset($selected_fs, $selected_dev) && isset($device_tables[$selected_fs][$selected_dev])) {
     $dev_metrics_flat = [];
-    foreach ($btrfs_flatten_assoc_rows($device_tables[$selected_fs][$selected_dev]) as $row) {
+    $selected_device_table = $device_tables[$selected_fs][$selected_dev];
+    foreach ($btrfs_flatten_assoc_rows(is_array($selected_device_table) ? $selected_device_table : []) as $row) {
         $dev_metrics_flat[(string) $row['key']] = $row['value'];
     }
+
+    $selected_device_metadata = $device_metadata[$selected_fs][$selected_dev] ?? [];
+    $append_metadata_metric = static function (array &$metrics, string $key, $value): void {
+        if (is_bool($value)) {
+            $metrics[$key] = $value ? 'true' : 'false';
+
+            return;
+        }
+
+        if (is_scalar($value)) {
+            $text = trim((string) $value);
+            if ($text !== '' && strtolower($text) !== 'null') {
+                $metrics[$key] = $value;
+            }
+        }
+    };
+
+    if (is_array($selected_device_metadata)) {
+        $primary = is_array($selected_device_metadata['primary'] ?? null) ? $selected_device_metadata['primary'] : [];
+        $primary_identity = is_array($primary['device'] ?? null) ? $primary['device'] : [];
+        $append_metadata_metric($dev_metrics_flat, 'device.vendor', $primary_identity['vendor'] ?? null);
+        $append_metadata_metric($dev_metrics_flat, 'device.model', $primary_identity['model'] ?? null);
+        $append_metadata_metric($dev_metrics_flat, 'device.serial', $primary_identity['serial'] ?? null);
+
+        $backing = is_array($selected_device_metadata['backing'] ?? null) ? $selected_device_metadata['backing'] : [];
+        $append_metadata_metric($dev_metrics_flat, 'backing.devnode', $backing['devnode'] ?? null);
+        $backing_identity = is_array($backing['device'] ?? null) ? $backing['device'] : [];
+        $append_metadata_metric($dev_metrics_flat, 'backing.model', $backing_identity['model'] ?? null);
+        $append_metadata_metric($dev_metrics_flat, 'backing.serial', $backing_identity['serial'] ?? null);
+    }
+
     $dev_metrics = $ordered_metric_pairs($dev_metrics_flat, $device_metric_order);
     $selected_dev_path = $device_tables[$selected_fs][$selected_dev]['path'] ?? null;
     $selected_fs_rrd_id = $fs_rrd_key[$selected_fs] ?? $selected_fs;
@@ -895,6 +923,7 @@ if (isset($selected_fs)) {
 // -----------------------------------------------------------------------------
 
 $graphs = [];
+$selected_diskio = null;
 if (! $is_overview) {
     if (isset($selected_dev)) {
         $all_graphs = [
@@ -904,6 +933,87 @@ if (! $is_overview) {
             'btrfs_dev_scrub_errors' => 'Scrub Errors (Total)',
             'btrfs_dev_scrub_errors_derive' => 'Scrub Errors (Rate)',
         ];
+
+        $selected_dev_path = isset($selected_fs)
+            ? trim((string) ($device_tables[$selected_fs][$selected_dev]['path'] ?? ''))
+            : '';
+        if ($selected_dev_path !== '') {
+            $diskio_candidates = [];
+            $preferred_diskio_candidates = [];
+
+            $diskio_candidates[] = $selected_dev_path;
+            $without_dev_prefix = preg_replace('#^/dev/#', '', $selected_dev_path);
+            if (is_string($without_dev_prefix) && $without_dev_prefix !== '') {
+                $diskio_candidates[] = $without_dev_prefix;
+            }
+
+            $path_basename = basename($selected_dev_path);
+            if ($path_basename !== '') {
+                $diskio_candidates[] = $path_basename;
+            }
+
+            $selected_dev_metadata = isset($selected_fs)
+                ? ($device_metadata[$selected_fs][$selected_dev] ?? [])
+                : [];
+            if (is_array($selected_dev_metadata)) {
+                $primary_meta = is_array($selected_dev_metadata['primary'] ?? null) ? $selected_dev_metadata['primary'] : [];
+                $backing_meta = is_array($selected_dev_metadata['backing'] ?? null) ? $selected_dev_metadata['backing'] : [];
+
+                $primary_devnode = trim((string) ($primary_meta['devnode'] ?? ''));
+                if ($primary_devnode !== '') {
+                    $diskio_candidates[] = $primary_devnode;
+                    $diskio_candidates[] = ltrim((string) preg_replace('#^/dev/#', '', $primary_devnode), '/');
+                    $diskio_candidates[] = basename($primary_devnode);
+                }
+
+                $primary_name = trim((string) ($primary_meta['name'] ?? ''));
+                if ($primary_name !== '') {
+                    $diskio_candidates[] = $primary_name;
+                    $diskio_candidates[] = '/dev/' . $primary_name;
+                }
+
+                $backing_name = trim((string) ($backing_meta['name'] ?? ''));
+                if ($backing_name !== '') {
+                    $preferred_diskio_candidates[] = $backing_name;
+                    $preferred_diskio_candidates[] = '/dev/' . $backing_name;
+                    $diskio_candidates[] = $backing_name;
+                    $diskio_candidates[] = '/dev/' . $backing_name;
+                }
+
+                $backing_devnode = trim((string) ($backing_meta['devnode'] ?? ''));
+                if ($backing_devnode !== '') {
+                    $preferred_diskio_candidates[] = $backing_devnode;
+                    $preferred_diskio_candidates[] = ltrim((string) preg_replace('#^/dev/#', '', $backing_devnode), '/');
+                    $preferred_diskio_candidates[] = basename($backing_devnode);
+                    $diskio_candidates[] = $backing_devnode;
+                    $diskio_candidates[] = ltrim((string) preg_replace('#^/dev/#', '', $backing_devnode), '/');
+                    $diskio_candidates[] = basename($backing_devnode);
+                }
+            }
+
+            $diskio_candidates = array_values(array_unique($diskio_candidates));
+            $preferred_diskio_candidates = array_values(array_unique(array_merge($preferred_diskio_candidates, $diskio_candidates)));
+            $diskio_rows = dbFetchRows('SELECT `diskio_id`, `diskio_descr` FROM `ucd_diskio` WHERE `device_id` = ?', [$device['device_id']]);
+            $diskio_by_descr = [];
+            foreach ($diskio_rows as $diskio_row) {
+                $diskio_descr = trim((string) ($diskio_row['diskio_descr'] ?? ''));
+                if ($diskio_descr !== '') {
+                    $diskio_by_descr[$diskio_descr] = $diskio_row;
+                }
+            }
+
+            foreach ($preferred_diskio_candidates as $candidate) {
+                if (isset($diskio_by_descr[$candidate])) {
+                    $selected_diskio = $diskio_by_descr[$candidate];
+
+                    break;
+                }
+            }
+
+            if (! is_array($selected_diskio) && count($diskio_rows) === 1) {
+                $selected_diskio = $diskio_rows[0];
+            }
+        }
     } else {
         $all_graphs = [
             'btrfs_fs_space' => 'Filesystem Space',
@@ -916,7 +1026,6 @@ if (! $is_overview) {
         ];
     }
 
-    // Filter to single graph if specified, otherwise show all
     $current_graph = $vars['graph'] ?? null;
     if ($current_graph !== null && $current_graph !== '' && isset($all_graphs[$current_graph])) {
         $graphs = [$current_graph => $all_graphs[$current_graph]];
@@ -926,7 +1035,6 @@ if (! $is_overview) {
 }
 
 foreach ($graphs as $key => $text) {
-    // Bottom graph panels for selected filesystem/device context.
     $graph_array = [];
     $graph_array['height'] = '100';
     $graph_array['width'] = '215';
@@ -941,14 +1049,60 @@ foreach ($graphs as $key => $text) {
         $graph_array['dev'] = $selected_dev;
     }
 
-    echo '<div class="panel panel-default">
-    <div class="panel-heading">
-        <h3 class="panel-title">' . $text . '</h3>
-    </div>
-    <div class="panel-body">
-    <div class="row">';
+    echo '<div class="panel panel-default">';
+    echo '<div class="panel-heading"><h3 class="panel-title">' . $text . '</h3></div>';
+    echo '<div class="panel-body"><div class="row">';
     include 'includes/html/print-graphrow.inc.php';
+    echo '</div></div>';
     echo '</div>';
-    echo '</div>';
-    echo '</div>';
+}
+
+if (isset($selected_dev) && is_array($selected_diskio) && isset($selected_diskio['diskio_id'])) {
+    $diskio_id = $selected_diskio['diskio_id'];
+    $diskio_descr = trim((string) ($selected_diskio['diskio_descr'] ?? ''));
+    $diskio_label = $diskio_descr !== '' ? $diskio_descr : (string) $diskio_id;
+    $diskio_types = [
+        'diskio_ops' => 'Disk I/O Ops/sec',
+        'diskio_bits' => 'Disk I/O bps',
+    ];
+
+    foreach ($diskio_types as $diskio_type => $diskio_title) {
+        $graph_array = [];
+        $graph_array['height'] = '100';
+        $graph_array['width'] = '215';
+        $graph_array['to'] = App\Facades\LibrenmsConfig::get('time.now');
+        $graph_array['id'] = $diskio_id;
+        $graph_array['type'] = $diskio_type;
+
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3 class="panel-title">' . htmlspecialchars($diskio_title . ': ' . $diskio_label) . '</h3></div>';
+        echo '<div class="panel-body"><div class="row">';
+        include 'includes/html/print-graphrow.inc.php';
+        echo '</div></div>';
+        echo '</div>';
+    }
+}
+
+if (isset($selected_fs) && ! isset($selected_dev)) {
+    $diskio_aggregate_types = [
+        'btrfs_fs_diskio_ops' => 'Disk I/O Aggregate Ops/sec',
+        'btrfs_fs_diskio_bits' => 'Disk I/O Aggregate bps',
+    ];
+
+    foreach ($diskio_aggregate_types as $graph_type => $graph_title) {
+        $graph_array = [];
+        $graph_array['height'] = '100';
+        $graph_array['width'] = '215';
+        $graph_array['to'] = App\Facades\LibrenmsConfig::get('time.now');
+        $graph_array['id'] = $app['app_id'];
+        $graph_array['fs'] = $selected_fs;
+        $graph_array['type'] = 'application_' . $graph_type;
+
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3 class="panel-title">' . htmlspecialchars($graph_title) . '</h3></div>';
+        echo '<div class="panel-body"><div class="row">';
+        include 'includes/html/print-graphrow.inc.php';
+        echo '</div></div>';
+        echo '</div>';
+    }
 }
