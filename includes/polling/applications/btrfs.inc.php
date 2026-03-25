@@ -592,6 +592,67 @@ $extract_usage_type_totals = static function (array $fs): array {
     return $totals;
 };
 
+$extract_sys_block_metadata = static function (array $fs) use ($normalize_device_path): array {
+    $entries = $fs['sys_block'] ?? [];
+    if (! is_array($entries)) {
+        return [];
+    }
+
+    $normalize_identity = static function ($identity): array {
+        $identity_data = is_array($identity) ? $identity : [];
+
+        return [
+            'model' => $identity_data['model'] ?? null,
+            'vendor' => $identity_data['vendor'] ?? null,
+            'serial' => $identity_data['serial'] ?? null,
+            'wwid' => $identity_data['wwid'] ?? null,
+        ];
+    };
+
+    $metadata_by_path = [];
+    foreach ($entries as $entry_path => $entry) {
+        if (! is_array($entry)) {
+            continue;
+        }
+
+        $primary_path = $normalize_device_path($entry['devnode'] ?? (is_string($entry_path) ? $entry_path : null));
+        if (! is_string($primary_path) || $primary_path === '') {
+            continue;
+        }
+
+        $metadata = [
+            'primary' => [
+                'devnode' => $entry['devnode'] ?? $primary_path,
+                'name' => $entry['name'] ?? null,
+                'present' => $entry['present'] ?? null,
+                'size_bytes' => $entry['size_bytes'] ?? null,
+                'device' => $normalize_identity($entry['device'] ?? null),
+            ],
+        ];
+
+        $bcache = $entry['bcache'] ?? null;
+        if (is_array($bcache)) {
+            $backing = $bcache['backing_device'] ?? null;
+            $metadata['backing'] = [
+                'devnode' => is_array($backing) ? ($backing['devnode'] ?? null) : null,
+                'name' => is_array($backing) ? ($backing['name'] ?? null) : ($bcache['backing_dev_name'] ?? null),
+                'present' => is_array($backing) ? ($backing['present'] ?? null) : null,
+                'size_bytes' => is_array($backing) ? ($backing['size_bytes'] ?? null) : null,
+                'device' => $normalize_identity(is_array($backing) ? ($backing['device'] ?? null) : null),
+            ];
+        }
+
+        $metadata_by_path[$primary_path] = $metadata;
+
+        $name_alias = isset($entry['name']) && is_scalar($entry['name']) ? trim((string) $entry['name']) : '';
+        if ($name_alias !== '') {
+            $metadata_by_path['/dev/' . $name_alias] = $metadata;
+        }
+    }
+
+    return $metadata_by_path;
+};
+
 $to_numeric_bytes = static function ($value): ?float {
     if (is_numeric($value)) {
         return (float) $value;
@@ -962,6 +1023,7 @@ $filesystem_meta = [];
 $filesystem_tables = [];
 $filesystem_data_types = [];
 $device_tables = [];
+$device_metadata = [];
 $scrub_status_fs = [];
 $scrub_status_devices = [];
 $balance_status_fs = [];
@@ -1149,17 +1211,17 @@ foreach ($filesystems as $fs_name => $fs) {
         }
     }
 
-    foreach ($scrub_status_devices[$fs_name] as $scrub_device_entry) {
+    foreach ($scrub_status_devices[$fs_name] as $scrub_device_key => $scrub_device_entry) {
         if (! is_array($scrub_device_entry)) {
             continue;
         }
 
-        $entry_id = $scrub_device_entry['id'] ?? null;
+        $entry_id = $scrub_device_entry['id'] ?? $scrub_device_key;
         $entry_id = is_scalar($entry_id) && (string) $entry_id !== '' ? (string) $entry_id : null;
 
         $entry_path = $normalize_device_path($scrub_device_entry['path'] ?? null);
         if ((int) ($scrub_device_entry['missing'] ?? 0) === 1 || (int) ($scrub_device_entry['device_missing'] ?? 0) === 1) {
-            $entry_path = $missing_device_key($entry_id);
+            $entry_path = is_string($entry_id) && $entry_id !== '' ? $missing_device_key($entry_id) : null;
         }
         if (! is_string($entry_path) || $entry_path === '') {
             $entry_path = is_string($entry_id) && $entry_id !== '' ? 'devid-' . $entry_id : null;
@@ -1227,6 +1289,8 @@ foreach ($filesystems as $fs_name => $fs) {
             $show_devices_by_path[$show_path] = $show_devid;
         }
     }
+
+    $sys_block_metadata = $extract_sys_block_metadata($fs);
 
     $fs_has_missing = $filesystem_has_missing_device($fs);
 
@@ -1461,6 +1525,7 @@ foreach ($filesystems as $fs_name => $fs) {
             ],
             'raid_profiles' => $usage_stats['type_values'] ?? [],
         ];
+        $device_metadata[$fs_name][$dev_id] = $sys_block_metadata[$dev_path] ?? [];
         $io_errs = $dev_stats['corruption_errs'] ?? 0;
         $io_errs += $dev_stats['flush_io_errs'] ?? 0;
         $io_errs += $dev_stats['generation_errs'] ?? 0;
@@ -1612,7 +1677,7 @@ foreach ($overall_fields as $field => $value) {
 // Persist only structures needed for UI rendering/navigation; avoid heavy debug payloads.
 // This payload is consumed by both device and global btrfs pages.
 $app->data = [
-    'schema_version' => 3,
+    'schema_version' => 4,
     'filesystems' => $fs_names,
     'filesystem_meta' => $filesystem_meta,
     'device_map' => $device_map,
@@ -1620,6 +1685,7 @@ $app->data = [
     'filesystem_data_types' => $filesystem_data_types,
     'fs_rrd_key' => $fs_rrd_key,
     'device_tables' => $device_tables,
+    'device_metadata' => $device_metadata,
     'scrub_status_fs' => $scrub_status_fs,
     'scrub_status_devices' => $scrub_status_devices,
     'scrub_is_running_fs' => $scrub_is_running_fs,
