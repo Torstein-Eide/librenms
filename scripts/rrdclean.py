@@ -9,8 +9,10 @@ IMPORTANT: Always make a backup before making changes!
 
 Features:
 - Remove spikes using stddev or variance methods (-S, -M, -P)
-- Interpolate gaps (NaN values) between valid values (--interpolate) [EXPERIMENTAL]
+- Interpolate gaps (NaN values) between valid values (--fill-gaps) [EXPERIMENTAL]
 - Replace zero values (--zero)
+- List available data sources (--list-ds)
+- Restrict operations to specific data sources (--ds)
 - Preview changes before applying (--dry-run)
 - Generate histograms with suggested parameters (--histogram)
 
@@ -19,7 +21,7 @@ Note: Operations must be explicitly requested. Running without options shows hel
 Usage:
     ./scripts/rrdclean.py --histogram file.rrd    # Analyze data
     ./scripts/rrdclean.py -S 3 file.rrd          # Remove spikes
-    ./scripts/rrdclean.py --interpolate file.rrd # Interpolate gaps
+    ./scripts/rrdclean.py --fill-gaps file.rrd # Interpolate gaps
     ./scripts/rrdclean.py --zero avg file.rrd    # Replace zeros
     cp file.rrd file.rrd.bak && ./scripts/rrdclean.py file.rrd [options]  # With backup
 """
@@ -81,6 +83,48 @@ def parse_xml_values(data: str) -> list[list[float]]:
             if values:
                 rows.append(values)
     return rows
+
+
+def extract_ds_names(data: str, num_ds: int) -> list[str]:
+    """Extract DS names from RRD XML content and align count to num_ds."""
+    ds_names = []
+    for line in data.split("\n"):
+        if "<name>" in line:
+            match = re.search(r"<name>([^<]+)</name>", line)
+            if match:
+                ds_names.append(match.group(1))
+
+    while len(ds_names) < num_ds:
+        ds_names.append(f"ds{len(ds_names)}")
+
+    return ds_names[:num_ds]
+
+
+def parse_ds_selection(ds_selector: str, ds_names: list[str], num_ds: int) -> set[int]:
+    """Parse comma-separated DS selection by index or exact name."""
+    selected = set()
+
+    for raw_item in ds_selector.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+
+        if item.isdigit():
+            index = int(item)
+            if index < 0 or index >= num_ds:
+                raise ValueError(f"DS index out of range: {index}")
+            selected.add(index)
+            continue
+
+        matches = [i for i, name in enumerate(ds_names[:num_ds]) if name == item]
+        if not matches:
+            raise ValueError(f"Unknown DS name: {item}")
+        selected.update(matches)
+
+    if not selected:
+        raise ValueError("No DS selected")
+
+    return selected
 
 
 def calculate_stddev(values: list[float]) -> float:
@@ -183,18 +227,7 @@ def get_data_stats(input_path: Path) -> tuple[list[list[float]], list[dict], lis
 
     num_ds = len(rows[0])
     all_samples = [[] for _ in range(num_ds)]
-    ds_names = []
-
-    # Extract DS names from XML (e.g., <name>ifInOctets</name>)
-    for line in data.split("\n"):
-        if "<name>" in line:
-            match = re.search(r"<name>([^<]+)</name>", line)
-            if match:
-                ds_names.append(match.group(1))
-
-    # Pad with generic names if not enough found
-    while len(ds_names) < num_ds:
-        ds_names.append(f"ds{len(ds_names)}")
+    ds_names = extract_ds_names(data, num_ds)
 
     # Collect all samples per DS
     for row in rows:
@@ -233,7 +266,9 @@ def get_data_stats(input_path: Path) -> tuple[list[list[float]], list[dict], lis
     return all_samples, rra_data, ds_names
 
 
-def replace_zeros(data: str, method: str) -> tuple[str, int]:
+def replace_zeros(
+    data: str, method: str, selected_ds: set[int] | None = None
+) -> tuple[str, int]:
     """
     Replace zero values based on the specified method.
 
@@ -282,15 +317,21 @@ def replace_zeros(data: str, method: str) -> tuple[str, int]:
         for match in re.finditer(r"<v>\s*([^\s<]+)\s*</v>", line):
             val_str = match.group(1)
             if val_str.lower() == "nan":
-                parsed_values.append(float("nan"))
+                parsed_values.append((val_str, float("nan")))
             else:
                 try:
-                    parsed_values.append(float(val_str))
+                    parsed_values.append((val_str, float(val_str)))
                 except ValueError:
-                    parsed_values.append(float("nan"))
+                    parsed_values.append((val_str, float("nan")))
 
         new_values = []
-        for ds, val in enumerate(parsed_values):
+        for ds, (orig, val) in enumerate(parsed_values):
+            if selected_ds is not None and ds not in selected_ds:
+                new_values.append(orig)
+                if not math.isnan(val):
+                    prev_values[ds] = val
+                continue
+
             if val == 0:
                 replaced_count += 1
                 if method == "nan":
@@ -303,8 +344,9 @@ def replace_zeros(data: str, method: str) -> tuple[str, int]:
                     else:
                         new_values.append("NaN")
             else:
-                new_values.append(str(val))
-                prev_values[ds] = val
+                new_values.append(orig)
+                if not math.isnan(val):
+                    prev_values[ds] = val
 
         # Rebuild line
         for val in new_values:
@@ -315,7 +357,9 @@ def replace_zeros(data: str, method: str) -> tuple[str, int]:
     return "\n".join(new_lines), replaced_count
 
 
-def interpolate_gaps(data: str, max_gap: int = 0) -> tuple[str, int]:
+def interpolate_gaps(
+    data: str, max_gap: int = 0, selected_ds: set[int] | None = None
+) -> tuple[str, int]:
     """
     Fill gaps (NaN values) between non-NaN values using linear interpolation.
 
@@ -350,6 +394,9 @@ def interpolate_gaps(data: str, max_gap: int = 0) -> tuple[str, int]:
     # Interpolate gaps for each DS
     total_interpolated = 0
     for ds in range(num_ds):
+        if selected_ds is not None and ds not in selected_ds:
+            continue
+
         values = matrix[ds]
 
         # Skip if entire DS is empty
@@ -425,6 +472,7 @@ def clean_spikes(
     stddev_val: float,
     percent: float,
     verbose: bool,
+    selected_ds: set[int] | None = None,
 ) -> tuple[int, int, int]:
     """
     Remove spikes from RRD data based on statistical thresholds.
@@ -510,6 +558,10 @@ def clean_spikes(
             new_values = []
             for ds, (orig, val) in enumerate(values):
                 if math.isnan(val) or ds >= len(rra_data):
+                    new_values.append(orig)
+                    continue
+
+                if selected_ds is not None and ds not in selected_ds:
                     new_values.append(orig)
                     continue
 
@@ -632,6 +684,17 @@ def main():
         action="store_true",
         help="Replace zero values (uses -A method)",
     )
+    parser.add_argument(
+        "--list-ds",
+        action="store_true",
+        help="List available data sources and exit",
+    )
+    parser.add_argument(
+        "--ds",
+        type=str,
+        default=None,
+        help="Comma-separated DS indexes or names to target (e.g. '0,ifInOctets')",
+    )
     args = parser.parse_args()
 
     verbose = args.verbose
@@ -654,11 +717,45 @@ def main():
         with dump_xml.open("wb") as f:
             run(["rrdtool", "dump", str(input_rrd)], stdout=f, verbose=verbose)
 
+        all_samples, rra_data, ds_names = get_data_stats(dump_xml)
+        num_ds = len(all_samples)
+
+        if args.list_ds:
+            if num_ds == 0:
+                print("No DS found in RRD data.")
+            else:
+                print("Available DS:")
+                for ds in range(num_ds):
+                    print(f"  [{ds}] {ds_names[ds]}")
+            return
+
+        selected_ds = None
+        if args.ds is not None:
+            try:
+                selected_ds = parse_ds_selection(args.ds, ds_names, num_ds)
+            except ValueError as e:
+                print(f"Invalid --ds value: {e}", file=sys.stderr)
+                if num_ds > 0:
+                    print("Available DS:", file=sys.stderr)
+                    for ds in range(num_ds):
+                        print(f"  [{ds}] {ds_names[ds]}", file=sys.stderr)
+                sys.exit(1)
+
+            selected_ds_list = ", ".join(
+                f"{idx}:{ds_names[idx]}" for idx in sorted(selected_ds)
+            )
+            print(f"Selected DS: {selected_ds_list}")
+
         # Histogram mode: analyze data and suggest parameters
         if args.histogram:
             print("\n=== Data Histogram ===")
-            all_samples, rra_data, ds_names = get_data_stats(dump_xml)
-            for ds, samples in enumerate(all_samples):
+            ds_to_show = (
+                sorted(selected_ds)
+                if selected_ds is not None
+                else range(len(all_samples))
+            )
+            for ds in ds_to_show:
+                samples = all_samples[ds]
                 avg = rra_data[ds]["average"]
                 std = rra_data[ds]["stddev"]
                 var_avg = rra_data[ds]["variance_avg"]
@@ -712,7 +809,7 @@ def main():
 
         if not run_spike_removal and not run_interpolate and not run_zero:
             print(
-                "No operations specified. Use --histogram, -S, --interpolate, or --zero"
+                "No operations specified. Use --histogram, -S, --fill-gaps, or --zero"
             )
             return
 
@@ -736,6 +833,7 @@ def main():
                 stddev_val,
                 percent_val,
                 verbose,
+                selected_ds,
             )
 
             print(
@@ -757,7 +855,9 @@ def main():
                 original_data = f.read()
 
             interpolated_data, gaps_filled = interpolate_gaps(
-                original_data, args.max_gap
+                original_data,
+                args.max_gap,
+                selected_ds,
             )
 
             if not args.dry_run:
@@ -776,7 +876,11 @@ def main():
                 print(f"Replacing zeros with {zero_method} in {clean_xml_file}")
             with open(clean_xml_file, "r") as f:
                 original_data = f.read()
-            modified_data, zeros_replaced = replace_zeros(original_data, zero_method)
+            modified_data, zeros_replaced = replace_zeros(
+                original_data,
+                zero_method,
+                selected_ds,
+            )
 
             if not args.dry_run:
                 with open(clean_xml_file, "w") as f:
