@@ -119,11 +119,12 @@ $btrfs_total_io_errors = static function (array $device_tables): float {
     // Aggregate IO error counters for filesystem summary views.
     $total_errors = 0.0;
     foreach ($device_tables as $dev_stats) {
-        $total_errors += (float) ($dev_stats['corruption_errs'] ?? 0)
-            + (float) ($dev_stats['flush_io_errs'] ?? 0)
-            + (float) ($dev_stats['generation_errs'] ?? 0)
-            + (float) ($dev_stats['read_io_errs'] ?? 0)
-            + (float) ($dev_stats['write_io_errs'] ?? 0);
+        $errors = is_array($dev_stats['errors'] ?? null) ? $dev_stats['errors'] : [];
+        $total_errors += (float) ($errors['corruption_errs'] ?? 0)
+            + (float) ($errors['flush_io_errs'] ?? 0)
+            + (float) ($errors['generation_errs'] ?? 0)
+            + (float) ($errors['read_io_errs'] ?? 0)
+            + (float) ($errors['write_io_errs'] ?? 0);
     }
 
     return $total_errors;
@@ -162,4 +163,27 @@ $btrfs_format_metric = static function ($value, string $metric, string $null_tex
     }
 
     return is_numeric($value) ? number_format((float) $value) : (string) $value;
+};
+
+$btrfs_flatten_assoc_rows = static function (array $data, string $prefix = '') use (&$btrfs_flatten_assoc_rows): array {
+    $rows = [];
+    foreach ($data as $key => $value) {
+        $segment = is_int($key) ? '[' . $key . ']' : (string) $key;
+        $path = $prefix === '' ? $segment : $prefix . '.' . $segment;
+
+        if (is_array($value)) {
+            $rows = array_merge($rows, $btrfs_flatten_assoc_rows($value, $path));
+            continue;
+        }
+
+        if (is_bool($value)) {
+            $rows[] = ['key' => $path, 'value' => $value ? 'true' : 'false'];
+        } elseif ($value === null) {
+            $rows[] = ['key' => $path, 'value' => 'null'];
+        } else {
+            $rows[] = ['key' => $path, 'value' => (string) $value];
+        }
+    }
+
+    return $rows;
 };

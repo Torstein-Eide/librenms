@@ -24,8 +24,10 @@ $render_scrub_overview_panel = static function (array $split, array $rows, strin
         foreach ($split['overview'] as $overview_row) {
             $key = $overview_row['key'];
             $value = $overview_row['value'];
+            $display_key = $key;
+            $display_value = $format_display_value($value, (string) $key);
 
-            if ($key === 'status' || $key === 'bytes_scrubbed.progress') {
+            if ($key === 'status' || $key === 'uuid' || $key === 'bytes_scrubbed.progress') {
                 continue;
             }
 
@@ -34,29 +36,18 @@ $render_scrub_overview_panel = static function (array $split, array $rows, strin
                 $formatted = $format_display_value($value, 'bytes');
                 if (is_numeric($progress)) {
                     $progress_text = rtrim(rtrim(number_format((float) $progress, 2, '.', ''), '0'), '.');
-                    $value = "$formatted (" . $progress_text . '%)';
+                    $display_value = "$formatted (" . $progress_text . '%)';
                 } else {
-                    $value = $formatted;
+                    $display_value = $formatted;
                 }
-                $key = 'bytes_scrubbed';
+                $display_key = 'total_bytes_done';
             } elseif ($key === 'total_to_scrub') {
-                $value = $format_display_value($value, 'bytes');
-            } elseif ($key === 'duration') {
-                if (! isset($overview_map['bytes_scrubbed.bytes'])) {
-                    $bytes_scrubbed = $overview_map['bytes_scrubbed'] ?? null;
-                    $total_to_scrub = $overview_map['total_to_scrub'] ?? null;
-                    $bytes_scrubbed_num = LibreNMS\Util\Number::toBytes((string) ($bytes_scrubbed ?? ''));
-                    $total_to_scrub_num = LibreNMS\Util\Number::toBytes((string) ($total_to_scrub ?? ''));
-                    if (! is_nan($bytes_scrubbed_num) && ! is_nan($total_to_scrub_num) && $total_to_scrub_num > 0) {
-                        $progress = ($bytes_scrubbed_num / $total_to_scrub_num) * 100;
-                        $value = rtrim(rtrim(number_format($progress, 2, '.', ''), '0'), '.') . '%';
-                    }
-                }
+                $display_value = $format_display_value($value, 'bytes');
             }
 
             echo '<tr>';
-            echo '<td>' . htmlspecialchars($format_display_name($key)) . '</td>';
-            echo '<td>' . htmlspecialchars($value) . '</td>';
+            echo '<td>' . htmlspecialchars($format_display_name($display_key)) . '</td>';
+            echo '<td>' . htmlspecialchars($display_value) . '</td>';
             echo '</tr>';
         }
         echo '</tbody>';
@@ -122,7 +113,11 @@ $render_scrub_per_device_fs_panel = static function (
                     $display_value = '';
                 }
                 if ($column === 'status') {
-                    echo '<td>' . $status_badge((string) $value) . '</td>';
+                    $status_value = strtolower(trim((string) $value));
+                    if ($status_value === '') {
+                        $status_value = 'na';
+                    }
+                    echo '<td>' . $status_badge($status_value) . '</td>';
                 } else {
                     echo '<td>' . htmlspecialchars($display_value) . '</td>';
                 }
@@ -181,7 +176,11 @@ $render_scrub_per_device_panel = static function (
             echo '<tr>';
             echo '<td>' . htmlspecialchars($format_display_name($column)) . '</td>';
             if ($column === 'status') {
-                echo '<td>' . $status_badge((string) $value) . '</td>';
+                $status_value = strtolower(trim((string) $value));
+                if ($status_value === '') {
+                    $status_value = 'na';
+                }
+                echo '<td>' . $status_badge($status_value) . '</td>';
             } else {
                 echo '<td>' . htmlspecialchars($display_value) . '</td>';
             }
@@ -211,7 +210,7 @@ $render_generic_panel = static function (
     array $path_to_dev_id,
     array $link_array,
     string $selected_fs
-) use ($format_display_name, $format_display_value): void {
+) use ($format_display_name, $format_display_value, $to_bool): void {
     echo '<div class="' . $panel_col_class . '">';
     echo '<div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">' . $panel_title;
@@ -283,10 +282,20 @@ $render_generic_panel = static function (
 
                 foreach ($devices as $device_name => $metrics) {
                     echo '<tr>';
+                    $is_missing_device = (bool) ($to_bool($metrics['missing'] ?? null) ?? false);
+                    $display_device_name = (string) $device_name;
+                    if ($is_missing_device && isset($path_to_dev_id[$device_name])) {
+                        $display_device_name = 'devid ' . $path_to_dev_id[$device_name];
+                    }
+                    $device_link_label = htmlspecialchars($display_device_name);
+                    if ($command_name === 'device_stats' && $is_missing_device) {
+                        $device_link_label .= ' <span class="label label-danger">Missing</span>';
+                    }
+
                     if (isset($path_to_dev_id[$device_name])) {
-                        echo '<td>' . generate_link(htmlspecialchars($device_name), $link_array, ['fs' => $selected_fs, 'dev' => $path_to_dev_id[$device_name]]) . '</td>';
+                        echo '<td>' . generate_link($device_link_label, $link_array, ['fs' => $selected_fs, 'dev' => $path_to_dev_id[$device_name]]) . '</td>';
                     } else {
-                        echo '<td>' . htmlspecialchars($device_name) . '</td>';
+                        echo '<td>' . $device_link_label . '</td>';
                     }
 
                     foreach ($split['device_columns'] as $column) {

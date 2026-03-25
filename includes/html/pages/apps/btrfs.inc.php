@@ -54,6 +54,8 @@ foreach ($apps as $app) {
     $filesystemTables = $app->data['filesystem_tables'] ?? [];
     $deviceMap = $app->data['device_map'] ?? [];
     $scrubStatusFs = $app->data['scrub_status_fs'] ?? [];
+    $scrubIsRunningFs = $app->data['scrub_is_running_fs'] ?? [];
+    $balanceIsRunningFs = $app->data['balance_is_running_fs'] ?? [];
 
     foreach ($filesystems as $fs) {
         // Build one summary row for this filesystem on this device.
@@ -63,8 +65,14 @@ foreach ($apps as $app) {
         $displayName = $fsLabel !== '' ? $fsLabel . ' (' . $fs . ')' : (string) $fs;
 
         $ioState = $btrfs_status_from_code($fsData['io_status_code'] ?? null);
-        $scrubState = $btrfs_status_from_code($fsData['scrub_status_code'] ?? null);
-        $balanceState = $btrfs_status_from_code($fsData['balance_status_code'] ?? null);
+        $scrubCode = is_bool($scrubIsRunningFs[$fs] ?? null)
+            ? (($scrubIsRunningFs[$fs] ?? false) ? 1 : 0)
+            : ($fsData['scrub_status_code'] ?? null);
+        $balanceCode = is_bool($balanceIsRunningFs[$fs] ?? null)
+            ? (($balanceIsRunningFs[$fs] ?? false) ? 1 : 0)
+            : ($fsData['balance_status_code'] ?? null);
+        $scrubState = $btrfs_status_from_code($scrubCode);
+        $balanceState = $btrfs_status_from_code($balanceCode);
 
         $scrubStatus = $scrubStatusFs[$fs] ?? [];
         $scrubProgressText = is_array($scrubStatus) && count($scrubStatus) > 0
@@ -125,6 +133,7 @@ $graphTypes = [
     'btrfs_fs_errors_by_type' => 'Aggregate Errors by Type',
     'btrfs_fs_errors_by_device' => 'Aggregate Errors by Device',
     'btrfs_fs_space' => 'Filesystem Space',
+    'btrfs_fs_scrub_bytes' => 'Scrub Rate',
     'btrfs_fs_data_types' => 'Per Data Type',
 ];
 
@@ -138,6 +147,8 @@ foreach ($apps as $app) {
     $filesystems = $app->data['filesystems'] ?? [];
     $filesystemMeta = $app->data['filesystem_meta'] ?? [];
     $filesystemTables = $app->data['filesystem_tables'] ?? [];
+    $scrubIsRunningFs = $app->data['scrub_is_running_fs'] ?? [];
+    $balanceIsRunningFs = $app->data['balance_is_running_fs'] ?? [];
     echo '<div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">' . Url::deviceLink($device) . '</h3></div>';
     echo '<div class="panel-body">';
@@ -160,8 +171,8 @@ foreach ($apps as $app) {
 
         $overallCode = $btrfs_combine_state_code([
             $fsData['io_status_code'] ?? 2,
-            $fsData['scrub_status_code'] ?? 2,
-            $fsData['balance_status_code'] ?? 2,
+            is_bool($scrubIsRunningFs[$fs] ?? null) ? (($scrubIsRunningFs[$fs] ?? false) ? 1 : 0) : ($fsData['scrub_status_code'] ?? 2),
+            is_bool($balanceIsRunningFs[$fs] ?? null) ? (($balanceIsRunningFs[$fs] ?? false) ? 1 : 0) : ($fsData['balance_status_code'] ?? 2),
         ]);
         $overallState = $btrfs_status_from_code($overallCode);
 
