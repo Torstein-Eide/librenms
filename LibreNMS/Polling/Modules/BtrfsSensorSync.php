@@ -258,22 +258,6 @@ class BtrfsSensorSync
         }
     }
 
-    public function cleanupLegacyStateSensors(array $device): void
-    {
-        foreach ($this->stateSensorTypes as $sensor_type) {
-            dbDelete(
-                'sensors_to_state_indexes',
-                '`sensor_id` IN (SELECT `sensor_id` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `group` = ?)',
-                [$device['device_id'], 'state', 'agent', $sensor_type, 'btrfs']
-            );
-            dbDelete(
-                'sensors',
-                '`device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `group` = ?',
-                [$device['device_id'], 'state', 'agent', $sensor_type, 'btrfs']
-            );
-        }
-    }
-
     public function cleanupObsoleteStateSensors(array $device, array $expected_sensor_indexes): void
     {
         $placeholders = implode(',', array_fill(0, count($this->stateSensorTypes), '?'));
