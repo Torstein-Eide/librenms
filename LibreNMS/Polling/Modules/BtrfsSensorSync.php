@@ -268,7 +268,7 @@ class BtrfsSensorSync
             );
             dbDelete(
                 'sensors',
-                '`device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `group` = ?)',
+                '`device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `group` = ?',
                 [$device['device_id'], 'state', 'agent', $sensor_type, 'btrfs']
             );
         }
