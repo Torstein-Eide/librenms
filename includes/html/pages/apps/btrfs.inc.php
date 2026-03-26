@@ -72,8 +72,6 @@ if (! in_array($filter_status, $allowed_status_filters, true)) {
     $filter_status = 'all';
 }
 
-$btrfs_print_sticky_first_css();
-
 echo '<div class="panel panel-default">';
 echo '<div class="panel-heading"><h3 class="panel-title">Filters</h3></div>';
 echo '<div class="panel-body">';

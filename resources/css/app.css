@@ -63,3 +63,16 @@
 #coordinates-text  {
   @apply tw:underline;
 }
+
+.btrfs-sticky-first th:first-child,
+.btrfs-sticky-first td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+}
+
+.btrfs-sticky-first thead th:first-child {
+  z-index: 3;
+  background: #f5f5f5;
+}

@@ -25,8 +25,6 @@ $selected_fs = $vars['fs'] ?? null;
 $selected_dev = $vars['dev'] ?? null;
 $is_overview = ! isset($selected_fs);
 
-$btrfs_print_sticky_first_css();
-
 // Poller-provided datasets used throughout this page.
 // Load all data from app->data that was populated by the poller.
 // Uses canonical structured keys (filesystem/device/scrub/balance maps).
@@ -457,23 +455,34 @@ print_optionbar_end();
 
 // Filesystem summary table
 if ($is_overview && count($filesystems) > 0) {
-    $overview_debug = [
-        'vars' => $vars,
-        'selected_fs' => $selected_fs,
-        'selected_dev' => $selected_dev,
-        'app_data' => $app->data ?? [],
-    ];
-    $overview_debug_json = json_encode($overview_debug, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-    if ($overview_debug_json === false) {
-        $overview_debug_json = '{}';
-    }
+    $debug_user = Auth::user();
+    $debug_is_admin = is_object($debug_user) && method_exists($debug_user, 'hasGlobalAdmin') && $debug_user->hasGlobalAdmin();
+    $debug_enabled = (bool) App\Facades\LibrenmsConfig::get('apps.btrfs.debug', false);
+    $show_debug_panel = $debug_enabled && $debug_is_admin;
 
-    echo '<div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Debug: btrfs overview (full)</h3></div>';
-    echo '<div class="panel-body">';
-    echo '<pre style="max-height: 260px; overflow: auto; margin-bottom: 0;">' . htmlspecialchars($overview_debug_json) . '</pre>';
-    echo '</div>';
-    echo '</div>';
+    if ($show_debug_panel) {
+        $overview_debug = [
+            'vars' => $vars,
+            'selected_fs' => $selected_fs,
+            'selected_dev' => $selected_dev,
+            'app_data' => $app->data ?? [],
+        ];
+        $overview_debug_json = json_encode($overview_debug, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($overview_debug_json === false) {
+            $overview_debug_json = '{}';
+        }
+
+        $debug_panel_id = 'btrfs-debug-overview-' . (int) ($app['app_id'] ?? 0);
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3 class="panel-title">Debug</h3></div>';
+        echo '<div class="panel-body">';
+        echo '<a class="btn btn-xs btn-default" role="button" data-toggle="collapse" href="#' . $debug_panel_id . '" aria-expanded="false" aria-controls="' . $debug_panel_id . '">Toggle Raw Payload</a>';
+        echo '<div id="' . $debug_panel_id . '" class="collapse" style="margin-top:8px;">';
+        echo '<pre style="max-height: 260px; overflow: auto; margin-bottom: 0;">' . htmlspecialchars($overview_debug_json) . '</pre>';
+        echo '</div>';
+        echo '</div>';
+        echo '</div>';
+    }
 
     // Top-level filesystem table (one row per filesystem on this device).
     echo '<div class="panel panel-default">';
