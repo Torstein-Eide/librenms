@@ -65,7 +65,8 @@ if ($width > '500') {
     $descr_len += round(($width - 250) / 8);
 }
 
-$fs_types = $app->data['filesystem_data_types'][$vars['fs']] ?? [];
+$fs_entry = $app->data['filesystems'][$vars['fs']] ?? null;
+$fs_types = is_array($fs_entry) ? ($fs_entry['profiles'] ?? []) : [];
 if (empty($fs_types)) {
     return;
 }
@@ -73,7 +74,7 @@ if (empty($fs_types)) {
 $colours = 'psychedelic';
 $rrd_list = [];
 $colour_index = 0;
-$fs_rrd_id = $app->data['fs_rrd_key'][$vars['fs']] ?? $vars['fs'];
+$fs_rrd_id = is_array($fs_entry) ? ($fs_entry['rrd_key'] ?? $vars['fs']) : $vars['fs'];
 foreach ($fs_types as $type_key => $type_value) {
     $type_id = $safe_id((string) $type_key);
     $rrd_filename = \App\Facades\Rrd::name($device['hostname'], ['app', 'btrfs', $app->app_id, $fs_rrd_id, 'type_' . $type_id]);

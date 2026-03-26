@@ -30,19 +30,59 @@ $btrfs_print_sticky_first_css();
 // Poller-provided datasets used throughout this page.
 // Load all data from app->data that was populated by the poller.
 // Uses canonical structured keys (filesystem/device/scrub/balance maps).
-$filesystems = $app->data['filesystems'] ?? [];
-$filesystem_meta = $app->data['filesystem_meta'] ?? [];
-$device_map = $app->data['device_map'] ?? [];
-$filesystem_tables = $app->data['filesystem_tables'] ?? [];
-$device_tables = $app->data['device_tables'] ?? [];
-$device_metadata = $app->data['device_metadata'] ?? [];
-$scrub_status_fs = $app->data['scrub_status_fs'] ?? [];
-$scrub_status_devices = $app->data['scrub_status_devices'] ?? [];
-$balance_status_fs = $app->data['balance_status_fs'] ?? [];
-$scrub_is_running_fs = $app->data['scrub_is_running_fs'] ?? [];
-$balance_is_running_fs = $app->data['balance_is_running_fs'] ?? [];
-$filesystem_uuid = $app->data['filesystem_uuid'] ?? [];
-$fs_rrd_key = $app->data['fs_rrd_key'] ?? [];
+$filesystem_entries = $app->data['filesystems'] ?? [];
+$has_structured_filesystems = is_array($filesystem_entries) && count($filesystem_entries) > 0 && is_array(reset($filesystem_entries));
+
+if ($has_structured_filesystems) {
+    $filesystem_meta = [];
+    $device_map = [];
+    $filesystem_tables = [];
+    $device_tables = [];
+    $device_metadata = [];
+    $scrub_status_fs = [];
+    $scrub_status_devices = [];
+    $balance_status_fs = [];
+    $scrub_is_running_fs = [];
+    $balance_is_running_fs = [];
+    $filesystem_uuid = [];
+    $fs_rrd_key = [];
+
+    foreach ($filesystem_entries as $fs_name => $entry) {
+        if (! is_array($entry)) {
+            continue;
+        }
+        $filesystem_meta[$fs_name] = is_array($entry['meta'] ?? null) ? $entry['meta'] : [];
+        $device_map[$fs_name] = is_array($entry['device_map'] ?? null) ? $entry['device_map'] : [];
+        $filesystem_tables[$fs_name] = is_array($entry['table'] ?? null) ? $entry['table'] : [];
+        $device_tables[$fs_name] = is_array($entry['device_tables'] ?? null) ? $entry['device_tables'] : [];
+        $device_metadata[$fs_name] = is_array($entry['device_metadata'] ?? null) ? $entry['device_metadata'] : [];
+        $scrub_block = is_array($entry['scrub'] ?? null) ? $entry['scrub'] : [];
+        $balance_block = is_array($entry['balance'] ?? null) ? $entry['balance'] : [];
+        $scrub_status_fs[$fs_name] = is_array($scrub_block['status'] ?? null) ? $scrub_block['status'] : [];
+        $scrub_status_devices[$fs_name] = is_array($scrub_block['devices'] ?? null) ? $scrub_block['devices'] : [];
+        $scrub_is_running_fs[$fs_name] = (bool) ($scrub_block['is_running'] ?? false);
+        $balance_status_fs[$fs_name] = is_array($balance_block['status'] ?? null) ? $balance_block['status'] : [];
+        $balance_is_running_fs[$fs_name] = (bool) ($balance_block['is_running'] ?? false);
+        $filesystem_uuid[$fs_name] = (string) ($entry['uuid'] ?? '');
+        $fs_rrd_key[$fs_name] = (string) ($entry['rrd_key'] ?? $fs_name);
+    }
+    $filesystems = array_keys($filesystem_entries);
+} else {
+    $filesystems = [];
+    $filesystem_meta = [];
+    $device_map = [];
+    $filesystem_tables = [];
+    $device_tables = [];
+    $device_metadata = [];
+    $scrub_status_fs = [];
+    $scrub_status_devices = [];
+    $balance_status_fs = [];
+    $scrub_is_running_fs = [];
+    $balance_is_running_fs = [];
+    $filesystem_uuid = [];
+    $fs_rrd_key = [];
+}
+
 sort($filesystems);
 
 if (! is_string($selected_fs) || ! in_array($selected_fs, $filesystems, true)) {

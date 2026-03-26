@@ -62,6 +62,7 @@ try {
 }
 
 $filesystems = $btrfs['filesystems'] ?? [];
+$tables_payload = is_array($btrfs['tables'] ?? null) ? $btrfs['tables'] : null;
 if ((! is_array($filesystems) || count($filesystems) === 0) && is_array($btrfs['tables'] ?? null)) {
     // Support normalized payload mode where source data is provided in
     // data.tables.* instead of data.filesystems.* command trees.
@@ -1227,10 +1228,33 @@ $balance_status_fs = [];
 $scrub_is_running_fs = [];
 $balance_is_running_fs = [];
 $filesystem_uuid = [];
+$filesystem_entries = [];
 $old_filesystem_uuid = $app->data['filesystem_uuid'] ?? [];
+if ((! is_array($old_filesystem_uuid) || count($old_filesystem_uuid) === 0) && is_array($app->data['filesystems'] ?? null)) {
+    foreach ($app->data['filesystems'] as $old_fs_name => $old_fs_entry) {
+        if (! is_array($old_fs_entry)) {
+            continue;
+        }
+        $old_uuid = trim((string) ($old_fs_entry['uuid'] ?? ''));
+        if ($old_uuid !== '') {
+            $old_filesystem_uuid[(string) $old_fs_name] = $old_uuid;
+        }
+    }
+}
 // Previous poll snapshot used to preserve per-device scrub counters when
 // current payload reports no_stats_available (common with partial RAID5/6 output).
 $old_scrub_status_devices = $app->data['scrub_status_devices'] ?? [];
+if ((! is_array($old_scrub_status_devices) || count($old_scrub_status_devices) === 0) && is_array($app->data['filesystems'] ?? null)) {
+    foreach ($app->data['filesystems'] as $old_fs_name => $old_fs_entry) {
+        if (! is_array($old_fs_entry)) {
+            continue;
+        }
+        $old_scrub = is_array($old_fs_entry['scrub']['devices'] ?? null) ? $old_fs_entry['scrub']['devices'] : [];
+        if (count($old_scrub) > 0) {
+            $old_scrub_status_devices[(string) $old_fs_name] = $old_scrub;
+        }
+    }
+}
 // Persisted scrub counter/session marker for per-filesystem reset detection.
 $old_scrub_counter_state = $app->data['scrub_counter_state'] ?? [];
 $fs_rrd_key = [];
@@ -1806,6 +1830,26 @@ foreach ($filesystems as $fs_name => $fs) {
         $expected_sensor_indexes['btrfsScrubStatusState'][(string) $fs_rrd_id . '.dev.' . $dev_id . '.scrub'] = true;
     }
 
+    $filesystem_entries[$fs_name] = [
+        'meta' => $filesystem_meta[$fs_name] ?? [],
+        'uuid' => $filesystem_uuid[$fs_name] ?? '',
+        'rrd_key' => $fs_rrd_key[$fs_name] ?? $fs_rrd_id,
+        'device_map' => $device_map[$fs_name] ?? [],
+        'table' => $filesystem_tables[$fs_name] ?? [],
+        'device_tables' => $device_tables[$fs_name] ?? [],
+        'device_metadata' => $device_metadata[$fs_name] ?? [],
+        'profiles' => $filesystem_data_types[$fs_name] ?? [],
+        'scrub' => [
+            'status' => $scrub_status_fs[$fs_name] ?? [],
+            'devices' => $scrub_status_devices[$fs_name] ?? [],
+            'is_running' => $scrub_is_running_fs[$fs_name] ?? false,
+        ],
+        'balance' => [
+            'status' => $balance_status_fs[$fs_name] ?? [],
+            'is_running' => $balance_is_running_fs[$fs_name] ?? false,
+        ],
+    ];
+
     $filesystem_tables[$fs_name]['io_errors'] = $fs_io_errors_sum;
     $upsert_count_sensor(
         $device,
@@ -1822,7 +1866,15 @@ $cleanup_obsolete_btrfs_state_sensors($device, $expected_sensor_indexes);
 $cleanup_obsolete_btrfs_count_sensors($device, $expected_count_sensor_indexes);
 
 // check for added or removed filesystems
-$old_filesystems = $app->data['filesystems'] ?? [];
+$old_filesystems = $app->data['filesystem_names'] ?? null;
+if (! is_array($old_filesystems)) {
+    if (is_array($app->data['filesystems'] ?? null)) {
+        $first_old = reset($app->data['filesystems']);
+        $old_filesystems = is_array($first_old) ? array_keys($app->data['filesystems']) : $app->data['filesystems'];
+    } else {
+        $old_filesystems = [];
+    }
+}
 $added_filesystems = array_diff($fs_names, $old_filesystems);
 $removed_filesystems = array_diff($old_filesystems, $fs_names);
 if (count($added_filesystems) > 0 || count($removed_filesystems) > 0) {
@@ -1848,22 +1900,13 @@ $app_status_text = match ($app_status_code) {
 // Persist only structures needed for UI rendering/navigation; avoid heavy debug payloads.
 // This payload is consumed by both device and global btrfs pages.
 $app->data = [
-    'schema_version' => 4,
-    'filesystems' => $fs_names,
-    'filesystem_meta' => $filesystem_meta,
-    'device_map' => $device_map,
-    'filesystem_tables' => $filesystem_tables,
-    'filesystem_data_types' => $filesystem_data_types,
-    'fs_rrd_key' => $fs_rrd_key,
-    'device_tables' => $device_tables,
-    'device_metadata' => $device_metadata,
-    'scrub_status_fs' => $scrub_status_fs,
-    'scrub_status_devices' => $scrub_status_devices,
-    'scrub_is_running_fs' => $scrub_is_running_fs,
+    'schema_version' => 5,
+    // Keep normalized agent payload tables 1:1 in DB for debugging and
+    // future consumers that want direct access without poller reshaping.
+    'tables' => $tables_payload,
+    // New canonical DB structure: per-filesystem objects under filesystems.
+    'filesystems' => $filesystem_entries,
     'scrub_counter_state' => $scrub_counter_state,
-    'balance_status_fs' => $balance_status_fs,
-    'balance_is_running_fs' => $balance_is_running_fs,
-    'filesystem_uuid' => $filesystem_uuid,
     'device_error_seen' => $device_error_seen,
     'btrfs_progs_version' => $btrfs['btrfs_version']['version'] ?? null,
     'btrfs_progs_features' => $btrfs['btrfs_version']['features'] ?? null,

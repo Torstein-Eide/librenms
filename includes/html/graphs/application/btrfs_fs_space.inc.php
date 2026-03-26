@@ -7,7 +7,8 @@ $printtotal = 0;
 $nototal = 1;
 $graph_params->scale_min = 0;
 
-$fs_rrd_id = $app->data['fs_rrd_key'][$vars['fs']] ?? $vars['fs'];
+$fs_entry = $app->data['filesystems'][$vars['fs']] ?? null;
+$fs_rrd_id = is_array($fs_entry) ? ($fs_entry['rrd_key'] ?? $vars['fs']) : $vars['fs'];
 $rrd_filename = \App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id]);
 
 $rrd_list = [
