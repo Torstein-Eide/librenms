@@ -13,7 +13,10 @@ if (! is_string($fs) || $fs === '') {
     return;
 }
 
-$fs_rrd_id = $app->data['fs_rrd_key'][$fs] ?? $fs;
+$fs_rrd_id = $app->data['fs_rrd_key'][$fs] ?? strtolower(trim((string) preg_replace('/[^A-Za-z0-9]+/', '_', $fs), '_'));
+if (! is_string($fs_rrd_id) || $fs_rrd_id === '') {
+    $fs_rrd_id = 'root';
+}
 $device_map = $app->data['device_map'][$fs] ?? [];
 
 if (! is_array($device_map) || count($device_map) === 0) {
@@ -61,7 +64,7 @@ foreach ($device_map as $dev_id => $dev_path) {
         $def_id = 'd' . $dev_index . '_' . $ds_index;
         $safe_def_id = 'z' . $dev_index . '_' . $ds_index;
         $rrd_options[] = 'DEF:' . $def_id . '=' . $rrd_filename . ':' . $ds . ':AVERAGE';
-        $rrd_options[] = 'CDEF:' . $safe_def_id . '=' . $def_id . ',UN,0,' . $def_id . ',IF';
+        $rrd_options[] = 'CDEF:' . $safe_def_id . '=' . $def_id . ',UN,PREV,' . $def_id . ',IF';
         $def_ids[] = $safe_def_id;
     }
 
@@ -73,18 +76,14 @@ foreach ($device_map as $dev_id => $dev_path) {
 
     $sum_id = 's' . $dev_index;
     $rrd_options[] = 'CDEF:' . $sum_id . '=' . $sum_expr;
-    $rrd_options[] = 'VDEF:' . $sum_id . '_last=' . $sum_id . ',LAST';
-    $rrd_options[] = 'VDEF:' . $sum_id . '_min=' . $sum_id . ',MINIMUM';
-    $rrd_options[] = 'VDEF:' . $sum_id . '_max=' . $sum_id . ',MAXIMUM';
-    $rrd_options[] = 'VDEF:' . $sum_id . '_avg=' . $sum_id . ',AVERAGE';
 
     $colour = App\Facades\LibrenmsConfig::get("graph_colours.$colours.$dev_index") ?? '888888';
     $safe_descr = LibreNMS\Data\Store\Rrd::fixedSafeDescr((string) $dev_path, 24);
     $rrd_options[] = 'LINE1.25:' . $sum_id . '#' . $colour . ':' . $safe_descr;
-    $rrd_options[] = 'GPRINT:' . $sum_id . '_last:%8.2lf%s';
-    $rrd_options[] = 'GPRINT:' . $sum_id . '_min:%9.2lf%s';
-    $rrd_options[] = 'GPRINT:' . $sum_id . '_max:%9.2lf%s';
-    $rrd_options[] = 'GPRINT:' . $sum_id . '_avg:%9.2lf%s\\l';
+    $rrd_options[] = 'GPRINT:' . $sum_id . ':LAST:%8.2lf%s';
+    $rrd_options[] = 'GPRINT:' . $sum_id . ':MIN:%9.2lf%s';
+    $rrd_options[] = 'GPRINT:' . $sum_id . ':MAX:%9.2lf%s';
+    $rrd_options[] = 'GPRINT:' . $sum_id . ':AVERAGE:%9.2lf%s\\l';
 
     $dev_index++;
 }
