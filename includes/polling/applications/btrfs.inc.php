@@ -103,34 +103,6 @@ $balance_state_index_id = $state_indexes[BtrfsSensorSync::STATE_SENSOR_BALANCE] 
 $metrics = [];
 $filesystem_entries = [];
 
-// Preserve last-seen UUIDs when payload omits them (not needed in flat tables, but kept for compatibility)
-$old_filesystem_uuid = [];
-if (is_array($app->data['filesystems'] ?? null)) {
-    foreach ($app->data['filesystems'] as $old_fs_name => $old_fs_entry) {
-        if (! is_array($old_fs_entry)) {
-            continue;
-        }
-        $old_uuid = trim((string) ($old_fs_entry['uuid'] ?? ''));
-        if ($old_uuid !== '') {
-            $old_filesystem_uuid[(string) $old_fs_name] = $old_uuid;
-        }
-    }
-}
-
-// Preserve scrub counters for partial RAID5/6 output scenarios
-$old_scrub_status_devices = [];
-if (is_array($app->data['filesystems'] ?? null)) {
-    foreach ($app->data['filesystems'] as $old_fs_name => $old_fs_entry) {
-        if (! is_array($old_fs_entry)) {
-            continue;
-        }
-        $old_scrub = is_array($old_fs_entry['scrub']['devices'] ?? null) ? $old_fs_entry['scrub']['devices'] : [];
-        if (count($old_scrub) > 0) {
-            $old_scrub_status_devices[(string) $old_fs_name] = $old_scrub;
-        }
-    }
-}
-
 // Persisted scrub counter/session marker for reset detection
 $old_scrub_counter_state = $app->data['scrub_counter_state'] ?? [];
 $device_error_seen = $app->data['device_error_seen'] ?? [];

@@ -28,64 +28,6 @@ class BtrfsStatusMapper
     public const STATUS_MISSING = 4;
     public const STATUS_UNKNOWN = -1;
 
-    private array $runningFlagKeys = ['running', 'is_running', 'in_progress'];
-    private array $runningStatusTokens = ['running', 'in-progress', 'in_progress'];
-    private array $finishedStatusTokens = ['finished', 'done', 'idle', 'stopped', 'completed'];
-    private array $errorStatusTokens = ['error', 'failed', 'failure'];
-
-    public function getBalanceStatusCode(array $fs): int
-    {
-        $command = $fs['commands']['balance_status'] ?? null;
-        if (! is_array($command)) {
-            return self::STATUS_NA;
-        }
-
-        if (is_numeric($command['rc'] ?? null) && (int) $command['rc'] === 0) {
-            return self::STATUS_NA;
-        }
-
-        $data = $command['data'] ?? [];
-        if (! is_array($data)) {
-            return self::STATUS_NA;
-        }
-
-        $running_flag = null;
-        foreach ($this->runningFlagKeys as $running_key) {
-            if (! array_key_exists($running_key, $data)) {
-                continue;
-            }
-
-            $running_value = $data[$running_key];
-            if (is_bool($running_value)) {
-                $running_flag = $running_value;
-                break;
-            }
-            if (is_numeric($running_value)) {
-                $running_flag = ((int) $running_value) !== 0;
-                break;
-            }
-        }
-        if ($running_flag === true) {
-            return self::STATUS_RUNNING;
-        }
-
-        $status = strtolower(trim((string) ($data['status'] ?? '')));
-        if (in_array($status, $this->runningStatusTokens, true)) {
-            return self::STATUS_RUNNING;
-        }
-        if (in_array($status, $this->errorStatusTokens, true)) {
-            return self::STATUS_ERROR;
-        }
-
-        if ($status !== '') {
-            return self::STATUS_OK;
-        }
-
-        $profiles = $data['profiles'] ?? [];
-
-        return is_array($profiles) && count($profiles) > 0 ? self::STATUS_OK : self::STATUS_NA;
-    }
-
     public function getIoStatusCode(bool $has_device_data, bool $has_error, bool $has_missing): int
     {
         if ($has_missing) {
