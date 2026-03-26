@@ -1,0 +1,531 @@
+{
+  "context": {
+    "collector": {
+      "btrfs_progs_version": "6.14",
+      "btrfs_dev_version": 1,
+      "app_version": 1
+    },
+  },
+  "tables": {
+    "filesystems": {
+      "84294f69-c628-4b11-9ea4-b0ec671542c1": {
+        "mountpoint": "/",
+        "label": "root",
+        "rrd_key": "id",
+        "total_devices": 1,
+        "bytes_used": 37303533568
+      },
+      "b1346130-c3c5-49d0-bd68-978ed7e4759a": {
+        "mountpoint": "/volum1",
+        "label": "volum1",
+        "rrd_key": "volum1",
+        "total_devices": 5,
+        "bytes_used": 28058290290688
+      },
+      "0e2e0b09-1bd2-44f2-b7b6-eaf256c7a864": {
+        "mountpoint": "/volum2",
+        "label": "volume2SSD",
+        "rrd_key": "volum2",
+        "total_devices": 2,
+        "bytes_used": 156078276608
+      },
+      "e9c6045f-e592-45bd-929e-8525ddcf1995": {
+        "mountpoint": "/mnt/btrfs-raid1-lab",
+        "label": "",
+        "rrd_key": "mnt_btrfs-raid1-lab",
+        "total_devices": 2,
+        "bytes_used": 1545240576
+      }
+    },
+    "filesystem_capacity": {
+      "84294f69-c628-4b11-9ea4-b0ec671542c1": {
+        "device_size": 268435456000,
+        "device_allocated": 40835743744,
+        "device_unallocated": 227599712256,
+        "used": 37303533568,
+        "free_estimated": 229742804992,
+        "free_estimated_min": 229742804992,
+        "free_statfs_df": 229741756416,
+        "global_reserve": 251166720,
+        "global_reserve_used": 0,
+        "device_missing": 0,
+        "device_slack": 0,
+        "data_ratio": 1,
+        "metadata_ratio": 1,
+        "usage_data": 36507222016,
+        "usage_metadata": 4294967296,
+        "usage_system": 33554432,
+        "scrub_bytes_scrubbed": null,
+        "io_status_code": 0,
+        "scrub_status_code": 0,
+        "balance_status_code": 2,
+        "io_errors": 0
+      },
+      "b1346130-c3c5-49d0-bd68-978ed7e4759a": {
+        "device_size": 76003741253632,
+        "device_allocated": 47441336336384,
+        "device_unallocated": 28562404917248,
+        "used": 46816562533714,
+        "free_estimated": 17504150555854,
+        "free_estimated_min": 9887509244588,
+        "free_statfs_df": 15904734945280,
+        "global_reserve": 536870912,
+        "global_reserve_used": 0,
+        "device_missing": 0,
+        "device_slack": 0,
+        "data_ratio": 1.67,
+        "metadata_ratio": 3,
+        "usage_data": 47309064765440,
+        "usage_metadata": 132070244352,
+        "usage_system": 201326592,
+        "scrub_bytes_scrubbed": 3551422557716,
+        "io_status_code": 3,
+        "scrub_status_code": 1,
+        "balance_status_code": 2,
+        "io_errors": 7493
+      },
+      "0e2e0b09-1bd2-44f2-b7b6-eaf256c7a864": {
+        "device_size": 1099511627776,
+        "device_allocated": 324337139712,
+        "device_unallocated": 775174488064,
+        "used": 312156553216,
+        "free_estimated": 392631009280,
+        "free_estimated_min": 392631009280,
+        "free_statfs_df": 392629960704,
+        "global_reserve": 536870912,
+        "global_reserve_used": 0,
+        "device_missing": 0,
+        "device_slack": 0,
+        "data_ratio": 2,
+        "metadata_ratio": 2,
+        "usage_data": 317827579904,
+        "usage_metadata": 6442450944,
+        "usage_system": 67108864,
+        "scrub_bytes_scrubbed": null,
+        "io_status_code": 0,
+        "scrub_status_code": 0,
+        "balance_status_code": 2,
+        "io_errors": 0
+      },
+      "e9c6045f-e592-45bd-929e-8525ddcf1995": {
+        "device_size": 4294967296,
+        "device_allocated": 4250927104,
+        "device_unallocated": 44040192,
+        "used": 3090481152,
+        "free_estimated": 327155712,
+        "free_estimated_min": 327155712,
+        "free_statfs_df": 326107136,
+        "global_reserve": 5767168,
+        "global_reserve_used": 0,
+        "device_missing": 0,
+        "device_slack": 0,
+        "data_ratio": 2,
+        "metadata_ratio": 2,
+        "usage_data": 3697278976,
+        "usage_metadata": 536870912,
+        "usage_system": 16777216,
+        "scrub_bytes_scrubbed": null,
+        "io_status_code": 0,
+        "scrub_status_code": 0,
+        "balance_status_code": 2,
+        "io_errors": 0
+      }
+    },
+    "filesystem_profiles": {
+      "84294f69-c628-4b11-9ea4-b0ec671542c1": [
+        {
+          "profile": "data_raid0_1",
+          "bytes": 36507222016
+        },
+        {
+          "profile": "metadata_raid0_1",
+          "bytes": 4294967296
+        },
+        {
+          "profile": "system_raid0_1",
+          "bytes": 33554432
+        }
+      ],
+      "b1346130-c3c5-49d0-bd68-978ed7e4759a": [
+        {
+          "profile": "data_raid6_5",
+          "bytes": 47309064765440
+        },
+        {
+          "profile": "metadata_raid1c3",
+          "bytes": 132070244352
+        },
+        {
+          "profile": "system_raid1c3",
+          "bytes": 201326592
+        }
+      ],
+      "0e2e0b09-1bd2-44f2-b7b6-eaf256c7a864": [
+        {
+          "profile": "data_raid1",
+          "bytes": 317827579904
+        },
+        {
+          "profile": "metadata_raid1",
+          "bytes": 6442450944
+        },
+        {
+          "profile": "system_raid1",
+          "bytes": 67108864
+        }
+      ],
+      "e9c6045f-e592-45bd-929e-8525ddcf1995": [
+        {
+          "profile": "data_raid1",
+          "bytes": 3697278976
+        },
+        {
+          "profile": "metadata_raid1",
+          "bytes": 536870912
+        },
+        {
+          "profile": "system_raid1",
+          "bytes": 16777216
+        }
+      ]
+    },
+    "devices": {
+      "/dev/sdb3": {
+        "device_name": "sdb3",
+        "vendor": "ATA",
+        "model": "SAMSUNG MZ7LH960",
+        "serial": null,
+        "wwid": "naa.5002538e72b19569"
+      },
+      "/dev/sdc": {
+        "device_name": "sdc",
+        "vendor": "ATA",
+        "model": "ST16000NM000J-2T",
+        "serial": null,
+        "wwid": "naa.5000c500e32d507e"
+      },
+      "/dev/sdf": {
+        "device_name": "sdf",
+        "vendor": "ATA",
+        "model": "ST16000NM000J-2T",
+        "serial": null,
+        "wwid": "naa.5000c500e3a37cde"
+      },
+      "/dev/bcache1": {
+        "device_name": "bcache1",
+        "vendor": null,
+        "model": null,
+        "serial": null,
+        "wwid": null
+      },
+      "/dev/bcache0": {
+        "device_name": "bcache0",
+        "vendor": null,
+        "model": null,
+        "serial": null,
+        "wwid": null
+      },
+      "/dev/sde": {
+        "device_name": "sde",
+        "vendor": "ATA",
+        "model": "ST16000NM000J-2T",
+        "serial": null,
+        "wwid": "naa.5000c500e47a9fda"
+      },
+      "/dev/sdb4": {
+        "device_name": "sdb4",
+        "vendor": "ATA",
+        "model": "SAMSUNG MZ7LH960",
+        "serial": null,
+        "wwid": "naa.5002538e72b19569"
+      },
+      "/dev/sda4": {
+        "device_name": "sda4",
+        "vendor": "ATA",
+        "model": "SAMSUNG MZ7LH960",
+        "serial": null,
+        "wwid": "naa.5002538e72b190e2"
+      },
+      "/dev/loop1": {
+        "device_name": "loop1",
+        "vendor": null,
+        "model": null,
+        "serial": null,
+        "wwid": null
+      },
+      "/dev/loop2": {
+        "device_name": "loop2",
+        "vendor": null,
+        "model": null,
+        "serial": null,
+        "wwid": null
+      },
+      "/dev/sdg": {
+        "device_name": "sdg",
+        "vendor": "ATA",
+        "model": "WDC WD140EFGX-68",
+        "serial": null,
+        "wwid": "naa.5000cca28ef64b40"
+      },
+      "/dev/sdd": {
+        "device_name": "sdd",
+        "vendor": "ATA",
+        "model": "WDC WD140EFGX-68",
+        "serial": null,
+        "wwid": "naa.5000cca2a4c5b3cb"
+      }
+    },
+    "backing_devices": {
+      "/dev/bcache1": {
+        "fs_uuid": "b1346130-c3c5-49d0-bd68-978ed7e4759a",
+        "devid": "5",
+        "backing_device_path": "/dev/sdg",
+        "backing_device_name": "sdg",
+        "present": true,
+        "size_bytes": 14000519643136,
+        "model": "WDC WD140EFGX-68"
+      },
+      "/dev/bcache0": {
+        "fs_uuid": "b1346130-c3c5-49d0-bd68-978ed7e4759a",
+        "devid": "6",
+        "backing_device_path": "/dev/sdd",
+        "backing_device_name": "sdd",
+        "present": true,
+        "model": "WDC WD140EFGX-68"
+      }
+    },
+    "filesystem_devices": {
+      "84294f69-c628-4b11-9ea4-b0ec671542c1": {
+        "1": {
+          "device_path": "/dev/sdb3",
+        "missing": false,
+        "size": 268435456000,
+        "unallocated": 227599712256,
+        "data": 36507222016,
+        "metadata": 4294967296,
+        "system": 33554432,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 0,
+        "generation_errs": 0
+        }
+      },
+      "b1346130-c3c5-49d0-bd68-978ed7e4759a": {
+        "2": {
+          "device_path": "/dev/sdc",
+        "missing": false,
+        "size": 16000900661248,
+        "unallocated": 6494997184512,
+        "data": 9461812953088,
+        "metadata": 44023414784,
+        "system": 67108864,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 0,
+        "generation_errs": 0
+        },
+        "3": {
+          "device_path": "/dev/sdf",
+        "missing": false,
+        "size": 16000900661248,
+        "unallocated": 6494997184512,
+        "data": 9461812953088,
+        "metadata": 44023414784,
+        "system": 67108864,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 0,
+        "generation_errs": 0
+        },
+        "5": {
+          "device_path": "/dev/bcache1",
+          "backing_device_path": "/dev/sdg",
+        "missing": false,
+        "size": 14000519634944,
+        "unallocated": 4521526812672,
+        "data": 9461812953088,
+        "metadata": 17179869184,
+        "system": 0,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 2672,
+        "generation_errs": 2836
+        },
+        "6": {
+          "device_path": "/dev/bcache0",
+          "backing_device_path": "/dev/sdd",
+        "missing": false,
+        "size": 14000519634944,
+        "unallocated": 4521526812672,
+        "data": 9461812953088,
+        "metadata": 17179869184,
+        "system": 0,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 1985,
+        "generation_errs": 0
+        },
+        "7": {
+          "device_path": "/dev/sde",
+        "missing": false,
+        "size": 16000900661248,
+        "unallocated": 6529356922880,
+        "data": 9461812953088,
+        "metadata": 9663676416,
+        "system": 67108864,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 0,
+        "generation_errs": 0
+        }
+      },
+      "0e2e0b09-1bd2-44f2-b7b6-eaf256c7a864": {
+        "1": {
+          "device_path": "/dev/sdb4",
+        "missing": false,
+        "size": 549755813888,
+        "unallocated": 387587244032,
+        "data": 158913789952,
+        "metadata": 3221225472,
+        "system": 33554432,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 0,
+        "generation_errs": 0
+        },
+        "2": {
+          "device_path": "/dev/sda4",
+        "missing": false,
+        "size": 549755813888,
+        "unallocated": 387587244032,
+        "data": 158913789952,
+        "metadata": 3221225472,
+        "system": 33554432,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 0,
+        "generation_errs": 0
+        }
+      },
+      "e9c6045f-e592-45bd-929e-8525ddcf1995": {
+        "1": {
+          "device_path": "/dev/loop1",
+        "missing": false,
+        "size": 2147483648,
+        "unallocated": 22020096,
+        "data": 1848639488,
+        "metadata": 268435456,
+        "system": 8388608,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 0,
+        "generation_errs": 0
+        },
+        "2": {
+          "device_path": "/dev/loop2",
+        "missing": false,
+        "size": 2147483648,
+        "unallocated": 22020096,
+        "data": 1848639488,
+        "metadata": 268435456,
+        "system": 8388608,
+        "write_io_errs": 0,
+        "read_io_errs": 0,
+        "flush_io_errs": 0,
+        "corruption_errs": 0,
+        "generation_errs": 0
+        }
+      }
+    },
+    "scrub_status_filesystems": {
+      "84294f69-c628-4b11-9ea4-b0ec671542c1": {
+        "status": "finished",
+        "scrub_started": "Mon Mar 23 11:25:02 2026",
+        "duration": "0:01:07",
+        "total_to_scrub": 37301790965,
+        "bytes_scrubbed": null,
+        "progress_percent": null,
+        "rate": "529.15MiB/s",
+        "error_summary": "no errors found",
+        "is_running": false
+      },
+      "b1346130-c3c5-49d0-bd68-978ed7e4759a": {
+        "status": "running",
+        "scrub_started": "Thu Mar 26 03:32:38 2026",
+        "duration": "13:32:23",
+        "time_left": "93:41:39",
+        "eta": "Mon Mar 30 15:46:40 2026",
+        "total_to_scrub": 28136502554787,
+        "bytes_scrubbed": 3551422557716,
+        "progress_percent": 12.63,
+        "rate": "69.51MiB/s",
+        "error_summary": "no errors found",
+        "is_running": true
+      },
+      "0e2e0b09-1bd2-44f2-b7b6-eaf256c7a864": {
+        "status": "finished",
+        "scrub_started": "Mon Mar 23 11:26:09 2026",
+        "duration": "0:06:06",
+        "total_to_scrub": 312158223073,
+        "bytes_scrubbed": null,
+        "progress_percent": null,
+        "rate": "870.81MiB/s",
+        "error_summary": "no errors found",
+        "is_running": false
+      },
+      "e9c6045f-e592-45bd-929e-8525ddcf1995": {
+        "status": "finished",
+        "scrub_started": null,
+        "duration": null,
+        "total_to_scrub": 3092376453,
+        "bytes_scrubbed": null,
+        "progress_percent": null,
+        "rate": "0.00B/s",
+        "error_summary": "no errors found",
+        "is_running": false
+      }
+    },
+    "balance_status_filesystems": {
+      "84294f69-c628-4b11-9ea4-b0ec671542c1": {
+        "is_running": false,
+        "message": "No balance found on '/'"
+      },
+      "b1346130-c3c5-49d0-bd68-978ed7e4759a": {
+        "is_running": false,
+        "message": "No balance found on '/volum1'"
+      },
+      "0e2e0b09-1bd2-44f2-b7b6-eaf256c7a864": {
+        "is_running": false,
+        "message": "No balance found on '/volum2'"
+      },
+      "e9c6045f-e592-45bd-929e-8525ddcf1995": {
+        "is_running": false,
+        "message": "No balance found on '/mnt/btrfs-raid1-lab'"
+      }
+    },
+    "device_error_events": {
+      "/volum1": {
+        "dev_bcache1_754441a5": 1,
+        "dev_bcache0_02437133": 1,
+        "5": 1,
+        "6": 1
+      },
+      "/home": {
+        "dev_bcache1_754441a5": 1,
+        "dev_bcache0_02437133": 1
+      },
+      "/mnt/btrfs-raid1-lab": {
+        "1": 1
+      }
+    }
+  }
+}
