@@ -13,7 +13,8 @@ if (! is_string($fs) || $fs === '') {
     return;
 }
 
-$fs_rrd_id = $app->data['fs_rrd_key'][$fs] ?? $fs;
+$fs_entry = $app->data['filesystems'][$fs] ?? null;
+$fs_rrd_id = is_array($fs_entry) ? ($fs_entry['rrd_key'] ?? $fs) : $fs;
 $rrd_filename = App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id]);
 
 if (! App\Facades\Rrd::checkRrdExists($rrd_filename)) {

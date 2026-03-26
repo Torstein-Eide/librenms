@@ -138,13 +138,38 @@ foreach ($apps as $app) {
         continue;
     }
 
-    $filesystems = $app->data['filesystems'] ?? [];
-    $filesystemMeta = $app->data['filesystem_meta'] ?? [];
-    $filesystemTables = $app->data['filesystem_tables'] ?? [];
-    $deviceMap = $app->data['device_map'] ?? [];
-    $scrubStatusFs = $app->data['scrub_status_fs'] ?? [];
-    $scrubIsRunningFs = $app->data['scrub_is_running_fs'] ?? [];
-    $balanceIsRunningFs = $app->data['balance_is_running_fs'] ?? [];
+    $filesystemEntries = $app->data['filesystems'] ?? [];
+    $structured = is_array($filesystemEntries) && count($filesystemEntries) > 0 && is_array(reset($filesystemEntries));
+    if ($structured) {
+        $filesystems = array_keys($filesystemEntries);
+        $filesystemMeta = [];
+        $filesystemTables = [];
+        $deviceMap = [];
+        $scrubStatusFs = [];
+        $scrubIsRunningFs = [];
+        $balanceIsRunningFs = [];
+        foreach ($filesystemEntries as $fsName => $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+            $filesystemMeta[$fsName] = is_array($entry['meta'] ?? null) ? $entry['meta'] : [];
+            $filesystemTables[$fsName] = is_array($entry['table'] ?? null) ? $entry['table'] : [];
+            $deviceMap[$fsName] = is_array($entry['device_map'] ?? null) ? $entry['device_map'] : [];
+            $scrubBlock = is_array($entry['scrub'] ?? null) ? $entry['scrub'] : [];
+            $balanceBlock = is_array($entry['balance'] ?? null) ? $entry['balance'] : [];
+            $scrubStatusFs[$fsName] = is_array($scrubBlock['status'] ?? null) ? $scrubBlock['status'] : [];
+            $scrubIsRunningFs[$fsName] = (bool) ($scrubBlock['is_running'] ?? false);
+            $balanceIsRunningFs[$fsName] = (bool) ($balanceBlock['is_running'] ?? false);
+        }
+    } else {
+        $filesystems = [];
+        $filesystemMeta = [];
+        $filesystemTables = [];
+        $deviceMap = [];
+        $scrubStatusFs = [];
+        $scrubIsRunningFs = [];
+        $balanceIsRunningFs = [];
+    }
 
     foreach ($filesystems as $fs) {
         // Build one summary row for this filesystem on this device.
@@ -184,7 +209,7 @@ foreach ($apps as $app) {
             ? $btrfs_scrub_progress_text_from_status($scrubStatus)
             : 'N/A';
 
-        $deviceTables = $app->data['device_tables'][$fs] ?? [];
+        $deviceTables = is_array($filesystemEntries[$fs]['device_tables'] ?? null) ? $filesystemEntries[$fs]['device_tables'] : [];
         $totalErrors = $btrfs_total_io_errors($deviceTables);
 
         $usedPercentText = $btrfs_used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
@@ -274,11 +299,32 @@ foreach ($apps as $app) {
         continue;
     }
 
-    $filesystems = $app->data['filesystems'] ?? [];
-    $filesystemMeta = $app->data['filesystem_meta'] ?? [];
-    $filesystemTables = $app->data['filesystem_tables'] ?? [];
-    $scrubIsRunningFs = $app->data['scrub_is_running_fs'] ?? [];
-    $balanceIsRunningFs = $app->data['balance_is_running_fs'] ?? [];
+    $filesystemEntries = $app->data['filesystems'] ?? [];
+    $structured = is_array($filesystemEntries) && count($filesystemEntries) > 0 && is_array(reset($filesystemEntries));
+    if ($structured) {
+        $filesystems = array_keys($filesystemEntries);
+        $filesystemMeta = [];
+        $filesystemTables = [];
+        $scrubIsRunningFs = [];
+        $balanceIsRunningFs = [];
+        foreach ($filesystemEntries as $fsName => $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+            $filesystemMeta[$fsName] = is_array($entry['meta'] ?? null) ? $entry['meta'] : [];
+            $filesystemTables[$fsName] = is_array($entry['table'] ?? null) ? $entry['table'] : [];
+            $scrubBlock = is_array($entry['scrub'] ?? null) ? $entry['scrub'] : [];
+            $balanceBlock = is_array($entry['balance'] ?? null) ? $entry['balance'] : [];
+            $scrubIsRunningFs[$fsName] = (bool) ($scrubBlock['is_running'] ?? false);
+            $balanceIsRunningFs[$fsName] = (bool) ($balanceBlock['is_running'] ?? false);
+        }
+    } else {
+        $filesystems = [];
+        $filesystemMeta = [];
+        $filesystemTables = [];
+        $scrubIsRunningFs = [];
+        $balanceIsRunningFs = [];
+    }
     echo '<div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">' . Url::deviceLink($device) . '</h3></div>';
     echo '<div class="panel-body">';

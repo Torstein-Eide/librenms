@@ -7,8 +7,9 @@ if (! is_string($fs) || $fs === '') {
     throw new \LibreNMS\Exceptions\RrdGraphException('No filesystem selected');
 }
 
-$device_map = $app->data['device_map'][$fs] ?? [];
-$device_metadata = $app->data['device_metadata'][$fs] ?? [];
+$fs_entry = $app->data['filesystems'][$fs] ?? null;
+$device_map = is_array($fs_entry) ? ($fs_entry['device_map'] ?? []) : [];
+$device_metadata = is_array($fs_entry) ? ($fs_entry['device_metadata'] ?? []) : [];
 
 if (! is_array($device_map) || count($device_map) === 0) {
     throw new \LibreNMS\Exceptions\RrdGraphException('No filesystem devices');
