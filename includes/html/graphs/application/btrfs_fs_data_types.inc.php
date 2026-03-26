@@ -66,7 +66,47 @@ if ($width > '500') {
 }
 
 $fs_entry = $app->data['filesystems'][$vars['fs']] ?? null;
-$fs_types = is_array($fs_entry) ? ($fs_entry['profiles'] ?? []) : [];
+
+$normalize_profile_rows = static function ($profiles): array {
+    $normalized = [];
+
+    if (! is_array($profiles)) {
+        return $normalized;
+    }
+
+    $is_assoc = array_keys($profiles) !== range(0, count($profiles) - 1);
+    if ($is_assoc) {
+        foreach ($profiles as $profile_key => $profile_value) {
+            if (! is_string($profile_key) || ! is_numeric($profile_value)) {
+                continue;
+            }
+            $normalized[$profile_key] = (float) $profile_value;
+        }
+
+        return $normalized;
+    }
+
+    foreach ($profiles as $row) {
+        if (! is_array($row)) {
+            continue;
+        }
+        $profile_key = $row['profile'] ?? null;
+        $profile_value = $row['bytes'] ?? null;
+        if (! is_string($profile_key) || ! is_numeric($profile_value)) {
+            continue;
+        }
+        $normalized[$profile_key] = (float) $profile_value;
+    }
+
+    return $normalized;
+};
+
+$fs_types = is_array($fs_entry) ? $normalize_profile_rows($fs_entry['profiles'] ?? []) : [];
+if (count($fs_types) === 0 && is_array($fs_entry)) {
+    $fs_uuid = trim((string) ($fs_entry['uuid'] ?? ''));
+    $tables_profiles = $app->data['tables']['filesystem_profiles'][$fs_uuid] ?? [];
+    $fs_types = $normalize_profile_rows($tables_profiles);
+}
 if (empty($fs_types)) {
     return;
 }
