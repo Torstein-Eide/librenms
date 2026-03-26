@@ -3,29 +3,6 @@
 // Shared view helpers for btrfs device/global pages.
 // Keep display/status helpers centralized here to avoid page drift.
 
-$btrfs_print_sticky_first_css = static function (): void {
-    static $printed = false;
-    if ($printed) {
-        return;
-    }
-
-    $printed = true;
-
-    echo '<style>
-.btrfs-sticky-first th:first-child,
-.btrfs-sticky-first td:first-child {
-    position: sticky;
-    left: 0;
-    z-index: 2;
-    background: #fff;
-}
-.btrfs-sticky-first thead th:first-child {
-    z-index: 3;
-    background: #f5f5f5;
-}
-</style>';
-};
-
 $btrfs_status_badge = static function (string $state): string {
     // Map logical state to neutral/alert badge styling.
     $state_lc = strtolower($state);
