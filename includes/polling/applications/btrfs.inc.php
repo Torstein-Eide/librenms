@@ -96,9 +96,6 @@ $io_state_index_id = $state_indexes[BtrfsSensorSync::STATE_SENSOR_IO] ?? null;
 $scrub_state_index_id = $state_indexes[BtrfsSensorSync::STATE_SENSOR_SCRUB] ?? null;
 $balance_state_index_id = $state_indexes[BtrfsSensorSync::STATE_SENSOR_BALANCE] ?? null;
 
-// Cleanup legacy sensors from older iterations
-$sensorSync->cleanupLegacyStateSensors($device);
-
 // -----------------------------------------------------------------------------
 // Runtime accumulators and per-poll state
 // -----------------------------------------------------------------------------
