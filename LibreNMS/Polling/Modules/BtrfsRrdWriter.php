@@ -7,6 +7,11 @@ use LibreNMS\RRD\RrdDefinition;
 /**
  * BtrfsRrdWriter handles RRD definitions and write operations for btrfs metrics.
  *
+ * Extends AppRrdWriter to provide btrfs-specific:
+ * - Filesystem-level, device-level, and dynamic type RRD definitions
+ * - Field builders for IO errors, scrub stats, and usage
+ * - Error key arrays and aggregation helpers
+ *
  * RRD structure:
  * - app-btrfs-{app_id}-{fs_name}: filesystem-level space/usage/status metrics
  * - app-btrfs-{app_id}-{fs_name}-device_{devid}: per-device IO/scrub/usage
@@ -14,7 +19,7 @@ use LibreNMS\RRD\RrdDefinition;
  * - app-btrfs-{app_id}-{fs_name}-device_{devid}-type_{type_id}: per-device dynamic types
  * - sensor-btrfs-{sensor_index}: synthetic sensor values
  */
-class BtrfsRrdWriter
+class BtrfsRrdWriter extends AppRrdWriter
 {
     public const DS_IO_STATUS = 'io_status_code';
     public const DS_SCRUB_STATUS = 'scrub_status_code';
@@ -98,98 +103,54 @@ class BtrfsRrdWriter
         $this->scrubErrorKeys = ['read_errors', 'csum_errors', 'verify_errors', 'uncorrectable_errors', 'unverified_errors', 'missing', 'device_missing'];
     }
 
+    protected function defineDatasets(): array
+    {
+        return $this->fsSpaceDatasets;
+    }
+
+    public function buildFields(array $data): array
+    {
+        return $data;
+    }
+
     public function writeFsRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, array $fields, array $tags = []): void
     {
-        $rrd_name = ['app', $app_name, $app_id, $fs_rrd_id];
-        $default_tags = [
-            'name' => $app_name,
-            'app_id' => $app_id,
-            'rrd_def' => $this->fsRrdDef,
-            'rrd_name' => $rrd_name,
-        ];
-        $merged_tags = array_merge($default_tags, $tags);
-        app('Datastore')->put($device, 'app', $merged_tags, $fields);
+        $this->write($device, $app_name, $app_id, $fs_rrd_id, $fields, array_merge($tags, ['rrd_def' => $this->fsRrdDef]));
     }
 
     public function writeDeviceRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, string $dev_id, array $fields, array $tags = []): void
     {
-        $rrd_name = ['app', $app_name, $app_id, $fs_rrd_id, 'device_' . $dev_id];
-        $default_tags = [
-            'name' => $app_name,
-            'app_id' => $app_id,
-            'rrd_def' => $this->deviceRrdDef,
-            'rrd_name' => $rrd_name,
-        ];
-        $merged_tags = array_merge($default_tags, $tags);
-        app('Datastore')->put($device, 'app', $merged_tags, $fields);
+        $this->write($device, $app_name, $app_id, $fs_rrd_id . '_device_' . $dev_id, $fields, array_merge($tags, ['rrd_def' => $this->deviceRrdDef]));
     }
 
     public function writeTypeRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, string $type_id, float $value, array $tags = []): void
     {
-        $rrd_name = ['app', $app_name, $app_id, $fs_rrd_id, 'type_' . $type_id];
-        $default_tags = [
-            'name' => $app_name,
-            'app_id' => $app_id,
-            'rrd_def' => $this->dynamicTypeRrdDef,
-            'rrd_name' => $rrd_name,
-        ];
-        $merged_tags = array_merge($default_tags, $tags);
-        app('Datastore')->put($device, 'app', $merged_tags, ['value' => $value]);
+        $this->write($device, $app_name, $app_id, $fs_rrd_id . '_type_' . $type_id, ['value' => $value], array_merge($tags, ['rrd_def' => $this->dynamicTypeRrdDef]));
     }
 
     public function writeDevTypeRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, string $dev_id, string $type_id, float $value, array $tags = []): void
     {
-        $rrd_name = ['app', $app_name, $app_id, $fs_rrd_id, 'device_' . $dev_id, 'type_' . $type_id];
-        $default_tags = [
-            'name' => $app_name,
-            'app_id' => $app_id,
-            'rrd_def' => $this->dynamicTypeRrdDef,
-            'rrd_name' => $rrd_name,
-        ];
-        $merged_tags = array_merge($default_tags, $tags);
-        app('Datastore')->put($device, 'app', $merged_tags, ['value' => $value]);
+        $this->write($device, $app_name, $app_id, $fs_rrd_id . '_device_' . $dev_id . '_type_' . $type_id, ['value' => $value], array_merge($tags, ['rrd_def' => $this->dynamicTypeRrdDef]));
     }
 
     public function sumDeviceErrors(array $dev_stats): float
     {
-        $total = 0.0;
-        foreach ($this->ioErrorKeys as $key) {
-            $total += (float) ($dev_stats[$key] ?? 0);
-        }
-
-        return $total;
+        return $this->sumErrors($dev_stats, $this->ioErrorKeys);
     }
 
     public function sumScrubErrors(array $scrub_stats): float
     {
-        $total = 0.0;
-        foreach ($this->scrubErrorKeys as $key) {
-            $total += (float) ($scrub_stats[$key] ?? 0);
-        }
-
-        return $total;
+        return $this->sumErrors($scrub_stats, $this->scrubErrorKeys);
     }
 
     public function hasDeviceError(array $dev_stats): bool
     {
-        foreach ($this->ioErrorKeys as $key) {
-            if (isset($dev_stats[$key]) && is_numeric($dev_stats[$key]) && (float) $dev_stats[$key] > 0) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this->hasErrors($dev_stats, $this->ioErrorKeys);
     }
 
     public function hasScrubError(array $scrub_stats): bool
     {
-        foreach ($this->scrubErrorKeys as $key) {
-            if (isset($scrub_stats[$key]) && is_numeric($scrub_stats[$key]) && (float) $scrub_stats[$key] > 0) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this->hasErrors($scrub_stats, $this->scrubErrorKeys);
     }
 
     public function buildDeviceFields(array $dev_stats, array $scrub_stats, array $usage_stats): array
