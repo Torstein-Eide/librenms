@@ -62,6 +62,209 @@ try {
 }
 
 $filesystems = $btrfs['filesystems'] ?? [];
+if ((! is_array($filesystems) || count($filesystems) === 0) && is_array($btrfs['tables'] ?? null)) {
+    // Support normalized payload mode where source data is provided in
+    // data.tables.* instead of data.filesystems.* command trees.
+    $tables = $btrfs['tables'];
+    $table_filesystems = $tables['filesystems'] ?? [];
+    $table_capacity = $tables['filesystem_capacity'] ?? [];
+    $table_profiles = $tables['filesystem_profiles'] ?? [];
+    $table_fs_devices = $tables['filesystem_devices'] ?? [];
+    $table_scrub_fs = $tables['scrub_status_filesystems'] ?? [];
+    $table_scrub_devices = $tables['scrub_status_devices'] ?? [];
+    $table_balance = $tables['balance_status_filesystems'] ?? [];
+
+    $filesystems = [];
+    foreach ($table_filesystems as $fs_uuid => $fs_row) {
+        if (! is_array($fs_row)) {
+            continue;
+        }
+
+        $mountpoint = (string) ($fs_row['mountpoint'] ?? $fs_row['primary_mountpoint'] ?? '');
+        if ($mountpoint === '') {
+            continue;
+        }
+
+        $fs_devices = is_array($table_fs_devices[$fs_uuid] ?? null) ? $table_fs_devices[$fs_uuid] : [];
+        $capacity = is_array($table_capacity[$fs_uuid] ?? null) ? $table_capacity[$fs_uuid] : [];
+        $scrub_fs = is_array($table_scrub_fs[$fs_uuid] ?? null) ? $table_scrub_fs[$fs_uuid] : [];
+        $balance_fs = is_array($table_balance[$fs_uuid] ?? null) ? $table_balance[$fs_uuid] : [];
+
+        $show_devices = [];
+        $device_usage_devices = [];
+        $devinfo = [];
+        $usage_unallocated = [];
+        $class_devices = [
+            'Data' => [],
+            'Metadata' => [],
+            'System' => [],
+        ];
+        $class_totals = [
+            'Data' => 0.0,
+            'Metadata' => 0.0,
+            'System' => 0.0,
+        ];
+
+        foreach ($fs_devices as $devid => $dev_row) {
+            if (! is_array($dev_row)) {
+                continue;
+            }
+
+            $devid = (string) $devid;
+            $path = (string) ($dev_row['device_path'] ?? '');
+            if ($path === '') {
+                continue;
+            }
+
+            $data_bytes = is_numeric($dev_row['data'] ?? null) ? (float) $dev_row['data'] : 0.0;
+            $metadata_bytes = is_numeric($dev_row['metadata'] ?? null) ? (float) $dev_row['metadata'] : 0.0;
+            $system_bytes = is_numeric($dev_row['system'] ?? null) ? (float) $dev_row['system'] : 0.0;
+
+            $show_devices[] = [
+                'devid' => (int) $devid,
+                'size' => $dev_row['size'] ?? null,
+                'used' => $data_bytes + $metadata_bytes + $system_bytes,
+                'path' => $path,
+                'missing' => ! empty($dev_row['missing']) ? 1 : 0,
+            ];
+
+            $usage_unallocated[$path] = $dev_row['unallocated'] ?? null;
+
+            $usage_entry = [
+                'path' => $path,
+                'id' => (int) $devid,
+                'device_size' => $dev_row['size'] ?? null,
+                'device_slack' => $dev_row['slack'] ?? 0,
+                'unallocated' => $dev_row['unallocated'] ?? null,
+                'missing' => ! empty($dev_row['missing']) ? 1 : 0,
+            ];
+            if (is_array($dev_row['raid_profiles'] ?? null)) {
+                foreach ($dev_row['raid_profiles'] as $profile_key => $profile_value) {
+                    if (is_string($profile_key) && is_numeric($profile_value)) {
+                        $usage_entry[$profile_key] = $profile_value;
+                    }
+                }
+            }
+            $device_usage_devices[] = $usage_entry;
+
+            $devinfo[$devid] = [
+                'fsid' => $fs_uuid,
+                'missing' => ! empty($dev_row['missing']) ? 1 : 0,
+                'error_stats' => [
+                    'write_errs' => $dev_row['write_io_errs'] ?? 0,
+                    'read_errs' => $dev_row['read_io_errs'] ?? 0,
+                    'flush_errs' => $dev_row['flush_io_errs'] ?? 0,
+                    'corruption_errs' => $dev_row['corruption_errs'] ?? 0,
+                    'generation_errs' => $dev_row['generation_errs'] ?? 0,
+                ],
+            ];
+
+            $class_devices['Data'][$path] = $data_bytes;
+            $class_devices['Metadata'][$path] = $metadata_bytes;
+            $class_devices['System'][$path] = $system_bytes;
+            $class_totals['Data'] += $data_bytes;
+            $class_totals['Metadata'] += $metadata_bytes;
+            $class_totals['System'] += $system_bytes;
+        }
+
+        $usage_profiles = [];
+        foreach (['Data', 'Metadata', 'System'] as $class_name) {
+            $usage_profiles[] = [
+                'class' => $class_name,
+                'profile' => strtolower($class_name),
+                'devices' => $class_devices[$class_name],
+                'size' => $class_totals[$class_name],
+                'used' => [
+                    'bytes' => $class_totals[$class_name],
+                    'pct' => null,
+                ],
+            ];
+        }
+
+        $overall = [
+            'device_size' => $capacity['device_size'] ?? null,
+            'device_allocated' => $capacity['device_allocated'] ?? null,
+            'device_unallocated' => $capacity['device_unallocated'] ?? null,
+            'device_missing' => $capacity['device_missing'] ?? 0,
+            'device_slack' => $capacity['device_slack'] ?? 0,
+            'used' => $capacity['used'] ?? null,
+            'free_estimated' => [
+                'bytes' => $capacity['free_estimated'] ?? null,
+                'min_bytes' => $capacity['free_estimated_min'] ?? null,
+            ],
+            'free_statfs_df' => $capacity['free_statfs_df'] ?? null,
+            'data_ratio' => $capacity['data_ratio'] ?? null,
+            'metadata_ratio' => $capacity['metadata_ratio'] ?? null,
+            'global_reserve' => [
+                'bytes' => $capacity['global_reserve'] ?? null,
+                'used_bytes' => $capacity['global_reserve_used'] ?? null,
+            ],
+            'multiple_profiles' => false,
+        ];
+
+        $scrub_status = [
+            'uuid' => $fs_uuid,
+            'scrub_started' => $scrub_fs['scrub_started'] ?? null,
+            'status' => $scrub_fs['status'] ?? null,
+            'duration' => $scrub_fs['duration'] ?? null,
+            'time_left' => $scrub_fs['time_left'] ?? null,
+            'eta' => $scrub_fs['eta'] ?? null,
+            'total_to_scrub' => $scrub_fs['total_to_scrub'] ?? null,
+            'rate' => $scrub_fs['rate'] ?? null,
+            'error_summary' => $scrub_fs['error_summary'] ?? null,
+            'devices' => [],
+        ];
+        if (is_numeric($scrub_fs['bytes_scrubbed'] ?? null)) {
+            $scrub_status['bytes_scrubbed'] = [
+                'bytes' => $scrub_fs['bytes_scrubbed'],
+                'progress' => $scrub_fs['progress_percent'] ?? null,
+            ];
+        }
+
+        $scrub_devices = is_array($table_scrub_devices[$fs_uuid] ?? null) ? $table_scrub_devices[$fs_uuid] : [];
+
+        $balance_message = (string) ($balance_fs['message'] ?? '');
+        $balance_status = ! empty($balance_fs['is_running']) ? 'running' : '';
+
+        $filesystems[$mountpoint] = [
+            'mountpoint' => $mountpoint,
+            'uuid' => $fs_uuid,
+            'tables' => [
+                'filesystem_devices' => $fs_devices,
+                'filesystem_profiles' => is_array($table_profiles[$fs_uuid] ?? null) ? $table_profiles[$fs_uuid] : [],
+            ],
+            'commands' => [
+                'filesystem_show' => ['rc' => 0, 'data' => [
+                    'devices' => $show_devices,
+                    'uuid' => $fs_uuid,
+                    'label' => $fs_row['label'] ?? '',
+                    'total_devices' => $fs_row['total_devices'] ?? null,
+                    'fs_bytes_used' => $fs_row['bytes_used'] ?? null,
+                ]],
+                'filesystem_usage' => ['rc' => 0, 'data' => [
+                    'overall' => $overall,
+                    'profiles' => $usage_profiles,
+                    'unallocated' => $usage_unallocated,
+                ]],
+                'scrub_status' => ['rc' => 0, 'data' => $scrub_status],
+                'scrub_status_devices' => ['rc' => 0, 'data' => [
+                    'devices' => $scrub_devices,
+                    'uuid' => $fs_uuid,
+                ]],
+                'device_usage' => ['rc' => 0, 'data' => [
+                    'devices' => $device_usage_devices,
+                ]],
+                'balance_status' => ['rc' => 0, 'data' => [
+                    'status' => $balance_status,
+                    'lines' => $balance_message !== '' ? [$balance_message] : [],
+                    'profiles' => [],
+                ]],
+            ],
+            'devinfo' => $devinfo,
+            'sys_block' => [],
+        ];
+    }
+}
 
 $delete_all_btrfs_state_sensors = static function (array $device): void {
     $state_sensor_types = ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'];
@@ -91,6 +294,11 @@ $btrfs_dev_version_raw = $btrfs['btrfs_dev_version']
     ?? $all_return['version']
     ?? null;
 $btrfs_dev_version = is_numeric($btrfs_dev_version_raw) ? (int) $btrfs_dev_version_raw : 0;
+if ($btrfs_dev_version < 1 && is_array($filesystems) && count($filesystems) > 0) {
+    // Newer payloads may omit explicit payload version while still exposing
+    // the canonical filesystems/commands tree.
+    $btrfs_dev_version = 1;
+}
 if ($btrfs_dev_version < 1) {
     $delete_all_btrfs_state_sensors($device);
     $app->data = [];
@@ -749,17 +957,6 @@ $device_rrd_def = RrdDefinition::make()
 $dynamic_type_rrd_def = RrdDefinition::make()
     ->addDataset('value', 'GAUGE', 0);
 
-$overall_rrd_def = RrdDefinition::make()
-    ->addDataset('used', 'GAUGE', 0)
-    ->addDataset('free_estimated', 'GAUGE', 0)
-    ->addDataset('device_size', 'GAUGE', 0)
-    ->addDataset('io_errors_total', 'GAUGE', 0)
-    ->addDataset('scrub_errors_total', 'GAUGE', 0)
-    ->addDataset('status_code', 'GAUGE', 0)
-    ->addDataset('io_status_code', 'GAUGE', 0)
-    ->addDataset('scrub_status_code', 'GAUGE', 0)
-    ->addDataset('balance_status_code', 'GAUGE', 0);
-
 $io_error_keys = ['corruption_errs', 'flush_io_errs', 'generation_errs', 'read_io_errs', 'write_io_errs'];
 $scrub_error_keys = ['read_errors', 'csum_errors', 'verify_errors', 'uncorrectable_errors', 'unverified_errors', 'missing', 'device_missing'];
 
@@ -1108,10 +1305,7 @@ foreach ($filesystems as $fs_name => $fs) {
         $fs_uuid = $old_filesystem_uuid[$fs_name];
     }
     $filesystem_uuid[$fs_name] = $fs_uuid;
-    $fs_uuid_compact = preg_replace('/[^A-Fa-f0-9]/', '', $fs_uuid);
-    $fs_rrd_id = strlen((string) $fs_uuid_compact) >= 10
-        ? strtolower(substr((string) $fs_uuid_compact, 0, 10))
-        : $normalize_id((string) $fs_name);
+    $fs_rrd_id = $normalize_id((string) $fs_name);
     $fs_rrd_key[$fs_name] = $fs_rrd_id;
 
     // app_id comes from the existing applications row for this device/app_type
@@ -1650,29 +1844,6 @@ $app_status_text = match ($app_status_code) {
     4 => 'Missing',
     default => 'OK',
 };
-
-$overall_fields = [
-    // App-level aggregate timeseries for /apps/app=btrfs/ overview graphs.
-    'used' => $overview_totals['used'] ?? 0,
-    'free_estimated' => $overview_totals['free_estimated'] ?? 0,
-    'device_size' => $overview_totals['device_size'] ?? 0,
-    'io_errors_total' => $app_io_errors_total,
-    'scrub_errors_total' => $app_scrub_errors_total,
-    'status_code' => $app_status_code,
-    'io_status_code' => $app_io_status_code,
-    'scrub_status_code' => $app_scrub_status_code,
-    'balance_status_code' => $app_balance_status_code,
-];
-$overall_tags = [
-    'name' => $name,
-    'app_id' => $app->app_id,
-    'rrd_def' => $overall_rrd_def,
-    'rrd_name' => ['app', $name, $app->app_id, 'overall'],
-];
-app('Datastore')->put($device, 'app', $overall_tags, $overall_fields);
-foreach ($overall_fields as $field => $value) {
-    $metrics['overall_' . $field] = $value;
-}
 
 // Persist only structures needed for UI rendering/navigation; avoid heavy debug payloads.
 // This payload is consumed by both device and global btrfs pages.

@@ -45,6 +45,21 @@ $filesystem_uuid = $app->data['filesystem_uuid'] ?? [];
 $fs_rrd_key = $app->data['fs_rrd_key'] ?? [];
 sort($filesystems);
 
+if (! is_string($selected_fs) || ! in_array($selected_fs, $filesystems, true)) {
+    $selected_fs = null;
+}
+
+if (! is_scalar($selected_dev) || (string) $selected_dev === '') {
+    $selected_dev = null;
+} else {
+    $selected_dev = (string) $selected_dev;
+    if (! isset($selected_fs, $device_map[$selected_fs]) || ! array_key_exists($selected_dev, (array) $device_map[$selected_fs])) {
+        $selected_dev = null;
+    }
+}
+
+$is_overview = ! isset($selected_fs);
+
 $state_sensor_values = [];
 // Load live sensor_current values so UI can show freshest state even if app->data
 // was produced in a previous poll cycle.
@@ -402,13 +417,31 @@ print_optionbar_end();
 
 // Filesystem summary table
 if ($is_overview && count($filesystems) > 0) {
+    $overview_debug = [
+        'vars' => $vars,
+        'selected_fs' => $selected_fs,
+        'selected_dev' => $selected_dev,
+        'app_data' => $app->data ?? [],
+    ];
+    $overview_debug_json = json_encode($overview_debug, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    if ($overview_debug_json === false) {
+        $overview_debug_json = '{}';
+    }
+
+    echo '<div class="panel panel-default">';
+    echo '<div class="panel-heading"><h3 class="panel-title">Debug: btrfs overview (full)</h3></div>';
+    echo '<div class="panel-body">';
+    echo '<pre style="max-height: 260px; overflow: auto; margin-bottom: 0;">' . htmlspecialchars($overview_debug_json) . '</pre>';
+    echo '</div>';
+    echo '</div>';
+
     // Top-level filesystem table (one row per filesystem on this device).
     echo '<div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">Filesystems Overview</h3></div>';
     echo '<div class="panel-body">';
     echo '<div class="table-responsive">';
     echo '<table class="table table-condensed table-striped table-hover btrfs-sticky-first">';
-    echo '<thead><tr><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Data Ratio</th><th>Metadata Ratio</th><th>Devices</th><th>Combined Status</th></tr></thead>';
+    echo '<thead><tr><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Missing</th><th>Devices</th><th>Ops</th><th>Bps</th><th>Combined Status</th></tr></thead>';
     echo '<tbody>';
 
     foreach ($filesystems as $fs) {
@@ -454,6 +487,27 @@ if ($is_overview && count($filesystems) > 0) {
         $graph_link = LibreNMS\Util\Url::generate($graph_link_array);
         $graph_img = LibreNMS\Util\Url::lazyGraphTag($graph_array);
 
+        $ops_graph = [
+            'height' => 30,
+            'width' => 120,
+            'to' => App\Facades\LibrenmsConfig::get('time.now'),
+            'from' => App\Facades\LibrenmsConfig::get('time.day'),
+            'id' => $app['app_id'],
+            'type' => 'application_btrfs_fs_diskio_ops',
+            'fs' => $fs,
+            'legend' => 'no',
+        ];
+        $bps_graph = [
+            'height' => 30,
+            'width' => 120,
+            'to' => App\Facades\LibrenmsConfig::get('time.now'),
+            'from' => App\Facades\LibrenmsConfig::get('time.day'),
+            'id' => $app['app_id'],
+            'type' => 'application_btrfs_fs_diskio_bits',
+            'fs' => $fs,
+            'legend' => 'no',
+        ];
+
         echo '<tr>';
         echo '<td>' . generate_link(htmlspecialchars((string) $display_name), $link_array, ['fs' => $fs]) . '</td>';
         echo '<td>' . $status_badge($io_state) . '</td>';
@@ -465,9 +519,10 @@ if ($is_overview && count($filesystems) > 0) {
         echo '<td>' . htmlspecialchars($format_metric_value($fs_data['used'] ?? null, 'used')) . '</td>';
         echo '<td>' . htmlspecialchars($format_metric_value($fs_data['free_estimated'] ?? null, 'free_estimated')) . '</td>';
         echo '<td>' . htmlspecialchars($format_metric_value($fs_data['device_size'] ?? null, 'device_size')) . '</td>';
-        echo '<td>' . htmlspecialchars($format_metric_value($fs_data['data_ratio'] ?? null, 'data_ratio')) . '</td>';
-        echo '<td>' . htmlspecialchars($format_metric_value($fs_data['metadata_ratio'] ?? null, 'metadata_ratio')) . '</td>';
+        echo '<td>' . (($fs_data['has_missing'] ?? false) ? '<span class="label label-danger">Yes</span>' : '<span class="label label-default">No</span>') . '</td>';
         echo '<td>' . number_format(count($fs_devices)) . '</td>';
+        echo '<td>' . generate_link(LibreNMS\Util\Url::lazyGraphTag($ops_graph), $link_array, ['fs' => $fs]) . '</td>';
+        echo '<td>' . generate_link(LibreNMS\Util\Url::lazyGraphTag($bps_graph), $link_array, ['fs' => $fs]) . '</td>';
         echo '<td>' . LibreNMS\Util\Url::overlibLink($graph_link, $graph_img, $display_name . ' - Combined Status') . '</td>';
         echo '</tr>';
     }
@@ -484,6 +539,8 @@ if ($is_overview && count($filesystems) > 0) {
         'btrfs_fs_space' => 'Filesystem Space',
         'btrfs_fs_scrub_bytes' => 'Scrub Rate',
         'btrfs_fs_data_types' => 'Per Data Type',
+        'btrfs_fs_diskio_ops' => 'Aggregate Ops/sec',
+        'btrfs_fs_diskio_bits' => 'Aggregate Bps',
     ];
 
     foreach ($filesystems as $fs) {
@@ -523,8 +580,8 @@ if ($is_overview && count($filesystems) > 0) {
 
         foreach ($overview_graph_types as $graph_type => $graph_title) {
             $graph_array = [
-                'height' => '100',
-                'width' => '220',
+                'height' => '80',
+                'width' => '180',
                 'to' => App\Facades\LibrenmsConfig::get('time.now'),
                 'from' => App\Facades\LibrenmsConfig::get('time.day'),
                 'id' => $app['app_id'],
@@ -1085,8 +1142,8 @@ if (isset($selected_dev) && is_array($selected_diskio) && isset($selected_diskio
 
 if (isset($selected_fs) && ! isset($selected_dev)) {
     $diskio_aggregate_types = [
-        'btrfs_fs_diskio_ops' => 'Disk I/O Aggregate Ops/sec',
-        'btrfs_fs_diskio_bits' => 'Disk I/O Aggregate bps',
+        'btrfs_fs_diskio_ops' => 'Aggregate Ops/sec',
+        'btrfs_fs_diskio_bits' => 'Aggregate Bps',
     ];
 
     foreach ($diskio_aggregate_types as $graph_type => $graph_title) {
