@@ -267,9 +267,32 @@ if ((! is_array($filesystems) || count($filesystems) === 0) && is_array($btrfs['
     }
 }
 
-$delete_all_btrfs_state_sensors = static function (array $device): void {
-    $state_sensor_types = ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'];
-    $count_sensor_types = ['btrfsIoErrors', 'btrfsIoErrorsSum'];
+$STATUS_OK = 0;
+$STATUS_RUNNING = 1;
+$STATUS_NA = 2;
+$STATUS_ERROR = 3;
+$STATUS_MISSING = 4;
+$STATUS_UNKNOWN = -1;
+
+$STATE_SENSOR_IO = 'btrfsIoStatusState';
+$STATE_SENSOR_SCRUB = 'btrfsScrubStatusState';
+$STATE_SENSOR_BALANCE = 'btrfsBalanceStatusState';
+$STATE_SENSOR_TYPES = [$STATE_SENSOR_IO, $STATE_SENSOR_SCRUB, $STATE_SENSOR_BALANCE];
+
+$COUNT_SENSOR_IO_ERRORS = 'btrfsIoErrors';
+$LEGACY_COUNT_SENSOR_IO_ERRORS = 'btrfsIoErrorsSum';
+$COUNT_SENSOR_TYPES = [$COUNT_SENSOR_IO_ERRORS, $LEGACY_COUNT_SENSOR_IO_ERRORS];
+$COUNT_SENSOR_WARN_LEVEL = 5;
+$COUNT_SENSOR_ERROR_LEVEL = 10;
+
+$RUNNING_STATUS_TOKENS = ['running', 'in-progress', 'in_progress'];
+$FINISHED_STATUS_TOKENS = ['finished', 'done', 'idle', 'stopped', 'completed'];
+$ERROR_STATUS_TOKENS = ['error', 'failed', 'failure'];
+$RUNNING_FLAG_KEYS = ['running', 'is_running', 'in_progress'];
+
+$delete_all_btrfs_state_sensors = static function (array $device) use ($STATE_SENSOR_TYPES, $COUNT_SENSOR_TYPES): void {
+    $state_sensor_types = $STATE_SENSOR_TYPES;
+    $count_sensor_types = $COUNT_SENSOR_TYPES;
 
     dbDelete(
         'sensors_to_state_indexes',
@@ -303,7 +326,7 @@ if ($btrfs_dev_version < 1 && is_array($filesystems) && count($filesystems) > 0)
 if ($btrfs_dev_version < 1) {
     $delete_all_btrfs_state_sensors($device);
     $app->data = [];
-    update_application($app, 'Unsupported btrfs agent payload version', ['status_code' => 2]);
+    update_application($app, 'Unsupported btrfs agent payload version', ['status_code' => $STATUS_NA]);
 
     return;
 }
@@ -339,25 +362,25 @@ $fs_rrd_def
     ->addDataset('scrub_status_code', 'GAUGE', 0)
     ->addDataset('balance_status_code', 'GAUGE', 0);
 
-$get_balance_status_code = static function (array $fs): int {
+$get_balance_status_code = static function (array $fs) use ($RUNNING_FLAG_KEYS, $RUNNING_STATUS_TOKENS, $ERROR_STATUS_TOKENS, $STATUS_RUNNING, $STATUS_NA, $STATUS_ERROR, $STATUS_OK): int {
     // Status code map: 0=OK, 1=Running, 2=N/A, 3=Error.
     // For balance, rc=0 indicates no active balance and maps to N/A.
     $command = $fs['commands']['balance_status'] ?? null;
     if (! is_array($command)) {
-        return 2; // NA
+        return $STATUS_NA;
     }
 
     if (is_numeric($command['rc'] ?? null) && (int) $command['rc'] === 0) {
-        return 2; // NA
+        return $STATUS_NA;
     }
 
     $data = $command['data'] ?? [];
     if (! is_array($data)) {
-        return 2; // NA
+        return $STATUS_NA;
     }
 
     $running_flag = null;
-    foreach (['running', 'is_running', 'in_progress'] as $running_key) {
+    foreach ($RUNNING_FLAG_KEYS as $running_key) {
         if (! array_key_exists($running_key, $data)) {
             continue;
         }
@@ -373,24 +396,24 @@ $get_balance_status_code = static function (array $fs): int {
         }
     }
     if ($running_flag === true) {
-        return 1;
+        return $STATUS_RUNNING;
     }
 
     $status = strtolower(trim((string) ($data['status'] ?? '')));
-    if ($status === 'running') {
-        return 1;
+    if (in_array($status, $RUNNING_STATUS_TOKENS, true)) {
+        return $STATUS_RUNNING;
     }
-    if (in_array($status, ['error', 'failed', 'failure'], true)) {
-        return 3;
+    if (in_array($status, $ERROR_STATUS_TOKENS, true)) {
+        return $STATUS_ERROR;
     }
 
     if ($status !== '') {
-        return 0;
+        return $STATUS_OK;
     }
 
     $profiles = $data['profiles'] ?? [];
 
-    return is_array($profiles) && count($profiles) > 0 ? 0 : 2;
+    return is_array($profiles) && count($profiles) > 0 ? $STATUS_OK : $STATUS_NA;
 };
 
 $to_bool_flag = static function ($value): ?bool {
@@ -415,8 +438,8 @@ $to_bool_flag = static function ($value): ?bool {
     return null;
 };
 
-$extract_running_flag = static function (array $data) use ($to_bool_flag): ?bool {
-    foreach (['running', 'is_running', 'in_progress'] as $key) {
+$extract_running_flag = static function (array $data) use ($to_bool_flag, $RUNNING_FLAG_KEYS, $RUNNING_STATUS_TOKENS, $FINISHED_STATUS_TOKENS): ?bool {
+    foreach ($RUNNING_FLAG_KEYS as $key) {
         if (array_key_exists($key, $data)) {
             $flag = $to_bool_flag($data[$key]);
             if ($flag !== null) {
@@ -426,10 +449,10 @@ $extract_running_flag = static function (array $data) use ($to_bool_flag): ?bool
     }
 
     $status = strtolower(trim((string) ($data['status'] ?? '')));
-    if (in_array($status, ['running', 'in-progress', 'in_progress'], true)) {
+    if (in_array($status, $RUNNING_STATUS_TOKENS, true)) {
         return true;
     }
-    if (in_array($status, ['finished', 'done', 'idle', 'stopped', 'completed'], true)) {
+    if (in_array($status, $FINISHED_STATUS_TOKENS, true)) {
         return false;
     }
 
@@ -1031,16 +1054,17 @@ $ensure_state_index = static function (string $state_name, array $states): ?int 
 };
 
 $status_states = [
-    ['value' => 0, 'generic' => 0, 'graph' => 0, 'descr' => 'OK'],
-    ['value' => 1, 'generic' => 1, 'graph' => 0, 'descr' => 'Running'],
-    ['value' => 2, 'generic' => 3, 'graph' => 0, 'descr' => 'N/A'],
-    ['value' => 3, 'generic' => 2, 'graph' => 0, 'descr' => 'Error'],
-    ['value' => 4, 'generic' => 2, 'graph' => 0, 'descr' => 'Missing'],
+    ['value' => $STATUS_UNKNOWN, 'generic' => 3, 'graph' => 0, 'descr' => 'Unknown'],
+    ['value' => $STATUS_OK, 'generic' => 0, 'graph' => 0, 'descr' => 'OK'],
+    ['value' => $STATUS_RUNNING, 'generic' => 1, 'graph' => 0, 'descr' => 'Running'],
+    ['value' => $STATUS_NA, 'generic' => 3, 'graph' => 0, 'descr' => 'N/A'],
+    ['value' => $STATUS_ERROR, 'generic' => 2, 'graph' => 0, 'descr' => 'Error'],
+    ['value' => $STATUS_MISSING, 'generic' => 2, 'graph' => 0, 'descr' => 'Missing'],
 ];
 
-$io_state_index_id = $ensure_state_index('btrfsIoStatusState', $status_states);
-$scrub_state_index_id = $ensure_state_index('btrfsScrubStatusState', $status_states);
-$balance_state_index_id = $ensure_state_index('btrfsBalanceStatusState', $status_states);
+$io_state_index_id = $ensure_state_index($STATE_SENSOR_IO, $status_states);
+$scrub_state_index_id = $ensure_state_index($STATE_SENSOR_SCRUB, $status_states);
+$balance_state_index_id = $ensure_state_index($STATE_SENSOR_BALANCE, $status_states);
 
 $upsert_state_sensor = static function (array $device, string $sensor_index, string $sensor_type, string $sensor_descr, int $sensor_current, ?int $state_index_id, string $sensor_group): void {
     // Idempotent sensor upsert keyed by (device, class, poller_type, type, sensor_index).
@@ -1108,7 +1132,7 @@ $delete_state_sensor = static function (array $device, string $sensor_index, str
     );
 };
 
-$upsert_count_sensor = static function (array $device, string $sensor_index, string $sensor_type, string $sensor_descr, float $sensor_current, string $sensor_group): void {
+$upsert_count_sensor = static function (array $device, string $sensor_index, string $sensor_type, string $sensor_descr, float $sensor_current, string $sensor_group) use ($COUNT_SENSOR_WARN_LEVEL, $COUNT_SENSOR_ERROR_LEVEL): void {
     $sensor_id = dbFetchCell(
         'SELECT `sensor_id` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` = ? AND `sensor_index` = ?',
         [$device['device_id'], 'count', 'agent', $sensor_type, $sensor_index]
@@ -1125,8 +1149,8 @@ $upsert_count_sensor = static function (array $device, string $sensor_index, str
         'sensor_divisor' => 1,
         'sensor_multiplier' => 1,
         'sensor_current' => $sensor_current,
-        'sensor_limit_warn' => 5,
-        'sensor_limit' => 10,
+        'sensor_limit_warn' => $COUNT_SENSOR_WARN_LEVEL,
+        'sensor_limit' => $COUNT_SENSOR_ERROR_LEVEL,
         'group' => $sensor_group,
         'rrd_type' => 'GAUGE',
     ];
@@ -1148,8 +1172,8 @@ $upsert_count_sensor = static function (array $device, string $sensor_index, str
     ], ['sensor' => $sensor_current]);
 };
 
-$cleanup_obsolete_btrfs_count_sensors = static function (array $device, array $expected_sensor_indexes): void {
-    $sensor_types = ['btrfsIoErrors', 'btrfsIoErrorsSum'];
+$cleanup_obsolete_btrfs_count_sensors = static function (array $device, array $expected_sensor_indexes) use ($COUNT_SENSOR_TYPES): void {
+    $sensor_types = $COUNT_SENSOR_TYPES;
     $rows = dbFetchRows(
         'SELECT `sensor_id`, `sensor_type`, `sensor_index` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` IN (?,?)',
         [$device['device_id'], 'count', 'agent', $sensor_types[0], $sensor_types[1]]
@@ -1171,9 +1195,9 @@ $cleanup_obsolete_btrfs_count_sensors = static function (array $device, array $e
     }
 };
 
-$cleanup_legacy_btrfs_state_sensors = static function (array $device): void {
+$cleanup_legacy_btrfs_state_sensors = static function (array $device) use ($STATE_SENSOR_TYPES): void {
     // Cleanup legacy group='btrfs' sensors from older iterations.
-    $legacy_types = ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'];
+    $legacy_types = $STATE_SENSOR_TYPES;
 
     foreach ($legacy_types as $sensor_type) {
         dbDelete(
@@ -1189,8 +1213,8 @@ $cleanup_legacy_btrfs_state_sensors = static function (array $device): void {
     }
 };
 
-$cleanup_obsolete_btrfs_state_sensors = static function (array $device, array $expected_sensor_indexes): void {
-    $sensor_types = ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'];
+$cleanup_obsolete_btrfs_state_sensors = static function (array $device, array $expected_sensor_indexes) use ($STATE_SENSOR_TYPES): void {
+    $sensor_types = $STATE_SENSOR_TYPES;
     $rows = dbFetchRows(
         'SELECT `sensor_id`, `sensor_type`, `sensor_index` FROM `sensors` WHERE `device_id` = ? AND `sensor_class` = ? AND `poller_type` = ? AND `sensor_type` IN (?,?,?)',
         [$device['device_id'], 'state', 'agent', $sensor_types[0], $sensor_types[1], $sensor_types[2]]
@@ -1229,8 +1253,8 @@ $scrub_is_running_fs = [];
 $balance_is_running_fs = [];
 $filesystem_uuid = [];
 $filesystem_entries = [];
-$old_filesystem_uuid = $app->data['filesystem_uuid'] ?? [];
-if ((! is_array($old_filesystem_uuid) || count($old_filesystem_uuid) === 0) && is_array($app->data['filesystems'] ?? null)) {
+$old_filesystem_uuid = [];
+if (is_array($app->data['filesystems'] ?? null)) {
     foreach ($app->data['filesystems'] as $old_fs_name => $old_fs_entry) {
         if (! is_array($old_fs_entry)) {
             continue;
@@ -1243,8 +1267,8 @@ if ((! is_array($old_filesystem_uuid) || count($old_filesystem_uuid) === 0) && i
 }
 // Previous poll snapshot used to preserve per-device scrub counters when
 // current payload reports no_stats_available (common with partial RAID5/6 output).
-$old_scrub_status_devices = $app->data['scrub_status_devices'] ?? [];
-if ((! is_array($old_scrub_status_devices) || count($old_scrub_status_devices) === 0) && is_array($app->data['filesystems'] ?? null)) {
+$old_scrub_status_devices = [];
+if (is_array($app->data['filesystems'] ?? null)) {
     foreach ($app->data['filesystems'] as $old_fs_name => $old_fs_entry) {
         if (! is_array($old_fs_entry)) {
             continue;
@@ -1261,12 +1285,12 @@ $fs_rrd_key = [];
 $device_error_seen = $app->data['device_error_seen'] ?? [];
 $scrub_counter_state = [];
 $expected_sensor_indexes = [
-    'btrfsIoStatusState' => [],
-    'btrfsScrubStatusState' => [],
-    'btrfsBalanceStatusState' => [],
+    $STATE_SENSOR_IO => [],
+    $STATE_SENSOR_SCRUB => [],
+    $STATE_SENSOR_BALANCE => [],
 ];
 $expected_count_sensor_indexes = [
-    'btrfsIoErrors' => [],
+    $COUNT_SENSOR_IO_ERRORS => [],
 ];
 
 // Overview (sum across all filesystems)
@@ -1541,12 +1565,12 @@ foreach ($filesystems as $fs_name => $fs) {
         }
     }
 
-    $io_status_code = $has_device_data ? ($io_has_error ? 3 : 0) : 2;
-    $scrub_status_code = $has_scrub_data ? ($scrub_has_error ? 3 : ($scrub_is_running ? 1 : 0)) : 2;
+    $io_status_code = $has_device_data ? ($io_has_error ? $STATUS_ERROR : $STATUS_OK) : $STATUS_NA;
+    $scrub_status_code = $has_scrub_data ? ($scrub_has_error ? $STATUS_ERROR : ($scrub_is_running ? $STATUS_RUNNING : $STATUS_OK)) : $STATUS_NA;
     if ($fs_has_missing) {
         // Missing device should dominate IO state, but keep scrub state driven
         // by scrub output so scrub overview can still show running/error/ok.
-        $io_status_code = 4;
+        $io_status_code = $STATUS_MISSING;
     }
 
     $usage_totals = [
@@ -1587,7 +1611,7 @@ foreach ($filesystems as $fs_name => $fs) {
     $balance_status_text = trim((string) ($fs['commands']['balance_status']['data']['status'] ?? ''));
     $publish_balance_state = $balance_status_text !== '';
     $scrub_is_running_fs[$fs_name] = $scrub_is_running;
-    $balance_is_running_fs[$fs_name] = $balance_status_code === 1;
+    $balance_is_running_fs[$fs_name] = $balance_status_code === $STATUS_RUNNING;
     $fields['io_status_code'] = $io_status_code;
     $fields['scrub_status_code'] = $scrub_status_code;
     $fields['balance_status_code'] = $balance_status_code;
@@ -1595,53 +1619,53 @@ foreach ($filesystems as $fs_name => $fs) {
     $metrics[$fs_metric_prefix . 'scrub_status_code'] = $scrub_status_code;
     $metrics[$fs_metric_prefix . 'balance_status_code'] = $balance_status_code;
 
-    $app_has_data = $app_has_data || $io_status_code !== 2 || $scrub_status_code !== 2 || $balance_status_code !== 2;
-    $app_has_missing = $app_has_missing || $io_status_code === 4;
-    $app_has_running = $app_has_running || $scrub_status_code === 1 || $balance_status_code === 1;
-    $app_has_error = $app_has_error || $io_status_code === 3 || $scrub_status_code === 3 || $balance_status_code === 3 || $io_status_code === 4 || $scrub_status_code === 4 || $balance_status_code === 4;
-    $app_io_has_data = $app_io_has_data || $io_status_code !== 2;
-    $app_io_missing = $app_io_missing || $io_status_code === 4;
-    $app_io_has_error = $app_io_has_error || $io_status_code === 3 || $io_status_code === 4;
-    $app_scrub_has_data = $app_scrub_has_data || $scrub_status_code !== 2;
-    $app_scrub_has_error = $app_scrub_has_error || $scrub_status_code === 3;
-    $app_scrub_running = $app_scrub_running || $scrub_status_code === 1;
-    $app_balance_has_data = $app_balance_has_data || $balance_status_code !== 2;
-    $app_balance_has_error = $app_balance_has_error || $balance_status_code === 3;
-    $app_balance_running = $app_balance_running || $balance_status_code === 1;
+    $app_has_data = $app_has_data || $io_status_code !== $STATUS_NA || $scrub_status_code !== $STATUS_NA || $balance_status_code !== $STATUS_NA;
+    $app_has_missing = $app_has_missing || $io_status_code === $STATUS_MISSING;
+    $app_has_running = $app_has_running || $scrub_status_code === $STATUS_RUNNING || $balance_status_code === $STATUS_RUNNING;
+    $app_has_error = $app_has_error || $io_status_code === $STATUS_ERROR || $scrub_status_code === $STATUS_ERROR || $balance_status_code === $STATUS_ERROR || $io_status_code === $STATUS_MISSING || $scrub_status_code === $STATUS_MISSING || $balance_status_code === $STATUS_MISSING;
+    $app_io_has_data = $app_io_has_data || $io_status_code !== $STATUS_NA;
+    $app_io_missing = $app_io_missing || $io_status_code === $STATUS_MISSING;
+    $app_io_has_error = $app_io_has_error || $io_status_code === $STATUS_ERROR || $io_status_code === $STATUS_MISSING;
+    $app_scrub_has_data = $app_scrub_has_data || $scrub_status_code !== $STATUS_NA;
+    $app_scrub_has_error = $app_scrub_has_error || $scrub_status_code === $STATUS_ERROR;
+    $app_scrub_running = $app_scrub_running || $scrub_status_code === $STATUS_RUNNING;
+    $app_balance_has_data = $app_balance_has_data || $balance_status_code !== $STATUS_NA;
+    $app_balance_has_error = $app_balance_has_error || $balance_status_code === $STATUS_ERROR;
+    $app_balance_running = $app_balance_running || $balance_status_code === $STATUS_RUNNING;
 
     $upsert_state_sensor(
         $device,
         $fs_rrd_id . '.io',
-        'btrfsIoStatusState',
+        $STATE_SENSOR_IO,
         $fs_display_name . ' IO',
         $io_status_code,
         $io_state_index_id,
         'btrfs filesystems'
     );
-    $expected_sensor_indexes['btrfsIoStatusState'][(string) $fs_rrd_id . '.io'] = true;
+    $expected_sensor_indexes[$STATE_SENSOR_IO][(string) $fs_rrd_id . '.io'] = true;
     $upsert_state_sensor(
         $device,
         $fs_rrd_id . '.scrub',
-        'btrfsScrubStatusState',
+        $STATE_SENSOR_SCRUB,
         $fs_display_name . ' Scrub',
         $scrub_status_code,
         $scrub_state_index_id,
         'btrfs filesystems'
     );
-    $expected_sensor_indexes['btrfsScrubStatusState'][(string) $fs_rrd_id . '.scrub'] = true;
+    $expected_sensor_indexes[$STATE_SENSOR_SCRUB][(string) $fs_rrd_id . '.scrub'] = true;
     if ($publish_balance_state) {
         $upsert_state_sensor(
             $device,
             $fs_rrd_id . '.balance',
-            'btrfsBalanceStatusState',
+            $STATE_SENSOR_BALANCE,
             $fs_display_name . ' Balance',
             $balance_status_code,
             $balance_state_index_id,
             'btrfs filesystems'
         );
-        $expected_sensor_indexes['btrfsBalanceStatusState'][(string) $fs_rrd_id . '.balance'] = true;
+        $expected_sensor_indexes[$STATE_SENSOR_BALANCE][(string) $fs_rrd_id . '.balance'] = true;
     } else {
-        $delete_state_sensor($device, $fs_rrd_id . '.balance', 'btrfsBalanceStatusState');
+        $delete_state_sensor($device, $fs_rrd_id . '.balance', $STATE_SENSOR_BALANCE);
     }
 
     $filesystem_tables[$fs_name] = $fields;
@@ -1761,12 +1785,12 @@ foreach ($filesystems as $fs_name => $fs) {
         $upsert_count_sensor(
             $device,
             $fs_rrd_id . '.dev.' . $dev_id . '.io_errors',
-            'btrfsIoErrors',
+            $COUNT_SENSOR_IO_ERRORS,
             $fs_display_name . ' ' . $dev_path . ' IO Errors',
             (float) $io_errs,
             'btrfs device errors'
         );
-        $expected_count_sensor_indexes['btrfsIoErrors'][(string) $fs_rrd_id . '.dev.' . $dev_id . '.io_errors'] = true;
+        $expected_count_sensor_indexes[$COUNT_SENSOR_IO_ERRORS][(string) $fs_rrd_id . '.dev.' . $dev_id . '.io_errors'] = true;
 
         $dev_metric_prefix = $fs_metric_prefix . 'device_' . $dev_id . '_';
         foreach ($dev_fields as $field => $value) {
@@ -1780,7 +1804,7 @@ foreach ($filesystems as $fs_name => $fs) {
                 break;
             }
         }
-        $dev_io_status_code = count($dev_stats) > 0 ? ($dev_io_has_error ? 3 : 0) : 2;
+        $dev_io_status_code = count($dev_stats) > 0 ? ($dev_io_has_error ? $STATUS_ERROR : $STATUS_OK) : $STATUS_NA;
 
         $dev_scrub_has_error = false;
         foreach ($scrub_error_keys as $error_key) {
@@ -1789,10 +1813,10 @@ foreach ($filesystems as $fs_name => $fs) {
                 break;
             }
         }
-        $dev_scrub_is_running = strtolower((string) ($scrub_stats['status'] ?? '')) === 'running';
-        $dev_scrub_status_code = count($scrub_stats) > 0 ? ($dev_scrub_has_error ? 3 : ($dev_scrub_is_running ? 1 : 0)) : 2;
+        $dev_scrub_is_running = $extract_running_flag(is_array($scrub_stats) ? $scrub_stats : []) === true;
+        $dev_scrub_status_code = count($scrub_stats) > 0 ? ($dev_scrub_has_error ? $STATUS_ERROR : ($dev_scrub_is_running ? $STATUS_RUNNING : $STATUS_OK)) : $STATUS_NA;
         if ($dev_stats['missing'] ?? false) {
-            $dev_io_status_code = 4;
+            $dev_io_status_code = $STATUS_MISSING;
         }
 
         $app_io_errors_total += (float) ($dev_stats['corruption_errs'] ?? 0)
@@ -1811,23 +1835,23 @@ foreach ($filesystems as $fs_name => $fs) {
         $upsert_state_sensor(
             $device,
             $fs_rrd_id . '.dev.' . $dev_id . '.io',
-            'btrfsIoStatusState',
+            $STATE_SENSOR_IO,
             $fs_display_name . ' ' . $dev_path . ' IO',
             $dev_io_status_code,
             $io_state_index_id,
             'btrfs devices'
         );
-        $expected_sensor_indexes['btrfsIoStatusState'][(string) $fs_rrd_id . '.dev.' . $dev_id . '.io'] = true;
+        $expected_sensor_indexes[$STATE_SENSOR_IO][(string) $fs_rrd_id . '.dev.' . $dev_id . '.io'] = true;
         $upsert_state_sensor(
             $device,
             $fs_rrd_id . '.dev.' . $dev_id . '.scrub',
-            'btrfsScrubStatusState',
+            $STATE_SENSOR_SCRUB,
             $fs_display_name . ' ' . $dev_path . ' Scrub',
             $dev_scrub_status_code,
             $scrub_state_index_id,
             'btrfs devices'
         );
-        $expected_sensor_indexes['btrfsScrubStatusState'][(string) $fs_rrd_id . '.dev.' . $dev_id . '.scrub'] = true;
+        $expected_sensor_indexes[$STATE_SENSOR_SCRUB][(string) $fs_rrd_id . '.dev.' . $dev_id . '.scrub'] = true;
     }
 
     $filesystem_entries[$fs_name] = [
@@ -1854,27 +1878,19 @@ foreach ($filesystems as $fs_name => $fs) {
     $upsert_count_sensor(
         $device,
         $fs_rrd_id . '.io_errors',
-        'btrfsIoErrors',
+        $COUNT_SENSOR_IO_ERRORS,
         $fs_display_name . ' IO Errors',
         $fs_io_errors_sum,
         'btrfs filesystem errors'
     );
-    $expected_count_sensor_indexes['btrfsIoErrors'][(string) $fs_rrd_id . '.io_errors'] = true;
+    $expected_count_sensor_indexes[$COUNT_SENSOR_IO_ERRORS][(string) $fs_rrd_id . '.io_errors'] = true;
 }
 
 $cleanup_obsolete_btrfs_state_sensors($device, $expected_sensor_indexes);
 $cleanup_obsolete_btrfs_count_sensors($device, $expected_count_sensor_indexes);
 
 // check for added or removed filesystems
-$old_filesystems = $app->data['filesystem_names'] ?? null;
-if (! is_array($old_filesystems)) {
-    if (is_array($app->data['filesystems'] ?? null)) {
-        $first_old = reset($app->data['filesystems']);
-        $old_filesystems = is_array($first_old) ? array_keys($app->data['filesystems']) : $app->data['filesystems'];
-    } else {
-        $old_filesystems = [];
-    }
-}
+$old_filesystems = is_array($app->data['filesystems'] ?? null) ? array_keys($app->data['filesystems']) : [];
 $added_filesystems = array_diff($fs_names, $old_filesystems);
 $removed_filesystems = array_diff($old_filesystems, $fs_names);
 if (count($added_filesystems) > 0 || count($removed_filesystems) > 0) {
@@ -1884,16 +1900,16 @@ if (count($added_filesystems) > 0 || count($removed_filesystems) > 0) {
     Eventlog::log($log_message, $device['device_id'], 'application');
 }
 
-$app_status_code = $app_has_missing ? 4 : ($app_has_error ? 3 : ($app_has_running ? 1 : ($app_has_data ? 0 : 2)));
+$app_status_code = $app_has_missing ? $STATUS_MISSING : ($app_has_error ? $STATUS_ERROR : ($app_has_running ? $STATUS_RUNNING : ($app_has_data ? $STATUS_OK : $STATUS_NA)));
 $metrics['status_code'] = $app_status_code;
-$app_io_status_code = $app_io_missing ? 4 : ($app_io_has_error ? 3 : ($app_io_has_data ? 0 : 2));
-$app_scrub_status_code = $app_scrub_has_error ? 3 : ($app_scrub_running ? 1 : ($app_scrub_has_data ? 0 : 2));
-$app_balance_status_code = $app_balance_has_error ? 3 : ($app_balance_running ? 1 : ($app_balance_has_data ? 0 : 2));
+$app_io_status_code = $app_io_missing ? $STATUS_MISSING : ($app_io_has_error ? $STATUS_ERROR : ($app_io_has_data ? $STATUS_OK : $STATUS_NA));
+$app_scrub_status_code = $app_scrub_has_error ? $STATUS_ERROR : ($app_scrub_running ? $STATUS_RUNNING : ($app_scrub_has_data ? $STATUS_OK : $STATUS_NA));
+$app_balance_status_code = $app_balance_has_error ? $STATUS_ERROR : ($app_balance_running ? $STATUS_RUNNING : ($app_balance_has_data ? $STATUS_OK : $STATUS_NA));
 $app_status_text = match ($app_status_code) {
-    1 => 'Running',
-    2 => 'N/A',
-    3 => 'Error',
-    4 => 'Missing',
+    $STATUS_RUNNING => 'Running',
+    $STATUS_NA => 'N/A',
+    $STATUS_ERROR => 'Error',
+    $STATUS_MISSING => 'Missing',
     default => 'OK',
 };
 
