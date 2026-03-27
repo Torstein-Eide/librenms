@@ -39,7 +39,7 @@ foreach ($apps as $app_entry) {
 
     $app_filesystems = $app_entry->data['filesystems'] ?? [];
     $app_filesystem_meta = $app_entry->data['filesystem_meta'] ?? [];
-    foreach ($app_filesystems as $fs_name) {
+    foreach ($app_filesystems as $fs_name => $fs_entry) {
         $fs_value = trim((string) $fs_name);
         if ($fs_value === '') {
             continue;

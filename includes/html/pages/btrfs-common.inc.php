@@ -36,6 +36,7 @@ $btrfs_status_from_code = static function ($value): string {
     return match ($code) {
         0 => 'ok',
         1 => 'running',
+        -1 => 'na',
         3 => 'error',
         4 => 'missing',
         default => 'na',
