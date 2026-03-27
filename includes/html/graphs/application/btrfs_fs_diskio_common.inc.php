@@ -38,14 +38,14 @@ foreach ($device_map as $dev_id => $dev_path) {
         $backing = is_array($metadata['backing'] ?? null) ? $metadata['backing'] : [];
         $primary = is_array($metadata['primary'] ?? null) ? $metadata['primary'] : [];
 
-        $backing_devnode = trim((string) ($backing['devnode'] ?? ''));
+        $backing_devnode = trim((string) ($backing['backing_device_path'] ?? $backing['devnode'] ?? ''));
         if ($backing_devnode !== '') {
             $priority_candidates[] = $backing_devnode;
             $priority_candidates[] = ltrim((string) preg_replace('#^/dev/#', '', $backing_devnode), '/');
             $priority_candidates[] = basename($backing_devnode);
         }
 
-        $backing_name = trim((string) ($backing['name'] ?? ''));
+        $backing_name = trim((string) ($backing['backing_device_name'] ?? $backing['name'] ?? ''));
         if ($backing_name !== '') {
             $priority_candidates[] = $backing_name;
             $priority_candidates[] = '/dev/' . $backing_name;

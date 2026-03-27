@@ -6,7 +6,9 @@ use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\Polling\Modules\BtrfsPayloadParser;
 use LibreNMS\Polling\Modules\BtrfsRrdWriter;
 use LibreNMS\Polling\Modules\BtrfsSensorSync;
+use LibreNMS\Polling\Modules\BtrfsStatusAggregator;
 use LibreNMS\Polling\Modules\BtrfsStatusMapper;
+use Illuminate\Support\Facades\Log;
 
 // Poller responsibilities for btrfs app data:
 // - parse unix-agent JSON payload into stable table/metric structures
@@ -64,6 +66,7 @@ $parser = new BtrfsPayloadParser();
 $mapper = new BtrfsStatusMapper();
 $sensorSync = new BtrfsSensorSync($mapper);
 $rrdWriter = new BtrfsRrdWriter();
+$agg = new BtrfsStatusAggregator();
 
 // -----------------------------------------------------------------------------
 // Payload normalization - work directly with flat tables
@@ -123,19 +126,6 @@ unset($overview_totals['data_ratio'], $overview_totals['metadata_ratio']);
 
 // Per-filesystem app-level status rollups
 $fs_names = [];
-$app_has_data = false;
-$app_has_missing = false;
-$app_has_running = false;
-$app_has_error = false;
-$app_io_has_data = false;
-$app_io_missing = false;
-$app_io_has_error = false;
-$app_scrub_has_data = false;
-$app_scrub_has_error = false;
-$app_scrub_running = false;
-$app_balance_has_data = false;
-$app_balance_has_error = false;
-$app_balance_running = false;
 $app_io_errors_total = 0.0;
 $app_scrub_errors_total = 0.0;
 
@@ -178,7 +168,13 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
         'fs_bytes_used' => $fs_info['fs_bytes_used'],
     ];
 
-    $fs_rrd_id = $parser->normalizeId($fs_name);
+    $fs_entry_raw = $fs_list[$fs_uuid] ?? [];
+    if (! is_string($fs_entry_raw['rrd_key'] ?? null) || $fs_entry_raw['rrd_key'] === '') {
+        Log::warning("BTRFS poller: missing rrd_key in payload for filesystem $fs_name (UUID: $fs_uuid)");
+
+        continue;
+    }
+    $fs_rrd_id = $fs_entry_raw['rrd_key'];
     $overall = $parser->normalizeOverall($tables, $fs_uuid);
     $fields = [];
     foreach ($rrdWriter->fsSpaceDatasets as $ds => $key) {
@@ -255,7 +251,8 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
     $has_device_data = count($devices) > 0;
     $has_scrub_data = count($scrub_devices) > 0 || ! empty($fs_scrub_status);
 
-    $io_has_error = $rrdWriter->hasDeviceError($devices);
+    $io_has_error = $rrdWriter->hasAnyDeviceError($devices);
+
     $scrub_has_error = false;
     $scrub_running_flag = $parser->extractRunningFlag($fs_scrub_status);
     $scrub_is_running = $scrub_running_flag === true;
@@ -299,19 +296,9 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
     $metrics[$fs_metric_prefix . BtrfsRrdWriter::DS_BALANCE_STATUS] = $balance_status_code;
 
     // App-level status aggregation
-    $app_has_data = $app_has_data || $io_status_code !== BtrfsStatusMapper::STATUS_NA || $scrub_status_code !== BtrfsStatusMapper::STATUS_NA || $balance_status_code !== BtrfsStatusMapper::STATUS_NA;
-    $app_has_missing = $app_has_missing || $io_status_code === BtrfsStatusMapper::STATUS_MISSING;
-    $app_has_running = $app_has_running || $scrub_status_code === BtrfsStatusMapper::STATUS_RUNNING || $balance_status_code === BtrfsStatusMapper::STATUS_RUNNING;
-    $app_has_error = $app_has_error || $io_status_code === BtrfsStatusMapper::STATUS_ERROR || $scrub_status_code === BtrfsStatusMapper::STATUS_ERROR || $balance_status_code === BtrfsStatusMapper::STATUS_ERROR || $io_status_code === BtrfsStatusMapper::STATUS_MISSING || $scrub_status_code === BtrfsStatusMapper::STATUS_MISSING || $balance_status_code === BtrfsStatusMapper::STATUS_MISSING;
-    $app_io_has_data = $app_io_has_data || $io_status_code !== BtrfsStatusMapper::STATUS_NA;
-    $app_io_missing = $app_io_missing || $io_status_code === BtrfsStatusMapper::STATUS_MISSING;
-    $app_io_has_error = $app_io_has_error || $io_status_code === BtrfsStatusMapper::STATUS_ERROR || $io_status_code === BtrfsStatusMapper::STATUS_MISSING;
-    $app_scrub_has_data = $app_scrub_has_data || $scrub_status_code !== BtrfsStatusMapper::STATUS_NA;
-    $app_scrub_has_error = $app_scrub_has_error || $scrub_status_code === BtrfsStatusMapper::STATUS_ERROR;
-    $app_scrub_running = $app_scrub_running || $scrub_status_code === BtrfsStatusMapper::STATUS_RUNNING;
-    $app_balance_has_data = $app_balance_has_data || $balance_status_code !== BtrfsStatusMapper::STATUS_NA;
-    $app_balance_has_error = $app_balance_has_error || $balance_status_code === BtrfsStatusMapper::STATUS_ERROR;
-    $app_balance_running = $app_balance_running || $balance_status_code === BtrfsStatusMapper::STATUS_RUNNING;
+    $agg->addIoStatus($io_status_code);
+    $agg->addScrubStatus($scrub_status_code);
+    $agg->addBalanceStatus($balance_status_code);
 
     // Upsert filesystem state sensors
     $sensorSync->upsertStateSensor(
@@ -363,6 +350,16 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
     $device_tables = [];
     $device_metadata = [];
 
+    // Build backing device mapping
+    $backing_devices = $tables['backing_devices'] ?? [];
+    $dev_path_to_backing = [];
+    foreach ($backing_devices as $backing_path => $backing_info) {
+        if (! is_array($backing_info)) {
+            continue;
+        }
+        $dev_path_to_backing[$backing_path] = $backing_info;
+    }
+
     $all_dev_paths = array_unique(array_merge(
         array_keys($devices),
         array_keys($scrub_devices),
@@ -401,7 +398,10 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
         }
 
         $device_tables[$dev_id] = $rrdWriter->buildDeviceTableRow($dev_path, $device_numeric_id, $dev_stats, $usage_stats);
-        $device_metadata[$dev_id] = $sys_block_metadata[$dev_path] ?? [];
+        $device_metadata[$dev_id] = [
+            'backing' => $dev_path_to_backing[$dev_path] ?? null,
+            'sys_block' => $sys_block_metadata[$dev_path] ?? [],
+        ];
 
         $io_errs = $rrdWriter->sumDeviceErrors($dev_stats);
 
@@ -435,7 +435,10 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
         $dev_io_status_code = $mapper->getDevIoStatusCode(count($dev_stats) > 0, $dev_io_has_error, $dev_stats['missing'] ?? false);
         $dev_scrub_status_code = $mapper->getDevScrubStatusCode(count($scrub_stats) > 0, $dev_scrub_has_error, $dev_scrub_is_running);
 
-        $app_io_errors_total += $rrdWriter->sumDeviceErrors($dev_stats);
+        $device_tables[$dev_id]['io_status_code'] = $dev_io_status_code;
+        $device_tables[$dev_id]['scrub_status_code'] = $dev_scrub_status_code;
+
+        $app_io_errors_total += $io_errs;
         $app_scrub_errors_total += $rrdWriter->sumScrubErrors($scrub_stats);
 
         $sensorSync->upsertStateSensor(
@@ -501,6 +504,13 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
 $sensorSync->cleanupObsoleteStateSensors($device, $expected_sensor_indexes);
 $sensorSync->cleanupObsoleteCountSensors($device, $expected_count_sensor_indexes);
 
+// Drop device_error_seen entries for filesystems that are no longer present
+foreach (array_keys($device_error_seen) as $seen_fs) {
+    if (! in_array($seen_fs, $fs_names, true)) {
+        unset($device_error_seen[$seen_fs]);
+    }
+}
+
 // Filesystem change events
 $old_filesystems = is_array($app->data['filesystems'] ?? null) ? array_keys($app->data['filesystems']) : [];
 $added_filesystems = array_diff($fs_names, $old_filesystems);
@@ -513,11 +523,11 @@ if (count($added_filesystems) > 0 || count($removed_filesystems) > 0) {
 }
 
 // App-level status derivation
-$app_status_code = $mapper->deriveAppStatusCode($app_has_missing, $app_has_error, $app_has_running, $app_has_data);
+$app_status_code = $mapper->deriveAppStatusCode($agg->hasMissing(), $agg->hasError(), $agg->hasRunning(), $agg->hasData());
 $metrics['status_code'] = $app_status_code;
-$app_io_status_code = $app_io_missing ? BtrfsStatusMapper::STATUS_MISSING : ($app_io_has_error ? BtrfsStatusMapper::STATUS_ERROR : ($app_io_has_data ? BtrfsStatusMapper::STATUS_OK : BtrfsStatusMapper::STATUS_NA));
-$app_scrub_status_code = $app_scrub_has_error ? BtrfsStatusMapper::STATUS_ERROR : ($app_scrub_running ? BtrfsStatusMapper::STATUS_RUNNING : ($app_scrub_has_data ? BtrfsStatusMapper::STATUS_OK : BtrfsStatusMapper::STATUS_NA));
-$app_balance_status_code = $app_balance_has_error ? BtrfsStatusMapper::STATUS_ERROR : ($app_balance_running ? BtrfsStatusMapper::STATUS_RUNNING : ($app_balance_has_data ? BtrfsStatusMapper::STATUS_OK : BtrfsStatusMapper::STATUS_NA));
+$app_io_status_code = $agg->ioMissing() ? BtrfsStatusMapper::STATUS_MISSING : ($agg->ioHasError() ? BtrfsStatusMapper::STATUS_ERROR : ($agg->ioHasData() ? BtrfsStatusMapper::STATUS_OK : BtrfsStatusMapper::STATUS_NA));
+$app_scrub_status_code = $agg->scrubHasError() ? BtrfsStatusMapper::STATUS_ERROR : ($agg->scrubRunning() ? BtrfsStatusMapper::STATUS_RUNNING : ($agg->scrubHasData() ? BtrfsStatusMapper::STATUS_OK : -1));
+$app_balance_status_code = $agg->balanceHasError() ? BtrfsStatusMapper::STATUS_ERROR : ($agg->balanceRunning() ? BtrfsStatusMapper::STATUS_RUNNING : ($agg->balanceHasData() ? BtrfsStatusMapper::STATUS_OK : -1));
 $app_status_text = $mapper->getStatusText($app_status_code);
 
 // Persist app data
