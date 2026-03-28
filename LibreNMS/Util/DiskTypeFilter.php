@@ -62,8 +62,8 @@ final class DiskTypeFilter
             return ['view' => 'logical', 'subtype' => 'partitions'];
         }
         // - Linux physical drive families: sd*, hd*, vd*, xvd* (covers most SCSI/SATA, IDE, and virtio block devices)
-        // - BSD physical drive patterns: da*, wd*, ad* (covers most SCSI/SATA and IDE devices on BSD systems)
-        if (preg_match('/^((x?vd|sd|hd)[a-z]+|(da|ad|ada|wd)\d+)$/i', $diskName)) {
+        // - BSD physical drive patterns: da*, ad* (covers most SCSI/SATA and IDE devices on BSD systems)
+        if (preg_match('/^((x?vd|sd|hd)[a-z]+|(da|ad|ada)\d+)$/i', $diskName)) {
             return ['view' => 'physical', 'subtype' => 'sd_family'];
         }
         // NVMe physical devices: nvme0n1, nvme1n1, etc.
