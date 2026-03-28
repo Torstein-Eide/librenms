@@ -8,10 +8,10 @@ namespace LibreNMS\Polling\Modules;
  * Status code contract:
  *   0 = OK (healthy)
  *   1 = Running (normal transient state)
+ *  -1 = N/A (not running, no errors)
  *   2 = N/A (no data available)
  *   3 = Error (problem detected)
  *   4 = Missing (device absent)
- *  -1 = Unknown
  *
  * LibreNMS generic mapping:
  *   generic 0 = OK
@@ -30,12 +30,12 @@ class BtrfsStatusMapper
 
     public function getIoStatusCode(bool $has_device_data, bool $has_error, bool $has_missing): int
     {
-        if ($has_missing) {
-            return self::STATUS_MISSING;
-        }
-
         if (! $has_device_data) {
             return self::STATUS_NA;
+        }
+
+        if ($has_missing) {
+            return self::STATUS_MISSING;
         }
 
         return $has_error ? self::STATUS_ERROR : self::STATUS_OK;
@@ -139,8 +139,9 @@ class BtrfsStatusMapper
             return self::STATUS_RUNNING;
         }
 
-        if (! empty($balance_status['message'])) {
-            return self::STATUS_OK;
+        $message = $balance_status['message'] ?? '';
+        if ($message !== '' && ! str_contains(strtolower($message), 'no balance found')) {
+            return self::STATUS_ERROR;
         }
 
         return self::STATUS_NA;
@@ -152,6 +153,7 @@ class BtrfsStatusMapper
             ['value' => self::STATUS_UNKNOWN, 'generic' => 3, 'graph' => 0, 'descr' => 'Unknown'],
             ['value' => self::STATUS_OK, 'generic' => 0, 'graph' => 0, 'descr' => 'OK'],
             ['value' => self::STATUS_RUNNING, 'generic' => 1, 'graph' => 0, 'descr' => 'Running'],
+            ['value' => -1, 'generic' => 3, 'graph' => 0, 'descr' => 'N/A'],
             ['value' => self::STATUS_NA, 'generic' => 3, 'graph' => 0, 'descr' => 'N/A'],
             ['value' => self::STATUS_ERROR, 'generic' => 2, 'graph' => 0, 'descr' => 'Error'],
             ['value' => self::STATUS_MISSING, 'generic' => 2, 'graph' => 0, 'descr' => 'Missing'],

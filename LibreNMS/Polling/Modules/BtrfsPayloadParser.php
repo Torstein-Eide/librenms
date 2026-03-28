@@ -182,10 +182,11 @@ class BtrfsPayloadParser
             $row['metadata_bytes'] = (float) ($dev['metadata'] ?? 0);
             $row['system_bytes'] = (float) ($dev['system'] ?? 0);
 
-            if (is_array($dev['raid_profiles'] ?? null)) {
-                foreach ($dev['raid_profiles'] as $pk => $pv) {
-                    if (is_string($pk) && is_numeric($pv)) {
-                        $row['type_values'][$pk] = $pv;
+            $dev_profiles = $dev['profiles'] ?? $dev['raid_profiles'] ?? null;
+            if (is_array($dev_profiles)) {
+                foreach ($dev_profiles as $profile_entry) {
+                    if (is_array($profile_entry) && is_string($profile_entry['profile'] ?? null) && is_numeric($profile_entry['bytes'] ?? null)) {
+                        $row['type_values'][$profile_entry['profile']] = $profile_entry['bytes'];
                     }
                 }
             }
