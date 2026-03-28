@@ -1,4 +1,23 @@
 <?php
+/*
+ * Disk I/O Health Page - LibreNMS Extension
+ *
+ * This page displays device disk I/O monitoring data with categorized views for physical and logical drives.
+ *
+ * Important Notes:
+ * 1. Disk I/O filters are only applied for known disks
+ * 2. For non-classifed disk, will be defined as ['view' => 'physical', 'subtype' => 'other']
+ * 3. This approach ensures cross-platform compatibility and proper display of disk I/O data
+ * 4. Filter error handling: Drive is silently skipped if classification matching fails
+ */
+/**
+ * LibreNMS
+ *
+ *   This file is part of LibreNMS.
+ *
+ * @copyright  (C) LibreNMS
+ * @copyright  (C) 2026 LibreNMS Contributors
+ */
 
 $diskioViews = [
     'physical' => 'Physical Drives',
@@ -113,9 +132,9 @@ foreach (dbFetchRows('SELECT * FROM `ucd_diskio` WHERE device_id = ? ORDER BY di
     }
 
     if (is_int($row / 2)) {
-        $row_colour = \App\Facades\LibrenmsConfig::get('list_colour.even');
+        $row_colour = \LibreNMS\Config::get('list_colour.even');
     } else {
-        $row_colour = \App\Facades\LibrenmsConfig::get('list_colour.odd');
+        $row_colour = \LibreNMS\Config::get('list_colour.odd');
     }
 
     $fs_url = 'device/device=' . $device['device_id'] . '/tab=health/metric=diskio/';
@@ -126,12 +145,8 @@ foreach (dbFetchRows('SELECT * FROM `ucd_diskio` WHERE device_id = ? ORDER BY di
         }
     }
 
-    $graph_array_zoom['id'] = $drive['diskio_id'];
-    $graph_array_zoom['type'] = 'diskio_ops';
-    $graph_array_zoom['width'] = '400';
-    $graph_array_zoom['height'] = '125';
-    $graph_array_zoom['from'] = \App\Facades\LibrenmsConfig::get('time.twoday');
-    $graph_array_zoom['to'] = \App\Facades\LibrenmsConfig::get('time.now');
+    $graph_array_zoom['from'] = \LibreNMS\Config::get('time.twoday');
+    $graph_array_zoom['to'] = \LibreNMS\Config::get('time.now');
 
     $overlib_link = \LibreNMS\Util\Url::overlibLink($fs_url, $drive['diskio_descr'], \LibreNMS\Util\Url::graphTag($graph_array_zoom));
 
