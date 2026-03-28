@@ -52,7 +52,7 @@ class DiskTypeFilterTest extends TestCase
     {
         // Physical drives (other category)
         $this->assertEquals(
-            ['view' => 'physical', 'subtype' => 'other'],
+            ['view' => 'physical', 'subtype' => 'sd_family'],
             DiskTypeFilter::classify('da0')
         );
         $this->assertEquals(
@@ -60,7 +60,7 @@ class DiskTypeFilterTest extends TestCase
             DiskTypeFilter::classify('wd0')
         );
         $this->assertEquals(
-            ['view' => 'physical', 'subtype' => 'other'],
+            ['view' => 'physical', 'subtype' => 'sd_family'],
             DiskTypeFilter::classify('ad0')
         );
 
