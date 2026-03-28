@@ -58,9 +58,7 @@ if (empty($name)) {
     $message = 'Not enough group members';
 } else {
     if (is_numeric($group_id) && $group_id > 0) {
-        dbUpdate([
-            'transport_group_name' => $name,
-        ], 'alert_transport_groups', '`transport_group_id`=?', [$group_id]);
+        AlertTransportGroup::where('transport_group_id', $group_id)->update(['transport_group_name' => $name]);
     } else {
         // Insert into db
         $group_id = dbInsert([
@@ -71,7 +69,7 @@ if (empty($name)) {
     if (is_numeric($group_id) && $group_id > 0) {
         $db_members = AlertTransportGroup::find($group_id)
             ->transports()
-            ->pluck('transport_id')
+            ->pluck('alert_transports.transport_id')
             ->all();
 
         // Compare arrays to get added and removed transports
@@ -92,7 +90,7 @@ if (empty($name)) {
 
         // Remove old transport group members
         if (! empty($remove)) {
-            dbDelete('transport_group_transport', 'transport_group_id=? AND `transport_id` IN ' . dbGenPlaceholders(count($remove)), array_merge([$group_id], $remove));
+            \App\Models\TransportGroupTransport::where('transport_group_id', $group_id)->whereIn('transport_id', $remove)->delete();
         }
         $message = 'Updated alert transport group';
     } else {
