@@ -244,7 +244,6 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
     $balance_status_code = $mapper->getBalanceStatusCodeFromFlat($fs_balance_status);
     $publish_balance_state = ! empty($fs_balance_status['is_running']);
 
-    $sys_block_metadata = [];
     $fs_has_missing = $parser->filesystemHasMissingDevice($tables, $fs_uuid);
 
     // Status computation
@@ -400,7 +399,7 @@ foreach ($fs_by_mountpoint as $fs_name => $fs_uuid) {
         $device_tables[$dev_id] = $rrdWriter->buildDeviceTableRow($dev_path, $device_numeric_id, $dev_stats, $usage_stats);
         $device_metadata[$dev_id] = [
             'backing' => $dev_path_to_backing[$dev_path] ?? null,
-            'sys_block' => $sys_block_metadata[$dev_path] ?? [],
+            'sys_block' => [],
         ];
 
         $io_errs = $rrdWriter->sumDeviceErrors($dev_stats);
@@ -525,9 +524,6 @@ if (count($added_filesystems) > 0 || count($removed_filesystems) > 0) {
 // App-level status derivation
 $app_status_code = $mapper->deriveAppStatusCode($agg->hasMissing(), $agg->hasError(), $agg->hasRunning(), $agg->hasData());
 $metrics['status_code'] = $app_status_code;
-$app_io_status_code = $agg->ioMissing() ? BtrfsStatusMapper::STATUS_MISSING : ($agg->ioHasError() ? BtrfsStatusMapper::STATUS_ERROR : ($agg->ioHasData() ? BtrfsStatusMapper::STATUS_OK : BtrfsStatusMapper::STATUS_NA));
-$app_scrub_status_code = $agg->scrubHasError() ? BtrfsStatusMapper::STATUS_ERROR : ($agg->scrubRunning() ? BtrfsStatusMapper::STATUS_RUNNING : ($agg->scrubHasData() ? BtrfsStatusMapper::STATUS_OK : -1));
-$app_balance_status_code = $agg->balanceHasError() ? BtrfsStatusMapper::STATUS_ERROR : ($agg->balanceRunning() ? BtrfsStatusMapper::STATUS_RUNNING : ($agg->balanceHasData() ? BtrfsStatusMapper::STATUS_OK : -1));
 $app_status_text = $mapper->getStatusText($app_status_code);
 
 // Persist app data
