@@ -57,11 +57,13 @@ final class DiskTypeFilter
             || preg_match('/^nvme\d+n\d+p\d+$/i', $diskName)
             || preg_match('/^mmcblk\d+p\d+$/i', $diskName)
             // Unix/FreeBSD/OpenBSD/NetBSD: da0p1, da0s1a, wd0d, ad0s1e, etc.
-            || preg_match('/^(da|wd|ad|cd|fd|md|gm|vn)\d+[sp]\d+/i', $diskName)) {
+            || preg_match('/^(da|wd|ad|cd|fd|md|gm|vn)\d+[sp]\d+/i', $diskName))
+            {
             return ['view' => 'logical', 'subtype' => 'partitions'];
         }
-        // ## Linux physical drive families: sd*, hd*, vd*, xvd* (covers most SCSI/SATA, IDE, and virtio block devices)
-        if (preg_match('/^(sd[a-z]+|hd[a-z]+|vd[a-z]+|xvd[a-z]+)$/i', $diskName)) {
+        // - Linux physical drive families: sd*, hd*, vd*, xvd* (covers most SCSI/SATA, IDE, and virtio block devices)
+        // - BSD physical drive patterns: da*, wd*, ad* (covers most SCSI/SATA and IDE devices on BSD systems)
+        if (preg_match('/^((x?vd|sd|hd)[a-z]+|(da|ad|ada|wd)\d+)$/i', $diskName)) {
             return ['view' => 'physical', 'subtype' => 'sd_family'];
         }
         // NVMe physical devices: nvme0n1, nvme1n1, etc.
@@ -73,10 +75,11 @@ final class DiskTypeFilter
             return ['view' => 'physical', 'subtype' => 'mmcblk'];
         }
         // ## Unix/FreeBSD/OpenBSD/NetBSD physical drives, nummber is whole disk.
-        // mostly legacy patterns but can still be found in use: da0, wd0, ad0, cd0, fd0, md0, gm0, vn0, etc.
-        if (preg_match('/^(da|wd|ad|cd|fd|md|gm|vn)\d+/i', $diskName)) {
-            return ['view' => 'physical', 'subtype' => 'other'];
-        }
+        // mostly legacy patterns but can still be found in use: cd0, fd0, md0, gm0, vn0, etc.
+        // no need to do since the default case will catch these and classify as physical/other, but leaving here for clarity and potential future subtype classification if desired.
+        // if (preg_match('/^(cd|fd|md|gm|vn)\d+/i', $diskName)) {
+        //     return ['view' => 'physical', 'subtype' => 'other'];
+        // }
         // default classification for anything that doesn't match above patterns
         return ['view' => 'physical', 'subtype' => 'other'];
     }
