@@ -25,7 +25,7 @@ $diskioViews = [
     'all' => 'All Drives',
 ];
 
-$selection = \LibreNMS\Util\DiskIoFilter::normalizeSelection($vars['diskio_view'] ?? null, $vars['diskio_subtype'] ?? null);
+$selection = \LibreNMS\Util\DiskTypeFilter::normalizeSelection($vars['diskio_view'] ?? null, $vars['diskio_subtype'] ?? null);
 $selectedDiskioView = $selection['view'];
 $selectedDiskioSubtype = $selection['subtype'];
 
@@ -126,8 +126,8 @@ echo '</div>';
 $row = 1;
 
 foreach (dbFetchRows('SELECT * FROM `ucd_diskio` WHERE device_id = ? ORDER BY diskio_descr', [$device['device_id']]) as $drive) {
-    $driveType = \LibreNMS\Util\DiskIoFilter::classify($drive['diskio_descr']);
-    if (! \LibreNMS\Util\DiskIoFilter::matches($driveType, $selectedDiskioView, $selectedDiskioSubtype)) {
+    $driveType = \LibreNMS\Util\DiskTypeFilter::classify($drive['diskio_descr']);
+    if (! \LibreNMS\Util\DiskTypeFilter::matches($driveType, $selectedDiskioView, $selectedDiskioSubtype)) {
         continue;
     }
 

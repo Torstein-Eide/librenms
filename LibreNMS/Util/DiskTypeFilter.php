@@ -7,7 +7,7 @@
  */
 namespace LibreNMS\Util;
 
-final class DiskIoFilter
+final class DiskTypeFilter
 {
     public static function normalizeSelection(?string $view, ?string $subtype): array
     {
