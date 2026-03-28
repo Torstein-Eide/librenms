@@ -125,7 +125,7 @@ class BtrfsRrdWriter extends AppRrdWriter
 
     public function writeTypeRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, string $type_id, float $value, array $tags = []): void
     {
-        $this->write($device, $app_name, $app_id, $fs_rrd_id . '_type_' . $type_id, ['value' => $value], array_merge($tags, ['rrd_def' => $this->dynamicTypeRrdDef]));
+        $this->write($device, $app_name, $app_id, $fs_rrd_id . '-type_' . $type_id, ['value' => $value], array_merge($tags, ['rrd_def' => $this->dynamicTypeRrdDef]));
     }
 
     public function writeDevTypeRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, string $dev_id, string $type_id, float $value, array $tags = []): void
@@ -146,6 +146,17 @@ class BtrfsRrdWriter extends AppRrdWriter
     public function hasDeviceError(array $dev_stats): bool
     {
         return $this->hasErrors($dev_stats, $this->ioErrorKeys);
+    }
+
+    public function hasAnyDeviceError(array $devices): bool
+    {
+        foreach ($devices as $dev) {
+            if ($this->hasErrors($dev, $this->ioErrorKeys)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function hasScrubError(array $scrub_stats): bool
