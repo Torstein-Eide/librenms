@@ -204,6 +204,10 @@ function format_metric_value($value, string $metric): string
         return '';
     }
 
+    if (is_bool($value)) {
+        return $value ? 'true' : 'false';
+    }
+
     if (str_contains($metric, 'ratio')) {
         return number_format((float) $value, 2);
     }
