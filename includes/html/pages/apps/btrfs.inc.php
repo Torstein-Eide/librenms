@@ -7,7 +7,7 @@ use LibreNMS\Util\Url;
 require_once __DIR__ . '/../btrfs-common.inc.php';
 
 use function LibreNMS\Plugins\Btrfs\combine_state_code;
-use function LibreNMS\Plugins\Btrfs\format_metric;
+use function LibreNMS\Plugins\Btrfs\format_metric_value;
 use function LibreNMS\Plugins\Btrfs\scrub_progress_text_from_status;
 use function LibreNMS\Plugins\Btrfs\status_badge;
 use function LibreNMS\Plugins\Btrfs\status_from_code;
@@ -268,9 +268,9 @@ foreach ($apps as $app) {
         echo '<td>' . htmlspecialchars($scrubProgressText) . '</td>';
         echo '<td>' . htmlspecialchars(number_format($totalErrors)) . '</td>';
         echo '<td>' . htmlspecialchars($usedPercentText) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric($fsData['used'] ?? null, 'used')) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric($fsData['free_estimated'] ?? null, 'free_estimated')) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric($fsData['device_size'] ?? null, 'device_size')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric_value($fsData['used'] ?? null, 'used')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric_value($fsData['free_estimated'] ?? null, 'free_estimated')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric_value($fsData['device_size'] ?? null, 'device_size')) . '</td>';
         echo '<td>' . (($fsData['has_missing'] ?? false) ? '<span class="label label-danger">Yes</span>' : '<span class="label label-default">No</span>') . '</td>';
         echo '<td>' . number_format(count($fsDevices)) . '</td>';
         echo '<td>' . generate_link(Url::lazyGraphTag($opsGraph), $fsDetailLink) . '</td>';
@@ -345,8 +345,8 @@ foreach ($apps as $app) {
             'app' => 'btrfs',
             'fs' => $fs,
         ]);
-        $usedText = format_metric($fsData['used'] ?? null, 'used');
-        $totalText = format_metric($fsData['device_size'] ?? null, 'device_size');
+        $usedText = format_metric_value($fsData['used'] ?? null, 'used');
+        $totalText = format_metric_value($fsData['device_size'] ?? null, 'device_size');
         $usedPercentText = used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
 
         $overallCode = combine_state_code([

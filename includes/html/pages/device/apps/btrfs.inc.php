@@ -14,7 +14,6 @@ use function LibreNMS\Plugins\Btrfs\combine_state_code;
 use function LibreNMS\Plugins\Btrfs\find_diskio;
 use function LibreNMS\Plugins\Btrfs\flatten_assoc_rows;
 use function LibreNMS\Plugins\Btrfs\format_display_name;
-use function LibreNMS\Plugins\Btrfs\format_metric;
 use function LibreNMS\Plugins\Btrfs\format_metric_value;
 use function LibreNMS\Plugins\Btrfs\initialize_data;
 use function LibreNMS\Plugins\Btrfs\load_state_sensors;
@@ -242,9 +241,9 @@ function btrfs_renderOverviewPage(App\Models\Application $app, array $device, ar
         echo '<td>' . htmlspecialchars($scrub_progress_text) . '</td>';
         echo '<td>' . htmlspecialchars(number_format($total_errors)) . '</td>';
         echo '<td>' . htmlspecialchars($used_pct_text) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric($fs_data['used'] ?? null, 'used')) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric($fs_data['free_estimated'] ?? null, 'free_estimated')) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric($fs_data['device_size'] ?? null, 'device_size')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric_value($fs_data['used'] ?? null, 'used')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric_value($fs_data['free_estimated'] ?? null, 'free_estimated')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric_value($fs_data['device_size'] ?? null, 'device_size')) . '</td>';
         echo '<td>' . (($fs_data['has_missing'] ?? false) ? '<span class="label label-danger">Yes</span>' : '<span class="label label-default">No</span>') . '</td>';
         echo '<td>' . number_format(count($fs_devices)) . '</td>';
         echo '<td>' . generate_link(LibreNMS\Util\Url::lazyGraphTag($ops_graph), ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'], ['fs' => $fs]) . '</td>';
@@ -290,8 +289,8 @@ function btrfs_renderOverviewPageGraphs(App\Models\Application $app, array $devi
 
         $used_value = (float) ($fs_data['used'] ?? 0);
         $size_value = (float) ($fs_data['device_size'] ?? 0);
-        $used_text = format_metric($fs_data['used'] ?? null, 'used');
-        $total_text = format_metric($fs_data['device_size'] ?? null, 'device_size');
+        $used_text = format_metric_value($fs_data['used'] ?? null, 'used');
+        $total_text = format_metric_value($fs_data['device_size'] ?? null, 'device_size');
         $used_percent_text = $size_value > 0
             ? rtrim(rtrim(number_format(($used_value / $size_value) * 100, 2, '.', ''), '0'), '.') . '%'
             : 'N/A';
@@ -609,7 +608,7 @@ function btrfs_renderFsPanelsRow1(
             echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover btrfs-sticky-first">';
             echo '<thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>';
             foreach ($overview_rows as $row) {
-                echo '<tr><td>' . htmlspecialchars(format_metric($row['key'], 'metric')) . '</td>';
+                echo '<tr><td>' . htmlspecialchars(format_metric_value($row['key'], 'metric')) . '</td>';
                 echo '<td>' . htmlspecialchars(format_metric_value($row['value'], $row['key'])) . '</td></tr>';
             }
             echo '</tbody></table></div>';
@@ -778,10 +777,10 @@ function btrfs_renderFsPanelsRow2(
                 ? generate_link(htmlspecialchars((string) $dev_path), $link_array, ['fs' => $selected_fs, 'dev' => $dev_id])
                 : htmlspecialchars((string) $dev_path);
             echo '<tr><td>' . $link . '</td>';
-            echo '<td>' . htmlspecialchars(format_metric($usage['size'] ?? null, 'device_size')) . '</td>';
-            echo '<td>' . htmlspecialchars(format_metric($usage['slack'] ?? null, 'device_slack')) . '</td>';
+            echo '<td>' . htmlspecialchars(format_metric_value($usage['size'] ?? null, 'device_size')) . '</td>';
+            echo '<td>' . htmlspecialchars(format_metric_value($usage['slack'] ?? null, 'device_slack')) . '</td>';
             foreach ($all_raid_profiles as $profile) {
-                echo '<td>' . htmlspecialchars(format_metric($raid_profiles[$profile] ?? null, 'bytes')) . '</td>';
+                echo '<td>' . htmlspecialchars(format_metric_value($raid_profiles[$profile] ?? null, 'bytes')) . '</td>';
             }
             echo '</tr>';
         }
@@ -824,7 +823,7 @@ function btrfs_renderFsPanelsRow2(
             $errors = $metrics['errors'] ?? [];
             echo '<tr><td>' . $link . '</td><td>' . status_badge($dev_overall_state) . '</td>';
             foreach ($stats_split['device_columns'] as $col) {
-                echo '<td>' . htmlspecialchars(format_metric($errors[$col] ?? null, $col)) . '</td>';
+                echo '<td>' . htmlspecialchars(format_metric_value($errors[$col] ?? null, $col)) . '</td>';
             }
             echo '</tr>';
         }
@@ -867,7 +866,7 @@ function btrfs_renderScrubPerDevice(
             foreach ($scrub_split['device_columns'] as $column) {
                 if (! in_array($column, $hidden_columns, true)) {
                     $value = $metrics[$column] ?? '';
-                    echo '<td>' . htmlspecialchars(format_metric($value, $column)) . '</td>';
+                    echo '<td>' . htmlspecialchars(format_metric_value($value, $column)) . '</td>';
                 }
             }
             echo '</tr>';
@@ -898,7 +897,7 @@ function btrfs_renderDevGraphs(
         'btrfs_dev_scrub_errors_derive' => 'Scrub Errors (Rate)',
     ];
     btrfs_renderAppGraphs($app, $dev_graphs, $selected_fs, $selected_dev, $vars);
-    $selected_diskio = btrfs_findDiskio($device_id, $device_tables, $selected_fs, $selected_dev, $device_metadata);
+    $selected_diskio = find_diskio($device_id, $device_tables, $selected_fs, $selected_dev, $device_metadata);
     if ($selected_diskio !== null) {
         render_diskio_graphs($selected_diskio);
     }
@@ -957,94 +956,6 @@ function btrfs_renderAppGraphs(
         echo '</div></div>';
         echo '</div>';
     }
-}
-
-function btrfs_findDiskio(
-    int $device_id,
-    array $device_tables,
-    ?string $selected_fs,
-    ?string $selected_dev,
-    array $device_metadata
-): ?array {
-    if (! isset($selected_fs, $selected_dev)) {
-        return null;
-    }
-
-    $selected_dev_path = trim((string) ($device_tables[$selected_dev]['path'] ?? ''));
-    if ($selected_dev_path === '') {
-        return null;
-    }
-
-    $diskio_candidates = [];
-    $preferred_diskio_candidates = [];
-
-    $diskio_candidates[] = $selected_dev_path;
-    $without_dev_prefix = preg_replace('#^/dev/#', '', $selected_dev_path);
-    if ($without_dev_prefix !== '') {
-        $diskio_candidates[] = $without_dev_prefix;
-    }
-    $diskio_candidates[] = basename($selected_dev_path);
-
-    $selected_dev_metadata = $device_metadata[$selected_dev] ?? [];
-    if (is_array($selected_dev_metadata)) {
-        $primary_meta = $selected_dev_metadata['primary'] ?? [];
-        $backing_meta = $selected_dev_metadata['backing'] ?? [];
-
-        $primary_devnode = trim((string) ($primary_meta['devnode'] ?? ''));
-        if ($primary_devnode !== '') {
-            $diskio_candidates[] = $primary_devnode;
-            $diskio_candidates[] = ltrim(preg_replace('#^/dev/#', '', $primary_devnode), '/');
-            $diskio_candidates[] = basename($primary_devnode);
-        }
-
-        $primary_name = trim((string) ($primary_meta['name'] ?? ''));
-        if ($primary_name !== '') {
-            $diskio_candidates[] = $primary_name;
-            $diskio_candidates[] = '/dev/' . $primary_name;
-        }
-
-        $backing_name = trim((string) ($backing_meta['name'] ?? ''));
-        if ($backing_name !== '') {
-            $preferred_diskio_candidates[] = $backing_name;
-            $preferred_diskio_candidates[] = '/dev/' . $backing_name;
-            $diskio_candidates[] = $backing_name;
-            $diskio_candidates[] = '/dev/' . $backing_name;
-        }
-
-        $backing_devnode = trim((string) ($backing_meta['devnode'] ?? ''));
-        if ($backing_devnode !== '') {
-            $preferred_diskio_candidates[] = $backing_devnode;
-            $preferred_diskio_candidates[] = ltrim(preg_replace('#^/dev/#', '', $backing_devnode), '/');
-            $preferred_diskio_candidates[] = basename($backing_devnode);
-            $diskio_candidates[] = $backing_devnode;
-            $diskio_candidates[] = ltrim(preg_replace('#^/dev/#', '', $backing_devnode), '/');
-            $diskio_candidates[] = basename($backing_devnode);
-        }
-    }
-
-    $diskio_candidates = array_values(array_unique($diskio_candidates));
-    $preferred_diskio_candidates = array_values(array_unique(array_merge($preferred_diskio_candidates, $diskio_candidates)));
-
-    $diskio_rows = dbFetchRows('SELECT `diskio_id`, `diskio_descr` FROM `ucd_diskio` WHERE `device_id` = ?', [$device_id]);
-    $diskio_by_descr = [];
-    foreach ($diskio_rows as $diskio_row) {
-        $diskio_descr = trim((string) ($diskio_row['diskio_descr'] ?? ''));
-        if ($diskio_descr !== '') {
-            $diskio_by_descr[$diskio_descr] = $diskio_row;
-        }
-    }
-
-    foreach ($preferred_diskio_candidates as $candidate) {
-        if (isset($diskio_by_descr[$candidate])) {
-            return $diskio_by_descr[$candidate];
-        }
-    }
-
-    if (count($diskio_rows) === 1) {
-        return $diskio_rows[0];
-    }
-
-    return null;
 }
 
 // -----------------------------------------------------------------------------

@@ -137,43 +137,6 @@ function used_percent_text($used_value, $size_value): string
     return rtrim(rtrim(number_format(($used / $size) * 100, 2, '.', ''), '0'), '.') . '%';
 }
 
-function format_metric($value, string $metric, string $null_text = 'N/A'): string
-{
-    if ($value === null || $value === '') {
-        return $null_text;
-    }
-
-    if (str_contains($metric, 'ratio')) {
-        return number_format((float) $value, 2);
-    }
-
-    if (str_contains($metric, 'size')
-        || str_contains($metric, 'used')
-        || str_contains($metric, 'free')
-        || str_contains($metric, 'reserve')
-        || str_contains($metric, 'slack')
-        || str_contains($metric, 'allocated')
-        || str_contains($metric, 'unallocated')
-        || str_starts_with($metric, 'usage.')
-        || str_contains($metric, 'bytes')
-        || str_starts_with($metric, 'data_')
-        || str_starts_with($metric, 'metadata_')
-        || str_starts_with($metric, 'system_')
-    ) {
-        $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-        $v = (float) $value;
-        $i = 0;
-        while ($v >= 1024 && $i < count($units) - 1) {
-            $v /= 1024;
-            $i++;
-        }
-
-        return round($v, 2) . ' ' . $units[$i];
-    }
-
-    return is_numeric($value) ? number_format((float) $value) : (string) $value;
-}
-
 function is_byte_metric(string $metric): bool
 {
     return str_contains($metric, 'size')
