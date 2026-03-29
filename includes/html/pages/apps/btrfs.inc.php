@@ -1,5 +1,17 @@
 <?php
 
+/**
+ * Btrfs Global Apps Page
+ *
+ * Cross-device filesystem overview for the global Apps page.
+ * Renders a summary table of all btrfs filesystems across devices with
+ * filtering by filesystem name, device hostname, and status.
+ *
+ * Data source: Poller-persisted app->data for each device's btrfs application.
+ * Uses shared btrfs helpers for formatting and status semantics to ensure
+ * consistent display with the device page.
+ */
+
 use App\Models\Application;
 use App\Models\User;
 use LibreNMS\Util\Url;
@@ -7,6 +19,7 @@ use LibreNMS\Util\Url;
 require_once __DIR__ . '/../btrfs-common.inc.php';
 
 use function LibreNMS\Plugins\Btrfs\combine_state_code;
+use function LibreNMS\Plugins\Btrfs\extract_filesystem_data;
 use function LibreNMS\Plugins\Btrfs\format_metric_value;
 use function LibreNMS\Plugins\Btrfs\scrub_progress_text_from_status;
 use function LibreNMS\Plugins\Btrfs\status_badge;
@@ -14,15 +27,22 @@ use function LibreNMS\Plugins\Btrfs\status_from_code;
 use function LibreNMS\Plugins\Btrfs\total_io_errors;
 use function LibreNMS\Plugins\Btrfs\used_percent_text;
 
-// Global btrfs apps page.
-// Renders cross-device filesystem summaries using poller-persisted app->data.
-// Uses shared btrfs helpers for formatting and status semantics to match device page behavior.
+// =============================================================================
+// Authentication and Access Control
+// Verify user is authenticated before rendering.
+// =============================================================================
 
 $user = Auth::user();
 if (! $user instanceof User) {
     return;
 }
 
+// =============================================================================
+// Data Loading
+// Load all btrfs applications accessible to the current user.
+// =============================================================================
+
+// Query btrfs applications with device relationship, sorted by hostname.
 $apps = Application::query()
     ->hasAccess($user)
     ->where('app_type', 'btrfs')
@@ -30,9 +50,18 @@ $apps = Application::query()
     ->get()
     ->sortBy(fn ($app) => $app->device?->hostname ?? '');
 
+// =============================================================================
+// Autocomplete Suggestions
+// Build lists of unique filesystem names and device hostnames for datalist.
+// =============================================================================
+
+// Initialize suggestion arrays.
 $filesystem_suggestions = [];
 $device_suggestions = [];
+
+// Iterate through all apps to collect unique suggestions.
 foreach ($apps as $app_entry) {
+    // Collect device hostname/display name suggestions.
     $hostname = trim((string) ($app_entry->device?->hostname ?? ''));
     $display_name = trim((string) ($app_entry->device?->displayName() ?? ''));
     if ($hostname !== '') {
@@ -45,6 +74,7 @@ foreach ($apps as $app_entry) {
         $device_suggestions[$display_name . ' (' . $hostname . ')'] = $display_name . ' (' . $hostname . ')';
     }
 
+    // Collect filesystem name and label suggestions.
     $app_filesystems = $app_entry->data['filesystems'] ?? [];
     $app_filesystem_meta = $app_entry->data['filesystem_meta'] ?? [];
     foreach ($app_filesystems as $fs_name => $fs_entry) {
@@ -53,8 +83,10 @@ foreach ($apps as $app_entry) {
             continue;
         }
 
+        // Add filesystem mountpoint/value itself.
         $filesystem_suggestions[$fs_value] = $fs_value;
 
+        // Add filesystem label and labeled variant.
         $fs_label = trim((string) ($app_filesystem_meta[$fs_name]['label'] ?? ''));
         if ($fs_label !== '') {
             $filesystem_suggestions[$fs_label] = $fs_label;
@@ -62,6 +94,7 @@ foreach ($apps as $app_entry) {
         }
     }
 
+    // Add device identifiers to filesystem suggestions for filter matching.
     if ($hostname !== '') {
         $filesystem_suggestions[$hostname] = $hostname;
     }
@@ -69,16 +102,31 @@ foreach ($apps as $app_entry) {
         $filesystem_suggestions[$display_name] = $display_name;
     }
 }
+
+// Sort suggestions alphabetically for easier lookup.
 ksort($filesystem_suggestions);
 ksort($device_suggestions);
 
+// =============================================================================
+// Filter Processing
+// Parse URL filter parameters and validate against allowed values.
+// =============================================================================
+
+// Get filter values from URL parameters.
 $filter_text = strtolower(trim((string) ($vars['filter'] ?? '')));
 $filter_device = strtolower(trim((string) ($vars['device'] ?? '')));
 $filter_status = strtolower(trim((string) ($vars['status'] ?? 'all')));
+
+// Define allowed status filter values.
 $allowed_status_filters = ['all', 'ok', 'running', 'warning', 'error', 'na'];
 if (! in_array($filter_status, $allowed_status_filters, true)) {
     $filter_status = 'all';
 }
+
+// =============================================================================
+// Filter Form Panel
+// Render filter form with filesystem, device, and status inputs.
+// =============================================================================
 
 echo '<div class="panel panel-default">';
 echo '<div class="panel-heading"><h3 class="panel-title">Filters</h3></div>';
@@ -86,14 +134,20 @@ echo '<div class="panel-body">';
 echo '<form method="get" class="form-inline" action="">';
 echo '<input type="hidden" name="page" value="apps">';
 echo '<input type="hidden" name="app" value="btrfs">';
+
+// Filesystem filter input with autocomplete datalist.
 echo '<div class="form-group" style="margin-right: 8px;">';
 echo '<label for="btrfs-filter" style="margin-right: 4px;">Filesystem</label>';
 echo '<input id="btrfs-filter" name="filter" type="text" class="form-control input-sm" list="btrfs-filesystem-list" value="' . htmlspecialchars((string) ($vars['filter'] ?? '')) . '" placeholder="label, mountpoint">';
 echo '</div>';
+
+// Device filter input with autocomplete datalist.
 echo '<div class="form-group" style="margin-right: 8px;">';
 echo '<label for="btrfs-device-filter" style="margin-right: 4px;">Device</label>';
 echo '<input id="btrfs-device-filter" name="device" type="text" class="form-control input-sm" list="btrfs-device-list" value="' . htmlspecialchars((string) ($vars['device'] ?? '')) . '" placeholder="hostname">';
 echo '</div>';
+
+// Status filter dropdown.
 echo '<div class="form-group" style="margin-right: 8px;">';
 echo '<label for="btrfs-status-filter" style="margin-right: 4px;">Status</label>';
 echo '<select id="btrfs-status-filter" name="status" class="form-control input-sm">';
@@ -103,26 +157,39 @@ foreach ($allowed_status_filters as $status_option) {
 }
 echo '</select>';
 echo '</div>';
+
+// Submit and reset buttons.
 echo '<button type="submit" class="btn btn-primary btn-sm" style="margin-right: 8px;">Apply</button>';
 echo '<a href="' . Url::generate(['page' => 'apps', 'app' => 'btrfs']) . '" class="btn btn-default btn-sm">Reset</a>';
+
+// Filesystem suggestions datalist.
 echo '<datalist id="btrfs-filesystem-list">';
 foreach ($filesystem_suggestions as $suggestion) {
     echo '<option value="' . htmlspecialchars($suggestion) . '"></option>';
 }
 echo '</datalist>';
+
+// Device suggestions datalist.
 echo '<datalist id="btrfs-device-list">';
 foreach ($device_suggestions as $suggestion) {
     echo '<option value="' . htmlspecialchars($suggestion) . '"></option>';
 }
 echo '</datalist>';
+
 echo '</form>';
 echo '</div>';
 echo '</div>';
+
+// =============================================================================
+// Filesystems Overview Panel
+// Main table showing one row per (device, filesystem) combination.
+// =============================================================================
 
 echo '<div class="panel panel-default">';
 echo '<div class="panel-heading"><h3 class="panel-title">Filesystems Overview</h3></div>';
 echo '<div class="panel-body">';
 
+// Show message if no btrfs applications found.
 if ($apps->isEmpty()) {
     echo '<em>No btrfs applications found.</em>';
     echo '</div></div>';
@@ -130,20 +197,24 @@ if ($apps->isEmpty()) {
     return;
 }
 
-// Global overview table: one row per (device, filesystem).
+// Begin overview table with sticky first column.
 echo '<div class="table-responsive">';
 echo '<table class="table table-condensed table-striped table-hover btrfs-sticky-first">';
 echo '<thead><tr><th>Device</th><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Missing</th><th>Devices</th><th>Ops</th><th>Bps</th><th>Combined Status</th></tr></thead>';
 echo '<tbody>';
 
+// Iterate through each app and filesystem to build table rows.
 foreach ($apps as $app) {
     $device = $app->device;
     if (! $device) {
         continue;
     }
 
+    // Extract filesystem data from app data.
     $filesystemEntries = $app->data['filesystems'] ?? [];
     $structured = is_array($filesystemEntries) && count($filesystemEntries) > 0 && is_array(reset($filesystemEntries));
+
+    // Extract and normalize filesystem data if structured format available.
     if ($structured) {
         $filesystems = array_keys($filesystemEntries);
         $filesystemMeta = [];
@@ -166,6 +237,7 @@ foreach ($apps as $app) {
             $balanceIsRunningFs[$fsName] = (bool) ($balanceBlock['is_running'] ?? false);
         }
     } else {
+        // Initialize empty arrays for legacy/unstructured data.
         $filesystems = [];
         $filesystemMeta = [];
         $filesystemTables = [];
@@ -175,6 +247,7 @@ foreach ($apps as $app) {
         $balanceIsRunningFs = [];
     }
 
+    // Process each filesystem for this device.
     foreach ($filesystems as $fs) {
         // Build one summary row for this filesystem on this device.
         $fsData = $filesystemTables[$fs] ?? [];
@@ -182,6 +255,7 @@ foreach ($apps as $app) {
         $fsLabel = trim((string) ($filesystemMeta[$fs]['label'] ?? ''));
         $displayName = $fsLabel !== '' ? $fsLabel . ' (' . $fs . ')' : (string) $fs;
 
+        // Calculate status badges from stored poller status codes.
         $ioState = status_from_code($fsData['io_status_code'] ?? null);
         $scrubCode = is_bool($scrubIsRunningFs[$fs] ?? null)
             ? (($scrubIsRunningFs[$fs] ?? false) ? 1 : 0)
@@ -194,10 +268,13 @@ foreach ($apps as $app) {
         $overallCode = combine_state_code([$fsData['io_status_code'] ?? 2, $scrubCode, $balanceCode]);
         $overallState = status_from_code($overallCode);
 
+        // Build search text for filter matching.
         $deviceHostname = strtolower((string) ($device->hostname ?? ''));
         $deviceDisplay = strtolower(trim((string) ($device->displayName() ?? '')));
         $deviceSearchText = trim($deviceHostname . ' ' . $deviceDisplay);
         $displayNameLower = strtolower((string) $displayName);
+
+        // Apply filters: skip rows that don't match criteria.
         if ($filter_text !== '' && ! str_contains($displayNameLower, $filter_text) && ! str_contains($deviceSearchText, $filter_text)) {
             continue;
         }
@@ -208,16 +285,20 @@ foreach ($apps as $app) {
             continue;
         }
 
+        // Calculate scrub progress text.
         $scrubStatus = $scrubStatusFs[$fs] ?? [];
         $scrubProgressText = is_array($scrubStatus) && count($scrubStatus) > 0
             ? scrub_progress_text_from_status($scrubStatus)
             : 'N/A';
 
+        // Calculate total I/O errors across all devices.
         $deviceTables = is_array($filesystemEntries[$fs]['device_tables'] ?? null) ? $filesystemEntries[$fs]['device_tables'] : [];
         $totalErrors = total_io_errors($deviceTables);
 
+        // Calculate used percentage.
         $usedPercentText = used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
 
+        // Build combined status graph parameters.
         $graphArray = [
             'height' => 40,
             'width' => 180,
@@ -228,6 +309,7 @@ foreach ($apps as $app) {
             'legend' => 'no',
             'from' => App\Facades\LibrenmsConfig::get('time.week'),
         ];
+        // Build graph link for overlib popup.
         $graphLinkArray = $graphArray;
         $graphLinkArray['page'] = 'device';
         $graphLinkArray['device'] = $device->device_id;
@@ -237,6 +319,7 @@ foreach ($apps as $app) {
         $graphLink = Url::generate($graphLinkArray);
         $graphImg = Url::lazyGraphTag($graphArray);
 
+        // Build Ops/sec mini-graph parameters.
         $opsGraph = [
             'height' => 30,
             'width' => 120,
@@ -247,6 +330,8 @@ foreach ($apps as $app) {
             'fs' => $fs,
             'legend' => 'no',
         ];
+
+        // Build Bps mini-graph parameters.
         $bpsGraph = [
             'height' => 30,
             'width' => 120,
@@ -257,8 +342,11 @@ foreach ($apps as $app) {
             'fs' => $fs,
             'legend' => 'no',
         ];
+
+        // Build link to filesystem detail view on device page.
         $fsDetailLink = ['page' => 'device', 'device' => $device->device_id, 'tab' => 'apps', 'app' => 'btrfs', 'fs' => $fs];
 
+        // Render table row with all columns.
         echo '<tr>';
         echo '<td>' . Url::deviceLink($device) . '</td>';
         echo '<td>' . generate_link(htmlspecialchars((string) $displayName), ['page' => 'device', 'device' => $device->device_id, 'tab' => 'apps', 'app' => 'btrfs', 'fs' => $fs]) . '</td>';
@@ -286,6 +374,12 @@ echo '</div>';
 echo '</div>';
 echo '</div>';
 
+// =============================================================================
+// Device-Grouped Graph Panels
+// Per-device panels with mini-graphs for each filesystem.
+// =============================================================================
+
+// Define mini-graph types for filesystem panels.
 $graphTypes = [
     'btrfs_fs_errors_by_type' => 'Aggregate Errors by Type',
     'btrfs_fs_errors_by_device' => 'Aggregate Errors by Device',
@@ -296,15 +390,18 @@ $graphTypes = [
     'btrfs_fs_diskio_bits' => 'Aggregate Bps',
 ];
 
-// Device-grouped filesystem panels with quick mini-graphs.
+// Iterate through apps to render device-grouped panels.
 foreach ($apps as $app) {
     $device = $app->device;
     if (! $device) {
         continue;
     }
 
+    // Extract filesystem data from app data.
     $filesystemEntries = $app->data['filesystems'] ?? [];
     $structured = is_array($filesystemEntries) && count($filesystemEntries) > 0 && is_array(reset($filesystemEntries));
+
+    // Extract and normalize filesystem data if structured format available.
     if ($structured) {
         $filesystems = array_keys($filesystemEntries);
         $filesystemMeta = [];
@@ -323,18 +420,22 @@ foreach ($apps as $app) {
             $balanceIsRunningFs[$fsName] = (bool) ($balanceBlock['is_running'] ?? false);
         }
     } else {
+        // Initialize empty arrays for legacy/unstructured data.
         $filesystems = [];
         $filesystemMeta = [];
         $filesystemTables = [];
         $scrubIsRunningFs = [];
         $balanceIsRunningFs = [];
     }
+
+    // Render device panel with header.
     echo '<div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">' . Url::deviceLink($device) . '</h3></div>';
     echo '<div class="panel-body">';
 
+    // Render filesystem blocks within device panel.
     foreach ($filesystems as $fs) {
-        // Render filesystem header + status + four mini-graphs.
+        // Build filesystem display name and link.
         $fsData = $filesystemTables[$fs] ?? [];
         $fsLabel = trim((string) ($filesystemMeta[$fs]['label'] ?? ''));
         $displayFs = $fsLabel !== '' ? $fsLabel . ' (' . $fs . ')' : (string) $fs;
@@ -345,10 +446,13 @@ foreach ($apps as $app) {
             'app' => 'btrfs',
             'fs' => $fs,
         ]);
+
+        // Calculate usage text for panel header.
         $usedText = format_metric_value($fsData['used'] ?? null, 'used');
         $totalText = format_metric_value($fsData['device_size'] ?? null, 'device_size');
         $usedPercentText = used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
 
+        // Calculate combined status for badge.
         $overallCode = combine_state_code([
             $fsData['io_status_code'] ?? 2,
             is_bool($scrubIsRunningFs[$fs] ?? null) ? (($scrubIsRunningFs[$fs] ?? false) ? 1 : 0) : ($fsData['scrub_status_code'] ?? 2),
@@ -356,10 +460,13 @@ foreach ($apps as $app) {
         ]);
         $overallState = status_from_code($overallCode);
 
+        // Build search text for filter matching.
         $deviceHostname = strtolower((string) ($device->hostname ?? ''));
         $deviceDisplay = strtolower(trim((string) ($device->displayName() ?? '')));
         $deviceSearchText = trim($deviceHostname . ' ' . $deviceDisplay);
         $displayFsLower = strtolower((string) $displayFs);
+
+        // Apply filters: skip filesystems that don't match criteria.
         if ($filter_text !== '' && ! str_contains($displayFsLower, $filter_text) && ! str_contains($deviceSearchText, $filter_text)) {
             continue;
         }
@@ -370,10 +477,12 @@ foreach ($apps as $app) {
             continue;
         }
 
+        // Render filesystem block with header and graphs.
         echo '<div class="panel panel-default" style="margin-bottom: 10px;">';
         echo '<div class="panel-heading"><h3 class="panel-title"><a href="' . $headerLink . '" style="color:#337ab7;">' . htmlspecialchars($displayFs) . '</a><div class="pull-right"><small class="text-muted">' . htmlspecialchars($usedText . '/' . $totalText . ' ' . $usedPercentText) . '</small> ' . status_badge($overallState) . '</div></h3></div>';
         echo '<div class="panel-body"><div class="row">';
 
+        // Render each mini-graph with title and link.
         foreach ($graphTypes as $graphType => $graphTitle) {
             $graph_array = [
                 'height' => '80',
