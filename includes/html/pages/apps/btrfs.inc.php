@@ -6,6 +6,14 @@ use LibreNMS\Util\Url;
 
 require_once __DIR__ . '/../btrfs-common.inc.php';
 
+use function LibreNMS\Plugins\Btrfs\combine_state_code;
+use function LibreNMS\Plugins\Btrfs\format_metric;
+use function LibreNMS\Plugins\Btrfs\scrub_progress_text_from_status;
+use function LibreNMS\Plugins\Btrfs\status_badge;
+use function LibreNMS\Plugins\Btrfs\status_from_code;
+use function LibreNMS\Plugins\Btrfs\total_io_errors;
+use function LibreNMS\Plugins\Btrfs\used_percent_text;
+
 // Global btrfs apps page.
 // Renders cross-device filesystem summaries using poller-persisted app->data.
 // Uses shared btrfs helpers for formatting and status semantics to match device page behavior.
@@ -96,7 +104,7 @@ foreach ($allowed_status_filters as $status_option) {
 echo '</select>';
 echo '</div>';
 echo '<button type="submit" class="btn btn-primary btn-sm" style="margin-right: 8px;">Apply</button>';
-echo '<a href="' . LibreNMS\Util\Url::generate(['page' => 'apps', 'app' => 'btrfs']) . '" class="btn btn-default btn-sm">Reset</a>';
+echo '<a href="' . Url::generate(['page' => 'apps', 'app' => 'btrfs']) . '" class="btn btn-default btn-sm">Reset</a>';
 echo '<datalist id="btrfs-filesystem-list">';
 foreach ($filesystem_suggestions as $suggestion) {
     echo '<option value="' . htmlspecialchars($suggestion) . '"></option>';
@@ -110,8 +118,6 @@ echo '</datalist>';
 echo '</form>';
 echo '</div>';
 echo '</div>';
-
-
 
 echo '<div class="panel panel-default">';
 echo '<div class="panel-heading"><h3 class="panel-title">Filesystems Overview</h3></div>';
@@ -176,17 +182,17 @@ foreach ($apps as $app) {
         $fsLabel = trim((string) ($filesystemMeta[$fs]['label'] ?? ''));
         $displayName = $fsLabel !== '' ? $fsLabel . ' (' . $fs . ')' : (string) $fs;
 
-        $ioState = $btrfs_status_from_code($fsData['io_status_code'] ?? null);
+        $ioState = status_from_code($fsData['io_status_code'] ?? null);
         $scrubCode = is_bool($scrubIsRunningFs[$fs] ?? null)
             ? (($scrubIsRunningFs[$fs] ?? false) ? 1 : 0)
             : ($fsData['scrub_status_code'] ?? null);
         $balanceCode = is_bool($balanceIsRunningFs[$fs] ?? null)
             ? (($balanceIsRunningFs[$fs] ?? false) ? 1 : 0)
             : ($fsData['balance_status_code'] ?? null);
-        $scrubState = $btrfs_status_from_code($scrubCode);
-        $balanceState = $btrfs_status_from_code($balanceCode);
-        $overallCode = $btrfs_combine_state_code([$fsData['io_status_code'] ?? 2, $scrubCode, $balanceCode]);
-        $overallState = $btrfs_status_from_code($overallCode);
+        $scrubState = status_from_code($scrubCode);
+        $balanceState = status_from_code($balanceCode);
+        $overallCode = combine_state_code([$fsData['io_status_code'] ?? 2, $scrubCode, $balanceCode]);
+        $overallState = status_from_code($overallCode);
 
         $deviceHostname = strtolower((string) ($device->hostname ?? ''));
         $deviceDisplay = strtolower(trim((string) ($device->displayName() ?? '')));
@@ -204,13 +210,13 @@ foreach ($apps as $app) {
 
         $scrubStatus = $scrubStatusFs[$fs] ?? [];
         $scrubProgressText = is_array($scrubStatus) && count($scrubStatus) > 0
-            ? $btrfs_scrub_progress_text_from_status($scrubStatus)
+            ? scrub_progress_text_from_status($scrubStatus)
             : 'N/A';
 
         $deviceTables = is_array($filesystemEntries[$fs]['device_tables'] ?? null) ? $filesystemEntries[$fs]['device_tables'] : [];
-        $totalErrors = $btrfs_total_io_errors($deviceTables);
+        $totalErrors = total_io_errors($deviceTables);
 
-        $usedPercentText = $btrfs_used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
+        $usedPercentText = used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
 
         $graphArray = [
             'height' => 40,
@@ -256,15 +262,15 @@ foreach ($apps as $app) {
         echo '<tr>';
         echo '<td>' . Url::deviceLink($device) . '</td>';
         echo '<td>' . generate_link(htmlspecialchars((string) $displayName), ['page' => 'device', 'device' => $device->device_id, 'tab' => 'apps', 'app' => 'btrfs', 'fs' => $fs]) . '</td>';
-        echo '<td>' . $btrfs_status_badge($ioState) . '</td>';
-        echo '<td>' . $btrfs_status_badge($scrubState) . '</td>';
-        echo '<td>' . $btrfs_status_badge($balanceState) . '</td>';
+        echo '<td>' . status_badge($ioState) . '</td>';
+        echo '<td>' . status_badge($scrubState) . '</td>';
+        echo '<td>' . status_badge($balanceState) . '</td>';
         echo '<td>' . htmlspecialchars($scrubProgressText) . '</td>';
         echo '<td>' . htmlspecialchars(number_format($totalErrors)) . '</td>';
         echo '<td>' . htmlspecialchars($usedPercentText) . '</td>';
-        echo '<td>' . htmlspecialchars($btrfs_format_metric($fsData['used'] ?? null, 'used')) . '</td>';
-        echo '<td>' . htmlspecialchars($btrfs_format_metric($fsData['free_estimated'] ?? null, 'free_estimated')) . '</td>';
-        echo '<td>' . htmlspecialchars($btrfs_format_metric($fsData['device_size'] ?? null, 'device_size')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric($fsData['used'] ?? null, 'used')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric($fsData['free_estimated'] ?? null, 'free_estimated')) . '</td>';
+        echo '<td>' . htmlspecialchars(format_metric($fsData['device_size'] ?? null, 'device_size')) . '</td>';
         echo '<td>' . (($fsData['has_missing'] ?? false) ? '<span class="label label-danger">Yes</span>' : '<span class="label label-default">No</span>') . '</td>';
         echo '<td>' . number_format(count($fsDevices)) . '</td>';
         echo '<td>' . generate_link(Url::lazyGraphTag($opsGraph), $fsDetailLink) . '</td>';
@@ -339,16 +345,16 @@ foreach ($apps as $app) {
             'app' => 'btrfs',
             'fs' => $fs,
         ]);
-        $usedText = $btrfs_format_metric($fsData['used'] ?? null, 'used');
-        $totalText = $btrfs_format_metric($fsData['device_size'] ?? null, 'device_size');
-        $usedPercentText = $btrfs_used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
+        $usedText = format_metric($fsData['used'] ?? null, 'used');
+        $totalText = format_metric($fsData['device_size'] ?? null, 'device_size');
+        $usedPercentText = used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
 
-        $overallCode = $btrfs_combine_state_code([
+        $overallCode = combine_state_code([
             $fsData['io_status_code'] ?? 2,
             is_bool($scrubIsRunningFs[$fs] ?? null) ? (($scrubIsRunningFs[$fs] ?? false) ? 1 : 0) : ($fsData['scrub_status_code'] ?? 2),
             is_bool($balanceIsRunningFs[$fs] ?? null) ? (($balanceIsRunningFs[$fs] ?? false) ? 1 : 0) : ($fsData['balance_status_code'] ?? 2),
         ]);
-        $overallState = $btrfs_status_from_code($overallCode);
+        $overallState = status_from_code($overallCode);
 
         $deviceHostname = strtolower((string) ($device->hostname ?? ''));
         $deviceDisplay = strtolower(trim((string) ($device->displayName() ?? '')));
@@ -365,7 +371,7 @@ foreach ($apps as $app) {
         }
 
         echo '<div class="panel panel-default" style="margin-bottom: 10px;">';
-        echo '<div class="panel-heading"><h3 class="panel-title"><a href="' . $headerLink . '" style="color:#337ab7;">' . htmlspecialchars($displayFs) . '</a><div class="pull-right"><small class="text-muted">' . htmlspecialchars($usedText . '/' . $totalText . ' ' . $usedPercentText) . '</small> ' . $btrfs_status_badge($overallState) . '</div></h3></div>';
+        echo '<div class="panel-heading"><h3 class="panel-title"><a href="' . $headerLink . '" style="color:#337ab7;">' . htmlspecialchars($displayFs) . '</a><div class="pull-right"><small class="text-muted">' . htmlspecialchars($usedText . '/' . $totalText . ' ' . $usedPercentText) . '</small> ' . status_badge($overallState) . '</div></h3></div>';
         echo '<div class="panel-body"><div class="row">';
 
         foreach ($graphTypes as $graphType => $graphTitle) {

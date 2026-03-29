@@ -1,36 +1,31 @@
 <?php
 
-// Shared view helpers for btrfs device/global pages.
-// Keep display/status helpers centralized here to avoid page drift.
+namespace LibreNMS\Plugins\Btrfs;
 
-$btrfs_status_badge = static function (string $state): string {
-    // Map logical state to neutral/alert badge styling.
+function status_badge(string $state): string
+{
     $state_lc = strtolower($state);
     if ($state_lc === 'error') {
-        $badge = 'Error';
-        $class = 'label-danger';
-    } elseif ($state_lc === 'missing') {
-        $badge = 'Missing';
-        $class = 'label-danger';
-    } elseif ($state_lc === 'running') {
-        $badge = 'Running';
-        $class = 'label-default';
-    } elseif ($state_lc === 'warning') {
-        $badge = 'Warning';
-        $class = 'label-warning';
-    } elseif ($state_lc === 'na') {
-        $badge = 'N/A';
-        $class = 'label-default';
-    } else {
-        $badge = 'OK';
-        $class = 'label-default';
+        return '<span class="label label-danger">Error</span>';
+    }
+    if ($state_lc === 'missing') {
+        return '<span class="label label-danger">Missing</span>';
+    }
+    if ($state_lc === 'running') {
+        return '<span class="label label-default">Running</span>';
+    }
+    if ($state_lc === 'warning') {
+        return '<span class="label label-warning">Warning</span>';
+    }
+    if ($state_lc === 'na') {
+        return '<span class="label label-default">N/A</span>';
     }
 
-    return '<span class="label ' . $class . '">' . htmlspecialchars($badge) . '</span>';
-};
+    return '<span class="label label-default">OK</span>';
+}
 
-$btrfs_status_from_code = static function ($value): string {
-    // Convert numeric status codes to logical state strings.
+function status_from_code($value): string
+{
     $code = is_numeric($value) ? (int) $value : 2;
 
     return match ($code) {
@@ -41,11 +36,30 @@ $btrfs_status_from_code = static function ($value): string {
         4 => 'missing',
         default => 'na',
     };
-};
+}
 
-$btrfs_combine_state_code = static function (array $codes): int {
-    // Collapse multiple status codes to one with precedence:
-    // Missing > Error > Running > OK > N/A.
+function state_code_from_sensor(string $sensor_type, string $sensor_index, $fallback = null): int
+{
+    global $data;
+    $state_sensor_values = $data['state_sensor_values'] ?? [];
+    if (isset($state_sensor_values[$sensor_type][$sensor_index]) && is_numeric($state_sensor_values[$sensor_type][$sensor_index])) {
+        return (int) $state_sensor_values[$sensor_type][$sensor_index];
+    }
+
+    return is_numeric($fallback) ? (int) $fallback : 2;
+}
+
+function state_code_from_running_flag($running_flag, $fallback = null): int
+{
+    if (is_bool($running_flag)) {
+        return $running_flag ? 1 : 0;
+    }
+
+    return is_numeric($fallback) ? (int) $fallback : 2;
+}
+
+function combine_state_code(array $codes): int
+{
     $normalized = [];
     foreach ($codes as $code) {
         $normalized[] = is_numeric($code) ? (int) $code : 2;
@@ -65,9 +79,10 @@ $btrfs_combine_state_code = static function (array $codes): int {
     }
 
     return 2;
-};
+}
 
-$btrfs_scrub_progress_text_from_status = static function (array $scrub_status): string {
+function scrub_progress_text_from_status(array $scrub_status): string
+{
     $scrub_progress = null;
 
     if (is_array($scrub_status['bytes_scrubbed'] ?? null)) {
@@ -88,13 +103,15 @@ $btrfs_scrub_progress_text_from_status = static function (array $scrub_status): 
         }
     }
 
-    return $scrub_progress === null
-        ? 'N/A'
-        : rtrim(rtrim(number_format($scrub_progress, 2, '.', ''), '0'), '.') . '%';
-};
+    if ($scrub_progress === null) {
+        return 'N/A';
+    }
 
-$btrfs_total_io_errors = static function (array $device_tables): float {
-    // Aggregate IO error counters for filesystem summary views.
+    return rtrim(rtrim(number_format($scrub_progress, 2, '.', ''), '0'), '.') . '%';
+}
+
+function total_io_errors(array $device_tables): float
+{
     $total_errors = 0.0;
     foreach ($device_tables as $dev_stats) {
         $errors = is_array($dev_stats['errors'] ?? null) ? $dev_stats['errors'] : [];
@@ -106,20 +123,22 @@ $btrfs_total_io_errors = static function (array $device_tables): float {
     }
 
     return $total_errors;
-};
+}
 
-$btrfs_used_percent_text = static function ($used_value, $size_value): string {
-    // Return used percentage text when total size is known.
+function used_percent_text($used_value, $size_value): string
+{
     $used = (float) ($used_value ?? 0);
     $size = (float) ($size_value ?? 0);
 
-    return $size > 0
-        ? rtrim(rtrim(number_format(($used / $size) * 100, 2, '.', ''), '0'), '.') . '%'
-        : 'N/A';
-};
+    if ($size <= 0) {
+        return 'N/A';
+    }
 
-$btrfs_format_metric = static function ($value, string $metric, string $null_text = 'N/A'): string {
-    // Generic metric formatter shared by global and device pages.
+    return rtrim(rtrim(number_format(($used / $size) * 100, 2, '.', ''), '0'), '.') . '%';
+}
+
+function format_metric($value, string $metric, string $null_text = 'N/A'): string
+{
     if ($value === null || $value === '') {
         return $null_text;
     }
@@ -128,7 +147,19 @@ $btrfs_format_metric = static function ($value, string $metric, string $null_tex
         return number_format((float) $value, 2);
     }
 
-    if (str_contains($metric, 'size') || str_contains($metric, 'used') || str_contains($metric, 'free')) {
+    if (str_contains($metric, 'size')
+        || str_contains($metric, 'used')
+        || str_contains($metric, 'free')
+        || str_contains($metric, 'reserve')
+        || str_contains($metric, 'slack')
+        || str_contains($metric, 'allocated')
+        || str_contains($metric, 'unallocated')
+        || str_starts_with($metric, 'usage.')
+        || str_contains($metric, 'bytes')
+        || str_starts_with($metric, 'data_')
+        || str_starts_with($metric, 'metadata_')
+        || str_starts_with($metric, 'system_')
+    ) {
         $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
         $v = (float) $value;
         $i = 0;
@@ -141,16 +172,93 @@ $btrfs_format_metric = static function ($value, string $metric, string $null_tex
     }
 
     return is_numeric($value) ? number_format((float) $value) : (string) $value;
-};
+}
 
-$btrfs_flatten_assoc_rows = static function (array $data, string $prefix = '') use (&$btrfs_flatten_assoc_rows): array {
+function is_byte_metric(string $metric): bool
+{
+    return str_contains($metric, 'size')
+        || str_contains($metric, 'used')
+        || str_contains($metric, 'free')
+        || str_contains($metric, 'reserve')
+        || str_contains($metric, 'slack')
+        || str_contains($metric, 'allocated')
+        || str_contains($metric, 'unallocated')
+        || str_starts_with($metric, 'usage.')
+        || str_contains($metric, 'bytes')
+        || str_starts_with($metric, 'data_')
+        || str_starts_with($metric, 'metadata_')
+        || str_starts_with($metric, 'system_');
+}
+
+function is_error_metric(string $metric): bool
+{
+    return str_contains($metric, 'errs')
+        || str_contains($metric, 'errors')
+        || str_contains($metric, 'devid')
+        || $metric === 'id';
+}
+
+function format_metric_value($value, string $metric): string
+{
+    if ($value === null) {
+        return '';
+    }
+
+    if (str_contains($metric, 'ratio')) {
+        return number_format((float) $value, 2);
+    }
+
+    if (is_error_metric($metric) && is_numeric($value)) {
+        return number_format((int) round((float) $value));
+    }
+
+    $si_count_metrics = [
+        'data_extents_scrubbed',
+        'tree_extents_scrubbed',
+        'no_csum',
+    ];
+    if (in_array($metric, $si_count_metrics, true) && is_numeric($value)) {
+        return \LibreNMS\Util\Number::formatSi((float) $value, 2, 0, '');
+    }
+
+    if ($metric === 'duration' && is_string($value) && str_contains($value, ':')) {
+        return $value;
+    }
+
+    if (is_byte_metric($metric)) {
+        return \LibreNMS\Util\Number::formatBi((float) $value, 2, 0, 'B');
+    }
+
+    if (is_int($value) || (is_string($value) && preg_match('/^-?\d+$/', $value))) {
+        return number_format((int) $value);
+    }
+
+    if (is_float($value) || (is_string($value) && preg_match('/^-?\d+\.\d+$/', $value))) {
+        $formatted = number_format((float) $value, 2, '.', '');
+
+        return rtrim(rtrim($formatted, '0'), '.');
+    }
+
+    return (string) $value;
+}
+
+function format_display_name(string $key): string
+{
+    $name = preg_replace('/\[([0-9]+)\]/', ' $1', $key);
+    $name = str_replace(['.', '_', '-'], ' ', (string) $name);
+
+    return ucwords((string) $name);
+}
+
+function flatten_assoc_rows(array $data, string $prefix = ''): array
+{
     $rows = [];
     foreach ($data as $key => $value) {
         $segment = is_int($key) ? '[' . $key . ']' : (string) $key;
         $path = $prefix === '' ? $segment : $prefix . '.' . $segment;
 
         if (is_array($value)) {
-            $rows = array_merge($rows, $btrfs_flatten_assoc_rows($value, $path));
+            $rows = array_merge($rows, flatten_assoc_rows($value, $path));
             continue;
         }
 
@@ -164,4 +272,4 @@ $btrfs_flatten_assoc_rows = static function (array $data, string $prefix = '') u
     }
 
     return $rows;
-};
+}
