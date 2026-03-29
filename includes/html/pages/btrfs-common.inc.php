@@ -277,3 +277,30 @@ function flatten_assoc_rows(array $data, string $prefix = ''): array
 
     return $rows;
 }
+
+function scrub_status_to_state(string $status): string
+{
+    $status_lc = strtolower(trim((string) $status));
+
+    return match ($status_lc) {
+        'running', 'in_progress', 'in-progress' => 'running',
+        'finished', 'done', 'idle', 'stopped', 'completed' => 'ok',
+        'error', 'failed', 'aborted' => 'error',
+        default => 'na',
+    };
+}
+
+function load_state_sensors(int $device_id): array
+{
+    $state_sensor_values = [];
+    $btrfs_state_sensors = \App\Models\Sensor::where('device_id', $device_id)
+        ->where('sensor_class', 'state')
+        ->where('poller_type', 'agent')
+        ->whereIn('sensor_type', ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'])
+        ->get(['sensor_type', 'sensor_index', 'sensor_current']);
+    foreach ($btrfs_state_sensors as $state_sensor) {
+        $state_sensor_values[$state_sensor->sensor_type][$state_sensor->sensor_index] = (int) $state_sensor->sensor_current;
+    }
+
+    return $state_sensor_values;
+}
