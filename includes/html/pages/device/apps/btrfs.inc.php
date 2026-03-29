@@ -15,7 +15,9 @@ use function LibreNMS\Plugins\Btrfs\flatten_assoc_rows;
 use function LibreNMS\Plugins\Btrfs\format_display_name;
 use function LibreNMS\Plugins\Btrfs\format_metric;
 use function LibreNMS\Plugins\Btrfs\format_metric_value;
+use function LibreNMS\Plugins\Btrfs\load_state_sensors;
 use function LibreNMS\Plugins\Btrfs\scrub_progress_text_from_status;
+use function LibreNMS\Plugins\Btrfs\scrub_status_to_state;
 use function LibreNMS\Plugins\Btrfs\state_code_from_running_flag;
 use function LibreNMS\Plugins\Btrfs\state_code_from_sensor;
 use function LibreNMS\Plugins\Btrfs\status_badge;
@@ -183,21 +185,6 @@ function btrfs_initializeData(App\Models\Application $app, array $device, array 
 }
 
 $data = btrfs_initializeData($app, $device, $vars);
-
-function btrfs_loadStateSensors(int $device_id): array
-{
-    $state_sensor_values = [];
-    $btrfs_state_sensors = App\Models\Sensor::where('device_id', $device_id)
-        ->where('sensor_class', 'state')
-        ->where('poller_type', 'agent')
-        ->whereIn('sensor_type', ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'])
-        ->get(['sensor_type', 'sensor_index', 'sensor_current']);
-    foreach ($btrfs_state_sensors as $state_sensor) {
-        $state_sensor_values[$state_sensor->sensor_type][$state_sensor->sensor_index] = (int) $state_sensor->sensor_current;
-    }
-
-    return $state_sensor_values;
-}
 
 function btrfs_renderNavigation(
     array $link_array,
@@ -960,17 +947,6 @@ function btrfs_renderScrubPerDevice(
 ): void {
     $link_array = ['page' => 'device', 'device' => $device_id, 'tab' => 'apps', 'app' => 'btrfs'];
 
-    $scrub_status_to_state = static function (string $status): string {
-        $status_lc = strtolower(trim((string) $status));
-
-        return match ($status_lc) {
-            'running', 'in_progress', 'in-progress' => 'running',
-            'finished', 'done', 'idle', 'stopped', 'completed' => 'ok',
-            'error', 'failed', 'aborted' => 'error',
-            default => 'na',
-        };
-    };
-
     echo '<div class="btrfs-panels">';
 
     if (count($scrub_split['devices']) > 0) {
@@ -990,7 +966,7 @@ function btrfs_renderScrubPerDevice(
             $link = $dev_id !== null
                 ? generate_link(htmlspecialchars((string) $device_name), $link_array, ['fs' => $selected_fs, 'dev' => $dev_id])
                 : htmlspecialchars((string) $device_name);
-            $scrub_state = $scrub_status_to_state($metrics['status'] ?? '');
+            $scrub_state = scrub_status_to_state($metrics['status'] ?? '');
             echo '<tr><td>' . $link . '</td><td>' . status_badge($scrub_state) . '</td>';
             foreach ($scrub_split['device_columns'] as $column) {
                 if (! in_array($column, $hidden_columns, true)) {
@@ -1234,7 +1210,7 @@ function btrfs_renderFsDiskioGraphs(App\Models\Application $app, string $selecte
 // Main Execution
 // -----------------------------------------------------------------------------
 
-$state_sensor_values = btrfs_loadStateSensors($device['device_id']);
+$state_sensor_values = load_state_sensors($device['device_id']);
 $data['state_sensor_values'] = $state_sensor_values;
 
 $link_array = [
