@@ -316,7 +316,7 @@ function find_diskio(
         return null;
     }
 
-    $selected_dev_path = trim((string) ($device_tables[$selected_dev]['path'] ?? ''));
+    $selected_dev_path = trim((string) ($device_tables[$selected_fs][$selected_dev]['path'] ?? ''));
     if ($selected_dev_path === '') {
         return null;
     }
