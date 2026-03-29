@@ -11,11 +11,15 @@
 require_once base_path('includes/html/pages/btrfs-common.inc.php');
 
 use function LibreNMS\Plugins\Btrfs\combine_state_code;
+use function LibreNMS\Plugins\Btrfs\find_diskio;
 use function LibreNMS\Plugins\Btrfs\flatten_assoc_rows;
 use function LibreNMS\Plugins\Btrfs\format_display_name;
 use function LibreNMS\Plugins\Btrfs\format_metric;
 use function LibreNMS\Plugins\Btrfs\format_metric_value;
+use function LibreNMS\Plugins\Btrfs\initialize_data;
 use function LibreNMS\Plugins\Btrfs\load_state_sensors;
+use function LibreNMS\Plugins\Btrfs\render_diskio_graphs;
+use function LibreNMS\Plugins\Btrfs\render_fs_diskio_graphs;
 use function LibreNMS\Plugins\Btrfs\scrub_progress_text_from_status;
 use function LibreNMS\Plugins\Btrfs\scrub_status_to_state;
 use function LibreNMS\Plugins\Btrfs\state_code_from_running_flag;
@@ -76,115 +80,7 @@ echo '<style>
 // $data['filesystems'][FS]['balance']['is_running']
 // $data['filesystems'][FS]['balance']['status']['is_running' | 'message']
 
-function btrfs_initializeData(App\Models\Application $app, array $device, array $vars): array
-{
-    $selected_fs = $vars['fs'] ?? null;
-    $selected_dev = $vars['dev'] ?? null;
-
-    $filesystem_entries = $app->data['filesystems'] ?? [];
-    $has_structured_filesystems = is_array($filesystem_entries) && count($filesystem_entries) > 0 && is_array(reset($filesystem_entries));
-
-    if ($has_structured_filesystems) {
-        $filesystem_meta = [];
-        $device_map = [];
-        $filesystem_tables = [];
-        $device_tables = [];
-        $device_metadata = [];
-        $filesystem_profiles = [];
-        $scrub_status_fs = [];
-        $scrub_status_devices = [];
-        $balance_status_fs = [];
-        $scrub_is_running_fs = [];
-        $balance_is_running_fs = [];
-        $filesystem_uuid = [];
-        $fs_rrd_key = [];
-
-        foreach ($filesystem_entries as $fs_name => $entry) {
-            if (! is_array($entry)) {
-                continue;
-            }
-
-            $filesystem_meta[$fs_name] = is_array($entry['meta'] ?? null) ? $entry['meta'] : [];
-            $device_map[$fs_name] = is_array($entry['device_map'] ?? null) ? $entry['device_map'] : [];
-            $filesystem_tables[$fs_name] = is_array($entry['table'] ?? null) ? $entry['table'] : [];
-            $device_tables[$fs_name] = is_array($entry['device_tables'] ?? null) ? $entry['device_tables'] : [];
-            $device_metadata[$fs_name] = is_array($entry['device_metadata'] ?? null) ? $entry['device_metadata'] : [];
-            $filesystem_profiles[$fs_name] = is_array($entry['profiles'] ?? null) ? $entry['profiles'] : [];
-            $scrub_block = is_array($entry['scrub'] ?? null) ? $entry['scrub'] : [];
-            $balance_block = is_array($entry['balance'] ?? null) ? $entry['balance'] : [];
-            $scrub_status_fs[$fs_name] = is_array($scrub_block['status'] ?? null) ? $scrub_block['status'] : [];
-            $scrub_status_devices[$fs_name] = is_array($scrub_block['devices'] ?? null) ? $scrub_block['devices'] : [];
-            $scrub_is_running_fs[$fs_name] = (bool) ($scrub_block['is_running'] ?? false);
-            $balance_status_fs[$fs_name] = is_array($balance_block['status'] ?? null) ? $balance_block['status'] : [];
-            $balance_is_running_fs[$fs_name] = (bool) ($balance_block['is_running'] ?? false);
-            $filesystem_uuid[$fs_name] = (string) ($entry['uuid'] ?? '');
-            $fs_rrd_key[$fs_name] = (string) ($entry['rrd_key'] ?? $fs_name);
-        }
-        $filesystems = array_keys($filesystem_entries);
-    } else {
-        $filesystems = [];
-        $filesystem_meta = [];
-        $device_map = [];
-        $filesystem_tables = [];
-        $device_tables = [];
-        $device_metadata = [];
-        $filesystem_profiles = [];
-        $scrub_status_fs = [];
-        $scrub_status_devices = [];
-        $balance_status_fs = [];
-        $scrub_is_running_fs = [];
-        $balance_is_running_fs = [];
-        $filesystem_uuid = [];
-        $fs_rrd_key = [];
-    }
-
-    sort($filesystems);
-
-    if (! is_string($selected_fs) || ! in_array($selected_fs, $filesystems, true)) {
-        $selected_fs = null;
-    }
-
-    if (! is_scalar($selected_dev) || (string) $selected_dev === '') {
-        $selected_dev = null;
-    } else {
-        $selected_dev_raw = $selected_dev;
-        $selected_dev = (string) $selected_dev;
-        if (! isset($selected_fs, $device_map[$selected_fs])) {
-            $selected_dev = null;
-        } else {
-            $dev_keys = array_keys((array) $device_map[$selected_fs]);
-            $dev_key_found = in_array($selected_dev, $dev_keys, true)
-                || (is_numeric($selected_dev) && in_array((int) $selected_dev, $dev_keys, true));
-            if (! $dev_key_found) {
-                $selected_dev = null;
-            }
-        }
-    }
-
-    $is_overview = ! isset($selected_fs);
-
-    return [
-        'selected_fs' => $selected_fs,
-        'selected_dev' => $selected_dev,
-        'is_overview' => $is_overview,
-        'filesystems' => $filesystems,
-        'filesystem_meta' => $filesystem_meta,
-        'device_map' => $device_map,
-        'filesystem_tables' => $filesystem_tables,
-        'device_tables' => $device_tables,
-        'device_metadata' => $device_metadata,
-        'filesystem_profiles' => $filesystem_profiles,
-        'scrub_status_fs' => $scrub_status_fs,
-        'scrub_status_devices' => $scrub_status_devices,
-        'balance_status_fs' => $balance_status_fs,
-        'scrub_is_running_fs' => $scrub_is_running_fs,
-        'balance_is_running_fs' => $balance_is_running_fs,
-        'filesystem_uuid' => $filesystem_uuid,
-        'fs_rrd_key' => $fs_rrd_key,
-    ];
-}
-
-$data = btrfs_initializeData($app, $device, $vars);
+$data = initialize_data($app, $device, $vars);
 
 function btrfs_renderNavigation(
     array $link_array,
@@ -1004,7 +900,7 @@ function btrfs_renderDevGraphs(
     btrfs_renderAppGraphs($app, $dev_graphs, $selected_fs, $selected_dev, $vars);
     $selected_diskio = btrfs_findDiskio($device_id, $device_tables, $selected_fs, $selected_dev, $device_metadata);
     if ($selected_diskio !== null) {
-        btrfs_renderDiskioGraphs($selected_diskio);
+        render_diskio_graphs($selected_diskio);
     }
 }
 
@@ -1023,7 +919,7 @@ function btrfs_renderFsGraphs(
         'btrfs_fs_errors_by_device' => 'Aggregate Errors by Device',
     ];
     btrfs_renderAppGraphs($app, $fs_graphs, $selected_fs, null, $vars);
-    btrfs_renderFsDiskioGraphs($app, $selected_fs);
+    render_fs_diskio_graphs($app, $selected_fs);
 }
 
 function btrfs_renderAppGraphs(
@@ -1149,61 +1045,6 @@ function btrfs_findDiskio(
     }
 
     return null;
-}
-
-function btrfs_renderDiskioGraphs(array $selected_diskio): void
-{
-    $diskio_id = $selected_diskio['diskio_id'];
-    $diskio_descr = trim((string) ($selected_diskio['diskio_descr'] ?? ''));
-    $diskio_label = $diskio_descr !== '' ? $diskio_descr : (string) $diskio_id;
-
-    $diskio_types = [
-        'diskio_ops' => 'Disk I/O Ops/sec',
-        'diskio_bits' => 'Disk I/O bps',
-    ];
-
-    foreach ($diskio_types as $diskio_type => $diskio_title) {
-        $graph_array = [
-            'height' => '100',
-            'width' => '215',
-            'to' => App\Facades\LibrenmsConfig::get('time.now'),
-            'id' => $diskio_id,
-            'type' => $diskio_type,
-        ];
-
-        echo '<div class="panel panel-default">';
-        echo '<div class="panel-heading"><h3 class="panel-title">' . htmlspecialchars($diskio_title . ': ' . $diskio_label) . '</h3></div>';
-        echo '<div class="panel-body"><div class="row">';
-        include 'includes/html/print-graphrow.inc.php';
-        echo '</div></div>';
-        echo '</div>';
-    }
-}
-
-function btrfs_renderFsDiskioGraphs(App\Models\Application $app, string $selected_fs): void
-{
-    $diskio_types = [
-        'btrfs_fs_diskio_ops' => 'Aggregate Ops/sec',
-        'btrfs_fs_diskio_bits' => 'Aggregate Bps',
-    ];
-
-    foreach ($diskio_types as $graph_type => $graph_title) {
-        $graph_array = [
-            'height' => '100',
-            'width' => '215',
-            'to' => App\Facades\LibrenmsConfig::get('time.now'),
-            'id' => $app['app_id'],
-            'fs' => $selected_fs,
-            'type' => 'application_' . $graph_type,
-        ];
-
-        echo '<div class="panel panel-default">';
-        echo '<div class="panel-heading"><h3 class="panel-title">' . htmlspecialchars($graph_title) . '</h3></div>';
-        echo '<div class="panel-body"><div class="row">';
-        include 'includes/html/print-graphrow.inc.php';
-        echo '</div></div>';
-        echo '</div>';
-    }
 }
 
 // -----------------------------------------------------------------------------

@@ -304,3 +304,253 @@ function load_state_sensors(int $device_id): array
 
     return $state_sensor_values;
 }
+
+function find_diskio(
+    int $device_id,
+    array $device_tables,
+    ?string $selected_fs,
+    ?string $selected_dev,
+    array $device_metadata
+): ?array {
+    if (! isset($selected_fs, $selected_dev)) {
+        return null;
+    }
+
+    $selected_dev_path = trim((string) ($device_tables[$selected_dev]['path'] ?? ''));
+    if ($selected_dev_path === '') {
+        return null;
+    }
+
+    $diskio_candidates = [];
+    $preferred_diskio_candidates = [];
+
+    $diskio_candidates[] = $selected_dev_path;
+    $without_dev_prefix = preg_replace('#^/dev/#', '', $selected_dev_path);
+    if ($without_dev_prefix !== '') {
+        $diskio_candidates[] = $without_dev_prefix;
+    }
+    $diskio_candidates[] = basename($selected_dev_path);
+
+    $selected_dev_metadata = $device_metadata[$selected_dev] ?? [];
+    if (is_array($selected_dev_metadata)) {
+        $primary_meta = $selected_dev_metadata['primary'] ?? [];
+        $backing_meta = $selected_dev_metadata['backing'] ?? [];
+
+        $primary_devnode = trim((string) ($primary_meta['devnode'] ?? ''));
+        if ($primary_devnode !== '') {
+            $diskio_candidates[] = $primary_devnode;
+            $diskio_candidates[] = ltrim(preg_replace('#^/dev/#', '', $primary_devnode), '/');
+            $diskio_candidates[] = basename($primary_devnode);
+        }
+
+        $primary_name = trim((string) ($primary_meta['name'] ?? ''));
+        if ($primary_name !== '') {
+            $diskio_candidates[] = $primary_name;
+            $diskio_candidates[] = '/dev/' . $primary_name;
+        }
+
+        $backing_name = trim((string) ($backing_meta['name'] ?? ''));
+        if ($backing_name !== '') {
+            $preferred_diskio_candidates[] = $backing_name;
+            $preferred_diskio_candidates[] = '/dev/' . $backing_name;
+            $diskio_candidates[] = $backing_name;
+            $diskio_candidates[] = '/dev/' . $backing_name;
+        }
+
+        $backing_devnode = trim((string) ($backing_meta['devnode'] ?? ''));
+        if ($backing_devnode !== '') {
+            $preferred_diskio_candidates[] = $backing_devnode;
+            $preferred_diskio_candidates[] = ltrim(preg_replace('#^/dev/#', '', $backing_devnode), '/');
+            $preferred_diskio_candidates[] = basename($backing_devnode);
+            $diskio_candidates[] = $backing_devnode;
+            $diskio_candidates[] = ltrim(preg_replace('#^/dev/#', '', $backing_devnode), '/');
+            $diskio_candidates[] = basename($backing_devnode);
+        }
+    }
+
+    $diskio_candidates = array_values(array_unique($diskio_candidates));
+    $preferred_diskio_candidates = array_values(array_unique(array_merge($preferred_diskio_candidates, $diskio_candidates)));
+
+    $diskio_rows = \dbFetchRows('SELECT `diskio_id`, `diskio_descr` FROM `ucd_diskio` WHERE `device_id` = ?', [$device_id]);
+    $diskio_by_descr = [];
+    foreach ($diskio_rows as $diskio_row) {
+        $diskio_descr = trim((string) ($diskio_row['diskio_descr'] ?? ''));
+        if ($diskio_descr !== '') {
+            $diskio_by_descr[$diskio_descr] = $diskio_row;
+        }
+    }
+
+    foreach ($preferred_diskio_candidates as $candidate) {
+        if (isset($diskio_by_descr[$candidate])) {
+            return $diskio_by_descr[$candidate];
+        }
+    }
+
+    if (count($diskio_rows) === 1) {
+        return $diskio_rows[0];
+    }
+
+    return null;
+}
+
+function render_diskio_graphs(array $selected_diskio): void
+{
+    $diskio_id = $selected_diskio['diskio_id'];
+    $diskio_descr = trim((string) ($selected_diskio['diskio_descr'] ?? ''));
+    $diskio_label = $diskio_descr !== '' ? $diskio_descr : (string) $diskio_id;
+
+    $diskio_types = [
+        'diskio_ops' => 'Disk I/O Ops/sec',
+        'diskio_bits' => 'Disk I/O bps',
+    ];
+
+    foreach ($diskio_types as $diskio_type => $diskio_title) {
+        $graph_array = [
+            'height' => '100',
+            'width' => '215',
+            'to' => \App\Facades\LibrenmsConfig::get('time.now'),
+            'id' => $diskio_id,
+            'type' => $diskio_type,
+        ];
+
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3 class="panel-title">' . htmlspecialchars($diskio_title . ': ' . $diskio_label) . '</h3></div>';
+        echo '<div class="panel-body"><div class="row">';
+        include 'includes/html/print-graphrow.inc.php';
+        echo '</div></div>';
+        echo '</div>';
+    }
+}
+
+function render_fs_diskio_graphs(\App\Models\Application $app, string $selected_fs): void
+{
+    $diskio_types = [
+        'btrfs_fs_diskio_ops' => 'Aggregate Ops/sec',
+        'btrfs_fs_diskio_bits' => 'Aggregate Bps',
+    ];
+
+    foreach ($diskio_types as $graph_type => $graph_title) {
+        $graph_array = [
+            'height' => '100',
+            'width' => '215',
+            'to' => \App\Facades\LibrenmsConfig::get('time.now'),
+            'id' => $app['app_id'],
+            'fs' => $selected_fs,
+            'type' => 'application_' . $graph_type,
+        ];
+
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3 class="panel-title">' . htmlspecialchars($graph_title) . '</h3></div>';
+        echo '<div class="panel-body"><div class="row">';
+        include 'includes/html/print-graphrow.inc.php';
+        echo '</div></div>';
+        echo '</div>';
+    }
+}
+
+function initialize_data(\App\Models\Application $app, array $device, array $vars): array
+{
+    $selected_fs = $vars['fs'] ?? null;
+    $selected_dev = $vars['dev'] ?? null;
+
+    $filesystem_entries = $app->data['filesystems'] ?? [];
+    $has_structured_filesystems = is_array($filesystem_entries) && count($filesystem_entries) > 0 && is_array(reset($filesystem_entries));
+
+    if ($has_structured_filesystems) {
+        $filesystem_meta = [];
+        $device_map = [];
+        $filesystem_tables = [];
+        $device_tables = [];
+        $device_metadata = [];
+        $filesystem_profiles = [];
+        $scrub_status_fs = [];
+        $scrub_status_devices = [];
+        $balance_status_fs = [];
+        $scrub_is_running_fs = [];
+        $balance_is_running_fs = [];
+        $filesystem_uuid = [];
+        $fs_rrd_key = [];
+
+        foreach ($filesystem_entries as $fs_name => $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            $filesystem_meta[$fs_name] = is_array($entry['meta'] ?? null) ? $entry['meta'] : [];
+            $device_map[$fs_name] = is_array($entry['device_map'] ?? null) ? $entry['device_map'] : [];
+            $filesystem_tables[$fs_name] = is_array($entry['table'] ?? null) ? $entry['table'] : [];
+            $device_tables[$fs_name] = is_array($entry['device_tables'] ?? null) ? $entry['device_tables'] : [];
+            $device_metadata[$fs_name] = is_array($entry['device_metadata'] ?? null) ? $entry['device_metadata'] : [];
+            $filesystem_profiles[$fs_name] = is_array($entry['profiles'] ?? null) ? $entry['profiles'] : [];
+            $scrub_block = is_array($entry['scrub'] ?? null) ? $entry['scrub'] : [];
+            $balance_block = is_array($entry['balance'] ?? null) ? $entry['balance'] : [];
+            $scrub_status_fs[$fs_name] = is_array($scrub_block['status'] ?? null) ? $scrub_block['status'] : [];
+            $scrub_status_devices[$fs_name] = is_array($scrub_block['devices'] ?? null) ? $scrub_block['devices'] : [];
+            $scrub_is_running_fs[$fs_name] = (bool) ($scrub_block['is_running'] ?? false);
+            $balance_status_fs[$fs_name] = is_array($balance_block['status'] ?? null) ? $balance_block['status'] : [];
+            $balance_is_running_fs[$fs_name] = (bool) ($balance_block['is_running'] ?? false);
+            $filesystem_uuid[$fs_name] = (string) ($entry['uuid'] ?? '');
+            $fs_rrd_key[$fs_name] = (string) ($entry['rrd_key'] ?? $fs_name);
+        }
+        $filesystems = array_keys($filesystem_entries);
+    } else {
+        $filesystems = [];
+        $filesystem_meta = [];
+        $device_map = [];
+        $filesystem_tables = [];
+        $device_tables = [];
+        $device_metadata = [];
+        $filesystem_profiles = [];
+        $scrub_status_fs = [];
+        $scrub_status_devices = [];
+        $balance_status_fs = [];
+        $scrub_is_running_fs = [];
+        $balance_is_running_fs = [];
+        $filesystem_uuid = [];
+        $fs_rrd_key = [];
+    }
+
+    sort($filesystems);
+
+    if (! is_string($selected_fs) || ! in_array($selected_fs, $filesystems, true)) {
+        $selected_fs = null;
+    }
+
+    if (! is_scalar($selected_dev) || (string) $selected_dev === '') {
+        $selected_dev = null;
+    } else {
+        $selected_dev = (string) $selected_dev;
+        if (! isset($selected_fs, $device_map[$selected_fs])) {
+            $selected_dev = null;
+        } else {
+            $dev_keys = array_keys((array) $device_map[$selected_fs]);
+            $dev_key_found = in_array($selected_dev, $dev_keys, true)
+                || (is_numeric($selected_dev) && in_array((int) $selected_dev, $dev_keys, true));
+            if (! $dev_key_found) {
+                $selected_dev = null;
+            }
+        }
+    }
+
+    $is_overview = ! isset($selected_fs);
+
+    return [
+        'selected_fs' => $selected_fs,
+        'selected_dev' => $selected_dev,
+        'is_overview' => $is_overview,
+        'filesystems' => $filesystems,
+        'filesystem_meta' => $filesystem_meta,
+        'device_map' => $device_map,
+        'filesystem_tables' => $filesystem_tables,
+        'device_tables' => $device_tables,
+        'device_metadata' => $device_metadata,
+        'filesystem_profiles' => $filesystem_profiles,
+        'scrub_status_fs' => $scrub_status_fs,
+        'scrub_status_devices' => $scrub_status_devices,
+        'balance_status_fs' => $balance_status_fs,
+        'scrub_is_running_fs' => $scrub_is_running_fs,
+        'balance_is_running_fs' => $balance_is_running_fs,
+        'filesystem_uuid' => $filesystem_uuid,
+        'fs_rrd_key' => $fs_rrd_key,
+    ];
+}
