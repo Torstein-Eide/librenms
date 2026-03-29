@@ -81,15 +81,14 @@ echo '<style>
 
 $data = initialize_data($app, $device, $vars);
 
-function btrfs_renderNavigation(
-    array $link_array,
-    array $filesystems,
-    ?string $selected_fs,
-    ?string $selected_dev,
-    array $filesystem_meta,
-    array $device_map,
-    array $device_tables
-): void {
+function btrfs_renderNavigation(array $link_array, array $data): void
+{
+    $filesystems = $data['filesystems'] ?? [];
+    $selected_fs = $data['selected_fs'];
+    $selected_dev = $data['selected_dev'];
+    $filesystem_meta = $data['filesystem_meta'] ?? [];
+    $device_map = $data['device_map'] ?? [];
+    $device_tables = $data['device_tables'] ?? [];
     print_optionbar_start();
 
     $overview_label = ! isset($selected_fs)
@@ -880,15 +879,13 @@ function btrfs_renderScrubPerDevice(
     echo '</div>';
 }
 
-function btrfs_renderDevGraphs(
-    App\Models\Application $app,
-    ?string $selected_fs,
-    ?string $selected_dev,
-    int $device_id,
-    array $device_tables,
-    array $device_metadata,
-    array $vars
-): void {
+function btrfs_renderDevGraphs(App\Models\Application $app, array $data, array $vars): void
+{
+    $device_tables = $data['device_tables'] ?? [];
+    $selected_fs = $data['selected_fs'];
+    $selected_dev = $data['selected_dev'];
+    $device_metadata = $data['device_metadata'] ?? [];
+
     $dev_graphs = [
         'btrfs_dev_usage' => 'Usage',
         'btrfs_dev_errors' => 'IO Errors (Rate)',
@@ -897,17 +894,16 @@ function btrfs_renderDevGraphs(
         'btrfs_dev_scrub_errors_derive' => 'Scrub Errors (Rate)',
     ];
     btrfs_renderAppGraphs($app, $dev_graphs, $selected_fs, $selected_dev, $vars);
-    $selected_diskio = find_diskio($device_id, $device_tables, $selected_fs, $selected_dev, $device_metadata);
+    $selected_diskio = find_diskio($app['device_id'], $device_tables, $selected_fs, $selected_dev, $device_metadata);
     if ($selected_diskio !== null) {
         render_diskio_graphs($selected_diskio);
     }
 }
 
-function btrfs_renderFsGraphs(
-    App\Models\Application $app,
-    string $selected_fs,
-    array $vars
-): void {
+function btrfs_renderFsGraphs(App\Models\Application $app, array $data, array $vars): void
+{
+    $selected_fs = $data['selected_fs'];
+
     $fs_graphs = [
         'btrfs_fs_space' => 'Filesystem Space',
         'btrfs_fs_scrub_bytes' => 'Filesystem Scrub Rate',
@@ -981,15 +977,7 @@ $selected_dev_path = $is_per_disk && isset($data['device_map'][$selected_fs][$se
     ? (string) $data['device_map'][$selected_fs][$selected_dev]
     : null;
 
-btrfs_renderNavigation(
-    $link_array,
-    $data['filesystems'],
-    $selected_fs,
-    $selected_dev,
-    $data['filesystem_meta'],
-    $data['device_map'],
-    $data['device_tables']
-);
+btrfs_renderNavigation($link_array, $data);
 
 if ($is_per_disk) {
     btrfs_renderDevView(
@@ -1000,7 +988,7 @@ if ($is_per_disk) {
         $data
     );
 
-    btrfs_renderDevGraphs($app, $selected_fs, $selected_dev, $device['device_id'], $data['device_tables'], $data['device_metadata'], $vars);
+    btrfs_renderDevGraphs($app, $data, $vars);
 } elseif (isset($selected_fs)) {
     btrfs_renderFsView(
         $app,
@@ -1009,7 +997,7 @@ if ($is_per_disk) {
         $data
     );
 
-    btrfs_renderFsGraphs($app, $selected_fs, $data);
+    btrfs_renderFsGraphs($app, $data, $vars);
 } else {
     btrfs_renderOverviewPage($app, $device, $data);
 }
