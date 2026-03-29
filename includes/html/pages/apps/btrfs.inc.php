@@ -128,57 +128,59 @@ if (! in_array($filter_status, $allowed_status_filters, true)) {
 // Render filter form with filesystem, device, and status inputs.
 // =============================================================================
 
-echo '<div class="panel panel-default">';
-echo '<div class="panel-heading"><h3 class="panel-title">Filters</h3></div>';
-echo '<div class="panel-body">';
-echo '<form method="get" class="form-inline" action="">';
-echo '<input type="hidden" name="page" value="apps">';
-echo '<input type="hidden" name="app" value="btrfs">';
+$filesystem_datalist_options = '';
+foreach ($filesystem_suggestions as $suggestion) {
+    $filesystem_datalist_options .= '<option value="' . htmlspecialchars($suggestion) . '"></option>';
+}
 
-// Filesystem filter input with autocomplete datalist.
-echo '<div class="form-group" style="margin-right: 8px;">';
-echo '<label for="btrfs-filter" style="margin-right: 4px;">Filesystem</label>';
-echo '<input id="btrfs-filter" name="filter" type="text" class="form-control input-sm" list="btrfs-filesystem-list" value="' . htmlspecialchars((string) ($vars['filter'] ?? '')) . '" placeholder="label, mountpoint">';
-echo '</div>';
+$device_datalist_options = '';
+foreach ($device_suggestions as $suggestion) {
+    $device_datalist_options .= '<option value="' . htmlspecialchars($suggestion) . '"></option>';
+}
 
-// Device filter input with autocomplete datalist.
-echo '<div class="form-group" style="margin-right: 8px;">';
-echo '<label for="btrfs-device-filter" style="margin-right: 4px;">Device</label>';
-echo '<input id="btrfs-device-filter" name="device" type="text" class="form-control input-sm" list="btrfs-device-list" value="' . htmlspecialchars((string) ($vars['device'] ?? '')) . '" placeholder="hostname">';
-echo '</div>';
-
-// Status filter dropdown.
-echo '<div class="form-group" style="margin-right: 8px;">';
-echo '<label for="btrfs-status-filter" style="margin-right: 4px;">Status</label>';
-echo '<select id="btrfs-status-filter" name="status" class="form-control input-sm">';
+$status_options = '';
 foreach ($allowed_status_filters as $status_option) {
     $selected = $filter_status === $status_option ? ' selected' : '';
-    echo '<option value="' . htmlspecialchars($status_option) . '"' . $selected . '>' . htmlspecialchars(ucfirst($status_option)) . '</option>';
+    $status_options .= '<option value="' . htmlspecialchars($status_option) . '"' . $selected . '>' . htmlspecialchars(ucfirst($status_option)) . '</option>';
 }
-echo '</select>';
-echo '</div>';
 
-// Submit and reset buttons.
-echo '<button type="submit" class="btn btn-primary btn-sm" style="margin-right: 8px;">Apply</button>';
-echo '<a href="' . Url::generate(['page' => 'apps', 'app' => 'btrfs']) . '" class="btn btn-default btn-sm">Reset</a>';
+$filter_value = htmlspecialchars((string) ($vars['filter'] ?? ''));
+$device_value = htmlspecialchars((string) ($vars['device'] ?? ''));
+$reset_url = Url::generate(['page' => 'apps', 'app' => 'btrfs']);
 
-// Filesystem suggestions datalist.
-echo '<datalist id="btrfs-filesystem-list">';
-foreach ($filesystem_suggestions as $suggestion) {
-    echo '<option value="' . htmlspecialchars($suggestion) . '"></option>';
-}
-echo '</datalist>';
-
-// Device suggestions datalist.
-echo '<datalist id="btrfs-device-list">';
-foreach ($device_suggestions as $suggestion) {
-    echo '<option value="' . htmlspecialchars($suggestion) . '"></option>';
-}
-echo '</datalist>';
-
-echo '</form>';
-echo '</div>';
-echo '</div>';
+echo <<<HTML
+<div class="panel panel-default">
+<div class="panel-heading"><h3 class="panel-title">Filters</h3></div>
+<div class="panel-body">
+<form method="get" class="form-inline" action="">
+<input type="hidden" name="page" value="apps">
+<input type="hidden" name="app" value="btrfs">
+<div class="form-group" style="margin-right: 8px;">
+<label for="btrfs-filter" style="margin-right: 4px;">Filesystem</label>
+<input id="btrfs-filter" name="filter" type="text" class="form-control input-sm" list="btrfs-filesystem-list" value="$filter_value" placeholder="label, mountpoint">
+</div>
+<div class="form-group" style="margin-right: 8px;">
+<label for="btrfs-device-filter" style="margin-right: 4px;">Device</label>
+<input id="btrfs-device-filter" name="device" type="text" class="form-control input-sm" list="btrfs-device-list" value="$device_value" placeholder="hostname">
+</div>
+<div class="form-group" style="margin-right: 8px;">
+<label for="btrfs-status-filter" style="margin-right: 4px;">Status</label>
+<select id="btrfs-status-filter" name="status" class="form-control input-sm">
+$status_options
+</select>
+</div>
+<button type="submit" class="btn btn-primary btn-sm" style="margin-right: 8px;">Apply</button>
+<a href="$reset_url" class="btn btn-default btn-sm">Reset</a>
+<datalist id="btrfs-filesystem-list">
+$filesystem_datalist_options
+</datalist>
+<datalist id="btrfs-device-list">
+$device_datalist_options
+</datalist>
+</form>
+</div>
+</div>
+HTML;
 
 // =============================================================================
 // Filesystems Overview Panel
@@ -197,11 +199,17 @@ if ($apps->isEmpty()) {
     return;
 }
 
-// Begin overview table with sticky first column.
-echo '<div class="table-responsive">';
-echo '<table class="table table-condensed table-striped table-hover btrfs-sticky-first">';
-echo '<thead><tr><th>Device</th><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Missing</th><th>Devices</th><th>Ops</th><th>Bps</th><th>Combined Status</th></tr></thead>';
-echo '<tbody>';
+// Build overview table header with heredoc.
+$table_header = <<<'HTML'
+<thead><tr><th>Device</th><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Missing</th><th>Devices</th><th>Ops</th><th>Bps</th><th>Combined Status</th></tr></thead>
+HTML;
+
+echo <<<HTML
+<div class="table-responsive">
+<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
+$table_header
+<tbody>
+HTML;
 
 // Iterate through each app and filesystem to build table rows.
 foreach ($apps as $app) {
@@ -346,33 +354,48 @@ foreach ($apps as $app) {
         // Build link to filesystem detail view on device page.
         $fsDetailLink = ['page' => 'device', 'device' => $device->device_id, 'tab' => 'apps', 'app' => 'btrfs', 'fs' => $fs];
 
-        // Render table row with all columns.
-        echo '<tr>';
-        echo '<td>' . Url::deviceLink($device) . '</td>';
-        echo '<td>' . generate_link(htmlspecialchars((string) $displayName), ['page' => 'device', 'device' => $device->device_id, 'tab' => 'apps', 'app' => 'btrfs', 'fs' => $fs]) . '</td>';
-        echo '<td>' . status_badge($ioState) . '</td>';
-        echo '<td>' . status_badge($scrubState) . '</td>';
-        echo '<td>' . status_badge($balanceState) . '</td>';
-        echo '<td>' . htmlspecialchars($scrubProgressText) . '</td>';
-        echo '<td>' . htmlspecialchars(number_format($totalErrors)) . '</td>';
-        echo '<td>' . htmlspecialchars($usedPercentText) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric_value($fsData['used'] ?? null, 'used')) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric_value($fsData['free_estimated'] ?? null, 'free_estimated')) . '</td>';
-        echo '<td>' . htmlspecialchars(format_metric_value($fsData['device_size'] ?? null, 'device_size')) . '</td>';
-        echo '<td>' . (($fsData['has_missing'] ?? false) ? '<span class="label label-danger">Yes</span>' : '<span class="label label-default">No</span>') . '</td>';
-        echo '<td>' . number_format(count($fsDevices)) . '</td>';
-        echo '<td>' . generate_link(Url::lazyGraphTag($opsGraph), $fsDetailLink) . '</td>';
-        echo '<td>' . generate_link(Url::lazyGraphTag($bpsGraph), $fsDetailLink) . '</td>';
-        echo '<td>' . Url::overlibLink($graphLink, $graphImg, $displayName . ' - Combined Status') . '</td>';
-        echo '</tr>';
+        // Build table row cells array for rendering.
+        $has_missing = $fsData['has_missing'] ?? false;
+        $missing_badge = $has_missing
+            ? '<span class="label label-danger">Yes</span>'
+            : '<span class="label label-default">No</span>';
+
+        $row_cells = [
+            Url::deviceLink($device),
+            generate_link(htmlspecialchars((string) $displayName), ['page' => 'device', 'device' => $device->device_id, 'tab' => 'apps', 'app' => 'btrfs', 'fs' => $fs]),
+            status_badge($ioState),
+            status_badge($scrubState),
+            status_badge($balanceState),
+            htmlspecialchars($scrubProgressText),
+            htmlspecialchars(number_format($totalErrors)),
+            htmlspecialchars($usedPercentText),
+            htmlspecialchars(format_metric_value($fsData['used'] ?? null, 'used')),
+            htmlspecialchars(format_metric_value($fsData['free_estimated'] ?? null, 'free_estimated')),
+            htmlspecialchars(format_metric_value($fsData['device_size'] ?? null, 'device_size')),
+            $missing_badge,
+            number_format(count($fsDevices)),
+            generate_link(Url::lazyGraphTag($opsGraph), $fsDetailLink),
+            generate_link(Url::lazyGraphTag($bpsGraph), $fsDetailLink),
+            Url::overlibLink($graphLink, $graphImg, $displayName . ' - Combined Status'),
+        ];
+
+        $row_html = '<tr>';
+        for ($i = 0; $i < count($row_cells); $i++) {
+            $row_html .= '<td>' . $row_cells[$i] . '</td>';
+        }
+        $row_html .= '</tr>';
+
+        echo $row_html;
     }
 }
 
-echo '</tbody>';
-echo '</table>';
-echo '</div>';
-echo '</div>';
-echo '</div>';
+echo <<<'HTML'
+</tbody>
+</table>
+</div>
+</div>
+</div>
+HTML;
 
 // =============================================================================
 // Device-Grouped Graph Panels
@@ -477,12 +500,8 @@ foreach ($apps as $app) {
             continue;
         }
 
-        // Render filesystem block with header and graphs.
-        echo '<div class="panel panel-default" style="margin-bottom: 10px;">';
-        echo '<div class="panel-heading"><h3 class="panel-title"><a href="' . $headerLink . '" style="color:#337ab7;">' . htmlspecialchars($displayFs) . '</a><div class="pull-right"><small class="text-muted">' . htmlspecialchars($usedText . '/' . $totalText . ' ' . $usedPercentText) . '</small> ' . status_badge($overallState) . '</div></h3></div>';
-        echo '<div class="panel-body"><div class="row">';
-
-        // Render each mini-graph with title and link.
+        // Build mini-graph HTML for this filesystem.
+        $graphs_html = '';
         foreach ($graphTypes as $graphType => $graphTitle) {
             $graph_array = [
                 'height' => '80',
@@ -495,14 +514,22 @@ foreach ($apps as $app) {
                 'legend' => 'no',
             ];
 
-            echo '<div class="pull-left" style="margin-right: 8px;">';
-            echo '<div class="text-muted" style="font-size: 11px; margin-bottom: 4px;">' . htmlspecialchars($graphTitle) . '</div>';
-            echo '<a href="' . $headerLink . '">' . Url::lazyGraphTag($graph_array) . '</a>';
-            echo '</div>';
+            $graphs_html .= '<div class="pull-left" style="margin-right: 8px;">';
+            $graphs_html .= '<div class="text-muted" style="font-size: 11px; margin-bottom: 4px;">' . htmlspecialchars($graphTitle) . '</div>';
+            $graphs_html .= '<a href="' . $headerLink . '">' . Url::lazyGraphTag($graph_array) . '</a>';
+            $graphs_html .= '</div>';
         }
 
-        echo '</div></div>';
-        echo '</div>';
+        $usage_text = htmlspecialchars($usedText . '/' . $totalText . ' ' . $usedPercentText);
+
+        echo <<<HTML
+<div class="panel panel-default" style="margin-bottom: 10px;">
+<div class="panel-heading"><h3 class="panel-title"><a href="$headerLink" style="color:#337ab7;">{$displayFs}</a><div class="pull-right"><small class="text-muted">{$usage_text}</small> {$overallState}</div></h3></div>
+<div class="panel-body"><div class="row">
+{$graphs_html}
+</div></div>
+</div>
+HTML;
     }
 
     echo '</div>';
