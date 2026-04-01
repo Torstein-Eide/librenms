@@ -357,8 +357,9 @@ function is_byte_metric(string $metric): bool
         || str_contains($metric, 'slack')
         || str_contains($metric, 'allocated')
         || str_contains($metric, 'unallocated')
-        || str_starts_with($metric, 'usage.')
         || str_contains($metric, 'bytes')
+        || str_starts_with($metric, 'usage.')
+        || str_starts_with($metric, 'usage_')
         || str_starts_with($metric, 'data_')
         || str_starts_with($metric, 'metadata_')
         || str_starts_with($metric, 'system_');
@@ -472,6 +473,94 @@ function format_display_name(string $key): string
 {
     $name = preg_replace('/\[([0-9]+)\]/', ' $1', $key);
     $name = str_replace(['.', '_', '-'], ' ', (string) $name);
+
+    $pretty = [
+        'usage data' => 'Data',
+        'usage.metadata' => 'Data',
+        'usage_metadata' => 'Data',
+        'usage metadata' => 'Metadata',
+        'usage.metadata' => 'Metadata',
+        'usage_metadata' => 'Metadata',
+        'usage system' => 'System',
+        'usage.system' => 'System',
+        'usage_system' => 'System',
+        'usage device size' => 'Device Size',
+        'usage.device_size' => 'Device Size',
+        'usage_device_size' => 'Device Size',
+        'usage unallocated' => 'Unallocated',
+        'usage.unallocated' => 'Unallocated',
+        'usage_unallocated' => 'Unallocated',
+        'usage slack' => 'Slack',
+        'usage.slack' => 'Slack',
+        'usage_slack' => 'Slack',
+        'data ratio' => 'Data Ratio',
+        'data_ratio' => 'Data Ratio',
+        'metadata ratio' => 'Metadata Ratio',
+        'metadata_ratio' => 'Metadata Ratio',
+        'device size' => 'Device Size',
+        'device_size' => 'Device Size',
+        'device allocated' => 'Allocated',
+        'device_allocated' => 'Allocated',
+        'device unallocated' => 'Unallocated',
+        'device_unallocated' => 'Unallocated',
+        'device missing' => 'Missing',
+        'device_missing' => 'Missing',
+        'device slack' => 'Slack',
+        'device_slack' => 'Slack',
+        'free estimated' => 'Free (Estimated)',
+        'free_estimated' => 'Free (Estimated)',
+        'free estimated min' => 'Free (Estimated Min)',
+        'free_estimated_min' => 'Free (Estimated Min)',
+        'free statfs df' => 'Free (statfs)',
+        'free_statfs_df' => 'Free (statfs)',
+        'global reserve' => 'Global Reserve',
+        'global_reserve' => 'Global Reserve',
+        'global reserve used' => 'Global Reserve Used',
+        'global_reserve_used' => 'Global Reserve Used',
+        'bytes scrubbed' => 'Bytes Scrubbed',
+        'bytes_scrubbed' => 'Bytes Scrubbed',
+        'total to scrub' => 'Total to Scrub',
+        'total_to_scrub' => 'Total to Scrub',
+        'progress percent' => 'Progress',
+        'progress_percent' => 'Progress',
+        'error summary' => 'Error Summary',
+        'error_summary' => 'Error Summary',
+        'super errors' => 'Super Errors',
+        'super_errors' => 'Super Errors',
+        'malloc errors' => 'Malloc Errors',
+        'malloc_errors' => 'Malloc Errors',
+        'corrected errors' => 'Corrected Errors',
+        'corrected_errors' => 'Corrected Errors',
+        'uncorrectable errors' => 'Uncorrectable Errors',
+        'uncorrectable_errors' => 'Uncorrectable Errors',
+        'verified errors' => 'Verified Errors',
+        'verified_errors' => 'Verified Errors',
+        'unverified errors' => 'Unverified Errors',
+        'unverified_errors' => 'Unverified Errors',
+        'csum errors' => 'Checksum Errors',
+        'csum_errors' => 'Checksum Errors',
+        'read errors' => 'Read Errors',
+        'read_errors' => 'Read Errors',
+        'verify errors' => 'Verify Errors',
+        'verify_errors' => 'Verify Errors',
+        'scrub started' => 'Scrub Started',
+        'scrub_started' => 'Scrub Started',
+        'data extents scrubbed' => 'Data Extents Scrubbed',
+        'data_extents_scrubbed' => 'Data Extents Scrubbed',
+        'tree extents scrubbed' => 'Tree Extents Scrubbed',
+        'tree_extents_scrubbed' => 'Tree Extents Scrubbed',
+        'data bytes scrubbed' => 'Data Bytes Scrubbed',
+        'data_bytes_scrubbed' => 'Data Bytes Scrubbed',
+        'tree bytes scrubbed' => 'Tree Bytes Scrubbed',
+        'tree_bytes_scrubbed' => 'Tree Bytes Scrubbed',
+        'last physical' => 'Last Physical',
+        'last_physical' => 'Last Physical',
+    ];
+
+    $key_lc = strtolower($name);
+    if (isset($pretty[$key_lc])) {
+        return $pretty[$key_lc];
+    }
 
     return ucwords((string) $name);
 }

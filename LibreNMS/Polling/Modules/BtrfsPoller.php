@@ -428,19 +428,54 @@ class BtrfsDiscovery
 
 class BtrfsPoller
 {
+    // =============================================================================
     // Constants
+    // =============================================================================
+
+    // Minimum progress percentage at which a null scrub status is treated as finished (RAID5/6 fallback)
     private const SCRUB_ASSUMED_DONE_THRESHOLD = 90;
+
+    // Run discovery every N polls (0 = disabled, discovery only on topology changes)
     private const DISCOVERY_INTERVAL = 3;
+
+    // Maximum length for filesystem labels stored in app->data
     private const MAX_LABEL_LENGTH = 256;
+
+    // Maximum length for the overall status text stored in app->data
     private const MAX_STATUS_TEXT_LENGTH = 64;
 
-    // Services - initialized in initialize(), shared by all private methods
+    // =============================================================================
+    // Instance Properties
+    // All properties are set once during initialize() and read throughout polling.
+    // =============================================================================
+
+    // Device array passed to poll(); set once in poll().
     private array $device = [];
+
+    // The LibreNMS Application model for this btrfs app; set once in poll().
     private App\Models\Application $app;
+
+    // Parsed JSON payload from the btrfs agent; set in fetchPayload().
     private array $appPayload = [];
+
+    // True when filesystem/device counts match the cached discovery snapshot and no
+    // per-filesystem structural changes were detected; used to skip sensor upserts.
     private bool $structureUnchanged = false;
+
+    // Accumulator: the app->data structure being built for this poll. Persisted to
+    // the DB at the end of polling via $this->app->data = $this->newData.
     private array $newData = [];
+
+    // Working state set per-filesystem during processFilesystem(); reset at the start
+    // of each filesystem loop. Holds fs context ($working['fs']) and running metrics
+    // accumulators ($working['acc']) shared across processFilesystem() and processDevices().
     private array $working = [];
+
+    // =============================================================================
+    // Service Objects
+    // Instantiated once in initialize(); used throughout polling.
+    // =============================================================================
+
     private BtrfsPayloadParser $parser;
     private BtrfsStatusMapper $mapper;
     private BtrfsSensorSync $sensorSync;
@@ -453,39 +488,50 @@ class BtrfsPoller
      */
     public function poll(array $device, App\Models\Application $app): void
     {
+        // Store device and app references for use in all private methods.
         $this->device = $device;
         $this->app = $app;
 
+        // Initialise logging context for this poll cycle.
         App_log::setApp('btrfs');
         App_log::setHostname($device['hostname'] ?? 'unknown');
         App_log::setLevel('DEBUG');
 
+        // Reset RRD call counters so each poll starts with a clean baseline.
         BtrfsRrdWriter::resetCallCounters();
 
+        // Instantiate all service objects (parser, mapper, sensor sync, RRD writer, aggregator, discovery).
         $this->initialize();
 
-        $agentOutput = [];
-        $oldData = [];
-
+        // Attempt to fetch and parse the JSON payload from the btrfs agent.
+        // Returns the btrfs agent protocol version on success, or false on any failure.
         $fetchResult = $this->fetchPayload($agentOutput, $oldData);
         if ($fetchResult === false) {
             return;
         }
 
+        // Seed the new app->data structure, preserving the existing discovery block so it is
+        // carried forward even if discovery is skipped this poll.
         $this->newData = [
             'discovery' => $this->app->data['discovery'] ?? null,
             'filesystems' => [],
         ];
 
+        // Run discovery if due, or skip it and check whether the filesystem/device topology
+        // matches the cached snapshot. Sets $this->structureUnchanged accordingly.
         $this->structureUnchanged = $this->runDiscovery();
 
+        // Ensure state sensor index IDs are loaded from the DB (or created and cached).
         $this->loadStateIndexes();
 
+        // Reset per-poll accumulators and iterate over every filesystem discovered.
         $this->working = ['acc' => ['metrics' => []]];
         $this->processFilesystems();
 
+        // Compute overall app status, assemble the complete app->data, write RRD, and persist.
         $this->persistAppData($fetchResult);
 
+        // Log RRD call statistics for this poll cycle.
         BtrfsRrdWriter::printCallCounters();
     }
 
@@ -504,29 +550,40 @@ class BtrfsPoller
 
     /**
      * Fetch and validate the agent JSON payload.
-     * Returns false if the payload is missing, unparseable, or an unsupported version.
-     * Returns int (btrfsDevVersion) on success.
+     *
+     * Returns the btrfs agent protocol version (int >= 1) on success, or false if the
+     * payload is missing, unparseable, or reports version 0 with no filesystem data.
+     *
+     * @param  array &$agentOutput  Populated with the 'data' section of the payload.
+     * @param  array &$oldData      Populated with the previous app->data for reference.
+     * @return int|false           Agent protocol version on success, false on failure.
      */
     private function fetchPayload(array &$agentOutput, array &$oldData): int|false
     {
+        // Attempt to retrieve and parse the JSON payload from the btrfs agent.
         try {
             $this->appPayload = json_app_get($this->device, 'btrfs', 1);
             $agentOutput = $this->appPayload['data'];
             $oldData = $this->app->data ?? [];
         } catch (JsonAppException $e) {
+            // Agent returned no data or the payload was malformed; mark app as unavailable.
             echo PHP_EOL . 'btrfs:' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
             update_application($this->app, $e->getCode() . ':' . $e->getMessage(), []);
 
             return false;
         }
 
+        // Determine the btrfs agent protocol version from the payload.
         $tables = $agentOutput['tables'] ?? [];
         $fsList = $tables['filesystems'] ?? [];
         $btrfsDevVersion = (int) ($agentOutput['version'] ?? $this->appPayload['version'] ?? 0);
 
+        // Treat a version-0 payload with filesystem rows as a valid protocol v1 agent.
         if ($btrfsDevVersion < 1 && count($fsList) > 0) {
             $btrfsDevVersion = 1;
         }
+
+        // Reject payloads that report no version and contain no filesystem data.
         if ($btrfsDevVersion < 1) {
             $this->sensorSync->deleteAllStateAndCountSensors($this->device);
             $this->app->data = [];
@@ -540,18 +597,29 @@ class BtrfsPoller
 
     /**
      * Decide whether discovery is due, run it if so, then compute the structure-unchanged flag.
-     * Returns true if the filesystem/device structure is unchanged from the last discovery.
+     *
+     * Discovery runs when:
+     * - This is the first poll (no cached discovery state)
+     * - The filesystem or device count in the payload has increased
+     * - The periodic interval (DISCOVERY_INTERVAL polls) has elapsed
+     *
+     * Returns true if the filesystem/device topology is unchanged from the last discovery.
+     * When true, sensor upserts are skipped for filesystems whose device map also matches
+     * the cached structure (see filesystemMatchesCache()).
+     *
+     * @return bool  True = topology unchanged, skip sensor upserts where safe; false = upserts required.
      */
     private function runDiscovery(): bool
     {
         $tables = $this->appPayload['data']['tables'] ?? [];
         $fsList = $tables['filesystems'] ?? [];
 
+        // Load or seed the discovery state and bump the poll-count (polls since last discovery).
         $discovery = $this->discovery->initDiscoveryState($this->app);
         $discovery['poll_count'] = ($discovery['poll_count'] ?? 0) + 1;
         $pollCount = $discovery['poll_count'];
 
-        // Extract authoritative counters from the agent payload (falls back to table row counts)
+        // Extract authoritative filesystem/device/backing-device counts from the agent payload.
         $currentCounters = $this->discovery->extractCounters($this->appPayload['data'], $tables, $fsList);
 
         App_log::debug('Discovery state loaded', [
@@ -559,29 +627,33 @@ class BtrfsPoller
             'previous_fs_count' => count($discovery['filesystems'] ?? []),
         ]);
 
+        // Decide whether to run discovery this poll, or skip and persist the incremented poll_count.
         if ($this->discovery->shouldSkip($currentCounters, $discovery, $pollCount, self::DISCOVERY_INTERVAL)) {
             App_log::info('Discovery skipped - not yet due', [
                 'polls_since_last_discovery' => $pollCount,
                 'interval' => self::DISCOVERY_INTERVAL,
             ]);
-            // Persist the bumped poll_count even when skipping
+            // Carry the bumped count forward even when skipping so the interval timer advances.
             $this->discovery->saveDiscoveryData($this->app, $discovery);
         } else {
-            // Reset counter before discovery so it persists as 0 (polls since last discovery)
+            // Reset poll_count before discovery so it persists as 0 (polls since last discovery ran).
             $discovery['poll_count'] = 0;
             $this->discovery->discover($this->device, $this->app, $tables, $fsList, $discovery, $currentCounters);
         }
 
+        // Carry the discovery block into the new app->data (preserved even when discovery was skipped).
         $this->newData['discovery'] = $this->app->data['discovery'] ?? $discovery;
 
-        // If discovery ran this poll, sensor upserts must run regardless of counters
+        // If discovery ran this poll, force all sensor upserts regardless of counter equality.
         if ($this->discovery->wasRun()) {
             App_log::info('Discovery ran - forcing sensor upserts');
 
             return false;
         }
 
-        // Compare live counters to the cached snapshot to decide if sensor upserts can be skipped
+        // Compare live counters to the cached snapshot to decide if sensor upserts can be skipped.
+        // Note: per-filesystem structural changes (e.g. device path change) are checked in
+        // filesystemMatchesCache() within processFilesystem().
         $cachedCounters = $this->discovery->getCurrentCounters($this->app);
         $structureUnchanged = ($currentCounters === $cachedCounters);
 
@@ -649,12 +721,14 @@ class BtrfsPoller
      */
     private function processFilesystem(string $fsUuid): void
     {
+        // Load tables from the agent payload.
         $tables = $this->appPayload['data']['tables'] ?? [];
         $fsList = $tables['filesystems'] ?? [];
         if (! isset($fsList[$fsUuid])) {
             return;
         }
 
+        // Seed per-filesystem working context from the cached discovery state.
         $cachedFs = $this->app->data['discovery']['filesystems'][$fsUuid] ?? [];
         $this->working['fs'] = [
             'uuid' => $fsUuid,
@@ -663,27 +737,35 @@ class BtrfsPoller
             'cached_devices' => $cachedFs['devices'] ?? [],
         ];
 
+        // Derive the human-readable display name (label, or mountpoint, or 'root' for '/').
         $fsInfo = $this->parser->getFsInfo($tables, $fsUuid);
         $fsLabel = self::truncate($fsInfo['label'] ?? '', self::MAX_LABEL_LENGTH);
-        $this->working['fs']['display_name'] = $fsLabel !== '' ? $fsLabel : ($this->working['fs']['name'] === '/' ? 'root' : $this->working['fs']['name']);
+        $this->working['fs']['display_name'] = $fsLabel !== ''
+            ? $fsLabel
+            : ($this->working['fs']['name'] === '/' ? 'root' : $this->working['fs']['name']);
 
+        // Extract space usage fields from the overall normalisation block and build the RRD field list.
         $overall = $this->parser->normalizeOverall($tables, $fsUuid);
         $fields = [];
         foreach ($this->rrdWriter->fsSpaceDatasets as $ds => $key) {
             $fields[$ds] = $overall[$key] ?? null;
         }
 
+        // Build the metric prefix used for update_application() output (e.g. "fs_84294f69_device_size").
         $fsMetricPrefix = 'fs_' . $this->working['fs']['rrd_id'] . '_';
 
+        // Extract all per-device data from the payload tables.
         $devices = $this->parser->extractDeviceStats($tables, $fsUuid);
         $usageDevices = $this->parser->extractDeviceUsage($tables, $fsUuid);
         $usageTypeTotals = $this->parser->extractUsageTypeTotals($tables, $fsUuid);
         $rawScrubDevices = $this->parser->extractScrubDevices($tables, $fsUuid);
 
+        // Retrieve the previous scrub state so this poll can detect counter/session resets.
         $previousScrubState = $this->app->data['filesystems'][$fsUuid]['scrub']['status'] ?? [];
         $fsPreviousProgress = is_numeric($previousScrubState['progress'] ?? null) ? (float) $previousScrubState['progress'] : null;
         $this->working['fs']['previous_progress'] = $fsPreviousProgress;
 
+        // Normalise the raw scrub status from the agent, applying RAID5/6 fallback logic.
         $scrubNormalized = $this->normalizeStatus(
             $this->parser->extractScrubStatus($tables, $fsUuid),
             $fsPreviousProgress
@@ -693,49 +775,59 @@ class BtrfsPoller
         $scrubStarted = $scrubNormalized['started'];
         $scrubProgress = $scrubNormalized['progress'];
 
+        // Detect counter/session resets before writing the scrub bytes RRD.
         $scrubBytesForRrd = $this->bytesForRrd(
             $scrubBytesScrubbed,
             $scrubStarted,
             $this->app->data['filesystems'][$fsUuid]['scrub']['status'] ?? []
         );
-         // Persist the current scrub state so the next poll can detect resets
+
+        // Persist the current scrub state (bytes, started, progress) so the next poll can detect resets.
         $this->newData['filesystems'][$fsUuid]['scrub']['status'] = [
             'bytes' => $scrubBytesScrubbed,
             'scrub_started' => $scrubStarted,
             'progress' => $scrubProgress,
         ];
 
+        // Extract and normalise the balance status for this filesystem.
         $fsBalanceStatus = $this->parser->extractBalanceStatus($tables, $fsUuid);
         $balanceStatusCode = $this->mapper->getBalanceStatusCodeFromFlat($fsBalanceStatus);
+        // Only publish the balance state sensor while a balance operation is actually running.
         $publishBalanceState = ! empty($fsBalanceStatus['is_running']);
 
+        // Detect whether any device is currently missing from the filesystem.
         $this->working['fs']['has_missing'] = $this->parser->filesystemHasMissingDevice($tables, $fsUuid);
 
+        // Process all devices: write per-device RRDs, build table rows, accumulate error counts,
+        // log new errors, and upsert per-device sensors. Returns aggregated results for this fs.
         $devResult = $this->processDevices();
 
+        // Unpack aggregated results from processDevices().
         $ioStatusCode = $devResult['io_status_code'];
         $scrubStatusCode = $devResult['scrub_status_code'];
         $scrubIsRunning = $devResult['scrub_is_running'];
         $scrubOperation = (int) ($this->working['fs']['scrub_status']['ops_status'] ?? -1);
         $fsScrubHealth = $devResult['fs_scrub_health'];
-        // Add usage totals (allocated/unallocated) to the field array and metrics
+
+        // Sum device-level usage into filesystem totals and add to the RRD fields and metrics.
         $usageTotals = $this->rrdWriter->sumUsageTotals($usageDevices);
         foreach ($usageTotals as $k => $v) {
             $fields[$k] = $v;
             $this->working['acc']['metrics'][$fsMetricPrefix . $k] = $v;
         }
 
+        // Add the scrub bytes (rate) to the fields and metrics.
         $fields[BtrfsRrdWriter::DS_SCRUB_BYTES] = $scrubBytesForRrd;
         $this->working['acc']['metrics'][$fsMetricPrefix . BtrfsRrdWriter::DS_SCRUB_BYTES] = $scrubBytesForRrd;
 
-        // Write one RRD per RAID profile type (e.g. single, dup, raid1)
+        // Write one RRD per RAID profile type (e.g. data_single, metadata_raid1) on this filesystem.
         foreach ($usageTypeTotals as $typeKey => $typeValue) {
             $typeId = $this->parser->normalizeId((string) $typeKey);
             $this->rrdWriter->writeTypeRrd($this->device, 'btrfs', $this->app->app_id, $this->working['fs']['rrd_id'], $typeId, $typeValue);
             $this->working['acc']['metrics'][$fsMetricPrefix . 'type_' . $typeId] = $typeValue;
         }
 
-        // Append status codes to both the main RRD field array and the metrics map
+        // Append IO/scrub/balance status codes to the RRD fields and metrics accumulator.
         $fields[BtrfsRrdWriter::DS_IO_STATUS] = $ioStatusCode;
         $fields[BtrfsRrdWriter::DS_SCRUB_STATUS] = $scrubStatusCode;
         $fields[BtrfsRrdWriter::DS_SCRUB_OPERATION] = $scrubOperation;
@@ -747,41 +839,62 @@ class BtrfsPoller
         $this->working['acc']['metrics'][$fsMetricPrefix . BtrfsRrdWriter::DS_SCRUB_HEALTH] = $fsScrubHealth;
         $this->working['acc']['metrics'][$fsMetricPrefix . BtrfsRrdWriter::DS_BALANCE_STATUS] = $balanceStatusCode;
 
-        // Feed the aggregator so persistAppData() can derive the overall app status
+        // Feed the aggregator so persistAppData() can derive the overall application status.
         $this->agg->addIoStatus($ioStatusCode);
         $this->agg->addScrubStatus($scrubStatusCode);
         $this->agg->addBalanceStatus($balanceStatusCode);
 
+        // Load cached state sensor index IDs (created once per poll in loadStateIndexes()).
         $stateIndexes = $this->app->data['state_indexes'] ?? [];
         $ioStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_IO] ?? 0;
         $scrubStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB] ?? 0;
         $scrubOpsStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS] ?? 0;
         $balanceStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_BALANCE] ?? 0;
 
+        // Upsert filesystem-level state sensors unless the topology is unchanged and no per-FS
+        // structural changes were detected (filesystemMatchesCache). Sensor upserts are always
+        // performed when discovery ran this poll ($this->structureUnchanged is false in that case).
         $cachedFilesystems = $this->app->data['discovery']['filesystems'] ?? [];
         if (! $this->structureUnchanged || ! $this->discovery->filesystemMatchesCache($fsUuid, $this->working['fs']['rrd_id'], $devices, $cachedFilesystems)) {
-            $this->upsertFsSensors($this->working['fs']['rrd_id'], $this->working['fs']['display_name'], $ioStatusCode, $scrubStatusCode, $scrubOperation, $balanceStatusCode, $publishBalanceState, $ioStateIndexId, $scrubStateIndexId, $scrubOpsStateIndexId, $balanceStateIndexId);
+            $this->upsertFsSensors(
+                $this->working['fs']['rrd_id'],
+                $this->working['fs']['display_name'],
+                $ioStatusCode,
+                $scrubStatusCode,
+                $scrubOperation,
+                $balanceStatusCode,
+                $publishBalanceState,
+                $ioStateIndexId,
+                $scrubStateIndexId,
+                $scrubOpsStateIndexId,
+                $balanceStateIndexId
+            );
         } else {
             App_log::debug('Skipping fs sensor upsert (structure unchanged)', ['fs_uuid' => $fsUuid]);
         }
-        // Write state sensor RRDs every poll so graphs always reflect current status
+
+        // Write state sensor RRDs every poll so graphs always reflect the current status.
         $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.io', BtrfsSensorSync::STATE_SENSOR_IO, $this->working['fs']['display_name'] . ' IO', $ioStatusCode);
         $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.scrub', BtrfsSensorSync::STATE_SENSOR_SCRUB, $this->working['fs']['display_name'] . ' Scrub', $scrubStatusCode);
         $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.scrub_ops', BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS, $this->working['fs']['display_name'] . ' Scrub Ops', $scrubOperation);
         if ($publishBalanceState) {
             $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.balance', BtrfsSensorSync::STATE_SENSOR_BALANCE, $this->working['fs']['display_name'] . ' Balance', $balanceStatusCode);
         }
-        // Write the consolidated filesystem RRD and mirror fields into the metrics map
+
+        // Write the consolidated filesystem-level RRD (all space/status fields in one file).
         $this->rrdWriter->writeFsRrd($this->device, 'btrfs', $this->app->app_id, $this->working['fs']['rrd_id'], $fields);
 
+        // Mirror RRD fields into the update_application() metrics map.
         foreach ($fields as $field => $value) {
             $this->working['acc']['metrics'][$fsMetricPrefix . $field] = $value;
         }
 
+        // Merge per-device metrics into the filesystem metrics map.
         foreach ($devResult['metrics'] as $k => $v) {
             $this->working['acc']['metrics'][$fsMetricPrefix . $k] = $v;
         }
 
+        // Build the per-device scrub data block for persistence in app->data.
         $scrubDevicesData = [];
         foreach ($rawScrubDevices as $devId => $devScrubData) {
             if (! is_array($devScrubData)) {
@@ -794,6 +907,7 @@ class BtrfsPoller
             ]);
         }
 
+        // Assemble and persist the complete per-filesystem poll data block.
         $this->newData['filesystems'][$fsUuid] = [
             'fs_bytes_used' => $fsInfo['fs_bytes_used'],
             'table' => $fields,
@@ -810,6 +924,7 @@ class BtrfsPoller
             ],
         ];
 
+        // Upsert the filesystem-level IO error count sensor.
         $this->sensorSync->upsertCountSensor(
             $this->device,
             $this->working['fs']['rrd_id'],
@@ -861,42 +976,62 @@ class BtrfsPoller
     }
 
     /**
-      * Process all devices for a filesystem: write per-device RRDs, build table rows,
-     * accumulate IO error counts, log new errors to eventlog, and upsert device
-     * sensors for newly discovered devices.
+     * Process all devices for a filesystem.
+     *
+     * For each device discovered in the payload, this method:
+     * - Extracts and normalises device stats, usage, and scrub data
+     * - Writes per-device RRDs (device file and per-RAID-profile files)
+     * - Builds the device table row used by the UI
+     * - Accumulates IO error counts for the filesystem
+     * - Logs new errors to the eventlog
+     * - Upserts IO and scrub state sensors for newly discovered devices
+     * - Derives filesystem-level IO and scrub status codes
+     *
+     * @return array  Aggregated results: device_tables, per-device metrics, fs error sum, and status codes.
      */
     private function processDevices(): array
     {
         $fsUuid = $this->working['fs']['uuid'];
         $tables = $this->appPayload['data']['tables'] ?? [];
+
+        // Load cached state sensor index IDs (created once per poll in loadStateIndexes()).
         $stateIndexes = $this->app->data['state_indexes'] ?? [];
         $ioStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_IO] ?? 0;
         $scrubStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB] ?? 0;
+
+        // Extract all per-device data blocks from the payload tables.
         $devices = $this->parser->extractDeviceStats($tables, $fsUuid);
         $rawScrubDevices = $this->parser->extractScrubDevices($tables, $fsUuid);
         $usageDevices = $this->parser->extractDeviceUsage($tables, $fsUuid);
         $showDevicesByPath = $this->parser->extractShowDevices($tables, $fsUuid);
 
-        // Union all device paths so devices that only appear in scrub or usage tables are included
+        // Union all device paths across all three sources so devices that only appear in scrub
+        // or usage (not in stats) are still included and processed.
         $allDevPaths = array_unique(array_merge(
             array_keys($devices),
             array_keys($usageDevices),
             array_keys($showDevicesByPath)
         ));
 
+        // Output accumulators.
         $deviceTables = [];
         $metrics = [];
         $fsIoErrorsSum = 0.0;
 
+        // Track scrub state across all devices to derive the filesystem-level scrub status.
         $hasScrubData = false;
         $scrubHasError = false;
         $scrubIsRunning = (int) ($this->working['fs']['scrub_status']['ops_status'] ?? -1) === 1;
         $fsScrubHealth = 0;
 
+        // -------------------------------------------------------------------------
+        // Per-device loop
+        // -------------------------------------------------------------------------
         foreach ($allDevPaths as $devPath) {
             $devStats = $devices[$devPath] ?? [];
             $usageStats = $usageDevices[$devPath] ?? [];
-            // Resolve numeric device ID; skip paths that cannot be mapped to an ID
+
+            // Resolve the numeric device ID (btrfs devid). Skip paths that cannot be mapped.
             $deviceNumericId = $devStats['devid'] ?? $showDevicesByPath[$devPath] ?? null;
             if (! is_scalar($deviceNumericId) || (string) $deviceNumericId === '') {
                 continue;
@@ -906,6 +1041,7 @@ class BtrfsPoller
 
             $scrubData = $rawScrubDevices[$devId] ?? null;
 
+            // No scrub data for this device: write the table row with no scrub status and continue.
             if ($scrubData === null || ! is_array($scrubData)) {
                 $deviceTables[$devId] = $this->rrdWriter->buildDeviceTableRow($devPath, $deviceNumericId, $devStats, $usageStats);
                 $deviceTables[$devId]['io_status_code'] = $this->mapper->getDevIoStatusCode(
@@ -917,9 +1053,11 @@ class BtrfsPoller
                 continue;
             }
 
+            // Process the raw scrub data into derived fields (running, health, bytes, progress).
             $processedScrub = $this->parser->processSingleDeviceScrub($scrubData, $this->working['fs']['previous_progress']);
             $hasScrubData = true;
 
+            // Track the worst health and running state across all devices for the fs-level status.
             if ($processedScrub['running'] === true) {
                 $scrubIsRunning = true;
             }
@@ -930,12 +1068,14 @@ class BtrfsPoller
                 $scrubHasError = true;
             }
 
+            // Persist per-device scrub state so the next poll can detect resets.
             $this->newData['filesystems'][$fsUuid]['scrub']['status']['devices'][$devId] = [
                 'bytes' => $processedScrub['bytes_scrubbed'],
                 'scrub_started' => $processedScrub['scrub_started'],
                 'progress' => $processedScrub['progress'],
             ];
 
+            // Build per-device RRD fields and write the device RRD file.
             $devFields = $this->rrdWriter->buildDeviceFields(
                 $devStats,
                 $processedScrub['data'],
@@ -945,7 +1085,7 @@ class BtrfsPoller
             );
             $this->rrdWriter->writeDeviceRrd($this->device, 'btrfs', $this->app->app_id, $this->working['fs']['rrd_id'], $devId, $devFields);
 
-            // Write per-device per-type RRDs (one file per RAID profile on this device)
+            // Write per-device per-RAID-profile RRDs (one file per type on this device).
             $devTypeValues = $usageStats['type_values'] ?? [];
             if (is_array($devTypeValues)) {
                 foreach ($devTypeValues as $typeKey => $typeValue) {
@@ -957,18 +1097,17 @@ class BtrfsPoller
                 }
             }
 
-            // Build the table row and attach backing-device metadata (LVM, loop, etc.)
+            // Build the device table row for the UI.
             $deviceTables[$devId] = $this->rrdWriter->buildDeviceTableRow($devPath, $deviceNumericId, $devStats, $usageStats);
-            // Log a one-time eventlog entry the first time errors are seen on this device
-            $ioErrs = $this->rrdWriter->sumDeviceErrors($devStats);
 
+            // Sum IO errors and log a one-time eventlog entry when errors first appear.
+            $ioErrs = $this->rrdWriter->sumDeviceErrors($devStats);
             if ($ioErrs > 0) {
                 Eventlog::log("BTRFS device errors detected on {$this->working['fs']['name']} ($devPath)", $this->device['device_id'], 'application', Severity::Error);
             }
-
             $fsIoErrorsSum += (float) $ioErrs;
 
-            // Upsert device-level sensors only for newly discovered devices
+            // Upsert per-device IO error count sensor only for newly discovered devices.
             $deviceInCache = isset($this->working['fs']['cached_devices'][$devId]);
             if (! $deviceInCache) {
                 $this->sensorSync->upsertCountSensor(
@@ -981,13 +1120,13 @@ class BtrfsPoller
                 );
             }
 
-            // Publish device RRD fields into the per-filesystem metrics map
+            // Publish device RRD field values into the per-filesystem metrics map.
             $devMetricPrefix = 'device_' . $devId . '_';
             foreach ($devFields as $field => $value) {
                 $metrics[$devMetricPrefix . $field] = $value;
             }
 
-            // Derive per-device IO and scrub status codes for the table and sensors
+            // Derive per-device IO and scrub status codes for the table row and sensors.
             $devIoStatusCode = $this->mapper->getDevIoStatusCode(
                 count($devStats) > 0,
                 $this->rrdWriter->hasDeviceError($devStats),
@@ -1001,6 +1140,7 @@ class BtrfsPoller
             $deviceTables[$devId]['io_status_code'] = $devIoStatusCode;
             $deviceTables[$devId]['scrub_status_code'] = $devScrubStatusCode;
 
+            // Upsert per-device state sensors only for newly discovered devices.
             if (! $deviceInCache) {
                 $this->sensorSync->upsertStateSensor(
                     $this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.io',
@@ -1016,10 +1156,14 @@ class BtrfsPoller
                 );
             }
 
+            // Write per-device state sensor RRDs every poll so graphs reflect current status.
             $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.io', BtrfsSensorSync::STATE_SENSOR_IO, $this->working['fs']['display_name'] . ' ' . $devPath . ' IO', $devIoStatusCode);
             $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.scrub', BtrfsSensorSync::STATE_SENSOR_SCRUB, $this->working['fs']['display_name'] . ' ' . $devPath . ' Scrub', $devScrubStatusCode);
         }
 
+        // -------------------------------------------------------------------------
+        // Derive filesystem-level status codes from per-device aggregates
+        // -------------------------------------------------------------------------
         $ioHasError = $this->rrdWriter->hasAnyDeviceError($devices);
         $ioStatusCode = $this->mapper->getIoStatusCode(count($devices) > 0, $ioHasError, $this->working['fs']['has_missing']);
         $scrubStatusCode = $this->mapper->getScrubStatusCode($hasScrubData, $scrubHasError, $scrubIsRunning);
@@ -1041,7 +1185,7 @@ class BtrfsPoller
      */
     private function persistAppData($btrfsDevVersion): void
     {
-        // Roll up per-filesystem statuses into one overall application status
+        // Roll up per-filesystem statuses into one overall application status code.
         $appStatusCode = $this->mapper->deriveAppStatusCode(
             $this->agg->hasMissing(), $this->agg->hasError(), $this->agg->hasRunning(), $this->agg->hasData()
         );
@@ -1049,25 +1193,20 @@ class BtrfsPoller
         $appStatusText = $this->mapper->getStatusText($appStatusCode);
 
         $agentData = $this->appPayload['data'] ?? [];
+
+        // Persist the top-level app fields.
         $this->newData['schema_version'] = 7;
-
-        // Agent App info, not used.
-        // $this->newData['btrfs_progs_version'] = self::truncate($agentData['btrfs_version']['version'] ?? null, self::MAX_VERSION_LENGTH);
-        // $this->newData['btrfs_progs_features'] = array_map(
-        //     static fn ($f) => self::truncate($f, self::MAX_FEATURE_LENGTH),
-        //     $agentData['btrfs_version']['features'] ?? []
-        // );
-
-        // Agent App status from the payload
         $this->newData['status_code'] = $appStatusCode;
         $this->newData['status_text'] = self::truncate($appStatusText, self::MAX_STATUS_TEXT_LENGTH);
-
-        // Btrfs agent version from the payload.
         $this->newData['btrfs_dev_version'] = $btrfsDevVersion;
         $this->newData['version'] = $agentData['version'] ?? ($this->appPayload['version'] ?? null);
 
+        // Write the complete app->data to the DB before update_application() (update_application
+        // may re-read $this->app->data internally).
         $this->app->data = $this->newData;
 
+        // Persist metrics to RRD and update the application row in the DB with the computed
+        // overall status text and all collected metric values.
         update_application($this->app, $appStatusText, $this->working['acc']['metrics']);
     }
 
@@ -1148,13 +1287,30 @@ class BtrfsPoller
     }
 
     /**
-     * Detect scrub counter or session reset; return null if a reset is detected so RRD is not updated.
+     * Detect a scrub counter or session reset and return the safe bytes value for the RRD.
+     *
+     * RRD DERIVE datasets record the *rate of change* of a counter. If the counter resets
+     * (btrfs scrub restarts) the bytes value drops to 0, producing a large negative spike
+     * in the RRD. This method detects resets by comparing the new value against the last
+     * known state persisted in app->data and returns null when a reset is detected, signalling
+     * the RRD writer to skip this sample.
+     *
+     * Two reset patterns are detected:
+     * - Counter reset: bytes decreased within the same scrub session (unexpected, should not happen
+     *   but is handled for safety)
+     * - Session reset: a new scrub session started ($started changed) and the byte counter
+     *   restarted from a lower value
+     *
+     * @param  float|null $bytes    Current bytes_scrubbed from the agent payload.
+     * @param  string|null $started  Current scrub_started timestamp from the agent payload.
+     * @param  array      $oldState Previous scrub status block persisted in app->data.
+     * @return float|null           Safe value for the RRD, or null if a reset was detected.
      */
     private function bytesForRrd(?float $bytes, ?string $started, array $oldState): ?float
     {
         $bytesForRrd = $bytes;
 
-        // Recover previous values; treat empty string as absent (same as null)
+        // Recover the previous state values persisted by the previous poll.
         $previousBytes = is_numeric($oldState['bytes'] ?? null)
             ? (float) $oldState['bytes']
             : null;
@@ -1166,15 +1322,17 @@ class BtrfsPoller
         }
 
         if ($bytesForRrd !== null && $previousBytes !== null) {
-            // Counter reset: bytes went backwards within the same session
+            // Counter reset: bytes went backwards within the same scrub session.
             $counterReset = $bytesForRrd < $previousBytes;
-            // Session reset: a new scrub started and the byte counter restarted from a lower value
+
+            // Session reset: a new scrub started ($started changed) and the byte counter restarted
+            // from a lower value than before.
             $sessionReset = $started !== null
                 && $previousStarted !== null
                 && $started !== $previousStarted
                 && $bytesForRrd <= $previousBytes;
 
-            // Return null to tell the RRD writer to skip this sample rather than record a spike
+            // Return null to tell the RRD writer to skip this sample rather than record a spike.
             if ($counterReset || $sessionReset) {
                 $bytesForRrd = null;
             }

@@ -697,7 +697,7 @@ HTML;
     $scrub_health_badge = scrub_health_badge($scrub_health_fs[$selected_fs] ?? 0);
 
     // Render scrub status panel.
-    $scrub_hidden = ['path', 'is_running'];
+    $scrub_hidden = ['path', 'is_running', 'ops_status','health'];
     $scrub_keys = array_keys($dev_scrub);
     $scrub_display_keys = array_diff($scrub_keys, $scrub_hidden);
 
@@ -874,43 +874,6 @@ function btrfs_renderFsView(
 }
 
 /**
- * Renders a compact two-column metrics table.
- *
- * Displays metric pairs in a grid layout with specified number of columns.
- *
- * @param  array   $pairs   Array of ['metric' => ..., 'value' => ...] pairs.
- * @param  int     $columns Number of columns in the grid.
- * @return void
- */
-function btrfs_renderOverviewTable(array $pairs, int $columns): void
-{
-    $rows = (int) ceil(count($pairs) / $columns);
-
-    $table_rows = '';
-    for ($r = 0; $r < $rows; $r++) {
-        $cells = '';
-        for ($c = 0; $c < $columns; $c++) {
-            $index = ($r * $columns) + $c;
-            if (! isset($pairs[$index])) {
-                $cells .= '<td></td><td></td>';
-            } else {
-                $metric = htmlspecialchars(format_display_name((string) $pairs[$index]['metric']));
-                $value = htmlspecialchars(format_metric_value($pairs[$index]['value'], (string) $pairs[$index]['metric']));
-                $cells .= "<td>{$metric}</td><td>{$value}</td>";
-            }
-        }
-        $table_rows .= "<tr>{$cells}</tr>";
-    }
-
-    echo <<<HTML
-<table class="table table-condensed table-striped table-hover btrfs-sticky-first btrfs-keyval">
-<tbody>
-{$table_rows}</tbody>
-</table>
-HTML;
-}
-
-/**
  * Renders the balance status panel.
  *
  * Shows balance operation status, progress metrics, and optional RAID profiles.
@@ -950,7 +913,7 @@ function btrfs_renderBalancePanel(array $split, array $rows, ?string $panel_col_
 
     $table_rows = '';
     foreach ($overview_rows as $row) {
-        $key_display = htmlspecialchars(format_metric_value($row['key'], 'metric'));
+        $key_display = htmlspecialchars(format_display_name($row['key']));
         $value_display = htmlspecialchars(format_metric_value($row['value'], $row['key']));
         $table_rows .= "<tr><td>{$key_display}</td><td>{$value_display}</td></tr>";
     }
@@ -1092,17 +1055,7 @@ function btrfs_renderFsPanelsRow1(
         'selected_fs_rrd_id' => $selected_fs_rrd_id,
     ]);
 
-    // Build overview metric pairs for the overview table.
-    $overview_metric_keys = ['device_size',
-        'device_unallocated',
-        'free_estimated',
-        'free_statfs_df',
-        'device_allocated', 'used', 'free_estimated_min', 'global_reserve'];
-
-    $overview_pairs = [];
-    foreach ($overview_metric_keys as $metric_key) {
-        $overview_pairs[] = ['metric' => $metric_key, 'value' => $filesystem_tables[$selected_fs][$metric_key] ?? null];
-    }
+    $fs_table = $filesystem_tables[$selected_fs] ?? [];
     $fs_label = $filesystem_meta[$selected_fs]['label'] ?? null;
     $mountpoint = $data['fs_mountpoint'][$selected_fs] ?? $selected_fs;
     $fs_title = ! empty($fs_label) ? $fs_label . ' (' . $mountpoint . ')' : $mountpoint;
@@ -1110,19 +1063,33 @@ function btrfs_renderFsPanelsRow1(
 
     echo '<div class="btrfs-panels">';
 
-    // Render Overview panel.
     $fs_uuid_section = $fs_uuid !== '' ? '<p><strong>UUID:</strong> ' . htmlspecialchars($fs_uuid) . '</p>' : '';
+
+    $overview_rows = [];
+    foreach ($fs_table as $key => $value) {
+        if (in_array($key, ['profiles', 'lines', 'io_status_code', 'scrub_status_code', 'scrub_operation', 'scrub_health', 'balance_status_code', 'scrub_bytes_scrubbe'], true)) {
+            continue;
+        }
+        $overview_rows = array_merge($overview_rows, flatten_assoc_rows([$key => $value]));
+    }
+
+    $table_rows = '';
+    foreach ($overview_rows as $row) {
+        $key_display = htmlspecialchars(format_display_name($row['key']));
+        $value_display = htmlspecialchars(format_metric_value($row['value'], $row['key']));
+        $table_rows .= "<tr><td>{$key_display}</td><td>{$value_display}</td></tr>";
+    }
+
     echo <<<HTML
 <div class="panel panel-default panel-wide">
 <div class="panel-heading"><h3 class="panel-title">Overview <strong>{$fs_title}</strong> </h3></div>
 <div class="panel-body">
 {$fs_uuid_section}
 <div class="table-responsive">
-HTML;
-
-    btrfs_renderOverviewTable($overview_pairs, 2);
-
-    echo <<<'HTML'
+<table class="table table-condensed table-striped table-hover btrfs-sticky-first btrfs-keyval">
+<tbody>
+{$table_rows}</tbody>
+</table>
 </div>
 </div>
 </div>
@@ -1406,7 +1373,7 @@ function btrfs_renderScrubPerDevice(
     ]);
 
     if (count($scrub_split['devices']) > 0) {
-        $hidden_columns = ['status', 'path', 'id', 'section', 'has_status_suffix', 'has_stats', 'no_stats_available', 'last_physical', 'is_running', 'ops_status'];
+        $hidden_columns = ['status', 'path', 'id', 'section', 'has_status_suffix', 'has_stats', 'no_stats_available', 'last_physical', 'is_running', 'ops_status','health'];
 
         $column_display_names = [
             'status' => 'Status',
@@ -1443,7 +1410,8 @@ function btrfs_renderScrubPerDevice(
                 : htmlspecialchars((string) $device_name);
             $dev_scrub_ops = $metrics['ops_status'] ?? $fs_scrub_operation;
             $scrub_ops_badge_html = scrub_ops_badge($dev_scrub_ops);
-            $scrub_health_badge_html = scrub_health_badge($fs_scrub_health);
+            $dev_scrub_health = $metrics['health'] ?? 0;
+            $scrub_health_badge_html = scrub_health_badge($dev_scrub_health);
             $cells = '';
             foreach ($scrub_split['device_columns'] as $column) {
                 if (! in_array($column, $hidden_columns, true)) {
