@@ -1,6 +1,5 @@
 <?php
 
-$units = '';
 $units_descr = 'Operations/sec';
 $total_units = 'B';
 $colours_in = 'greens';

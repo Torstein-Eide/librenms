@@ -1,5 +1,6 @@
 <?php
 
+require_once base_path('includes/html/pages/btrfs-common.inc.php');
 require 'includes/html/graphs/common.inc.php';
 
 $unit_text ??= '';
@@ -58,16 +59,18 @@ $format_display_name = static function (string $key): string {
     return $name;
 };
 
-if ($width > '500') {
+if ($width > 500) {
     $descr_len = 13;
 } else {
     $descr_len = 8;
     $descr_len += round(($width - 250) / 8);
 }
 
-$fs_entry = $app->data['filesystems'][$vars['fs']] ?? null;
+$fs_uuid = is_string($vars['fs'] ?? null) ? $vars['fs'] : null;
+$discovery_fs = \LibreNMS\Plugins\Btrfs\btrfs_get_discovery_by_uuid($app, $fs_uuid);
+$fs_entry = $fs_uuid !== null ? ($app->data['tables']['filesystems'][$fs_uuid] ?? null) : null;
 
-$normalize_profile_rows = static function ($profiles): array {
+$normalize_profile_rows = static function (array $profiles): array {
     $normalized = [];
 
     if (! is_array($profiles)) {
@@ -102,11 +105,11 @@ $normalize_profile_rows = static function ($profiles): array {
 };
 
 $fs_types = is_array($fs_entry) ? $normalize_profile_rows($fs_entry['profiles'] ?? []) : [];
-if (count($fs_types) === 0 && is_array($fs_entry)) {
-    $fs_uuid = trim((string) ($fs_entry['uuid'] ?? ''));
+if (count($fs_types) === 0 && $fs_uuid !== null) {
     $tables_profiles = $app->data['tables']['filesystem_profiles'][$fs_uuid] ?? [];
     $fs_types = $normalize_profile_rows($tables_profiles);
 }
+
 if (empty($fs_types)) {
     return;
 }
@@ -114,10 +117,11 @@ if (empty($fs_types)) {
 $colours = 'psychedelic';
 $rrd_list = [];
 $colour_index = 0;
-$fs_rrd_id = is_array($fs_entry) ? ($fs_entry['rrd_key'] ?? $vars['fs']) : $vars['fs'];
+$fs_rrd_id = is_array($discovery_fs) ? ($discovery_fs['rrd_key'] ?? $vars['fs']) : $vars['fs'];
+
 foreach ($fs_types as $type_key => $type_value) {
     $type_id = $safe_id((string) $type_key);
-    $rrd_filename = \App\Facades\Rrd::name($device['hostname'], ['app', 'btrfs', $app->app_id, $fs_rrd_id, 'type_' . $type_id]);
+    $rrd_filename = App\Facades\Rrd::name($device['hostname'], ['app', 'btrfs', $app->app_id, $fs_rrd_id, 'type_' . $type_id]);
     $ds_name = 'value';
 
     $descr = $known_types[$type_key] ?? $format_display_name($type_key);
@@ -140,7 +144,7 @@ if (empty($rrd_list)) {
     return;
 }
 
-if ($width > '500') {
+if ($width > 500) {
     $rrd_options[] = 'COMMENT:' . substr(str_pad($unit_text, $descr_len + 5), 0, $descr_len + 5) . '      Now      Min      Max     Avg\l';
 } else {
     $rrd_options[] = 'COMMENT:' . substr(str_pad($unit_text, $descr_len + 5), 0, $descr_len + 5) . "      Now      Min      Max     Avg\l";

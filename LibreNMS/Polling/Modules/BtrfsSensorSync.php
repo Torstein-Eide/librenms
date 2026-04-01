@@ -22,6 +22,7 @@ class BtrfsSensorSync
 {
     public const STATE_SENSOR_IO = 'btrfsIoStatusState';
     public const STATE_SENSOR_SCRUB = 'btrfsScrubStatusState';
+    public const STATE_SENSOR_SCRUB_OPS = 'btrfsScrubOpsState';
     public const STATE_SENSOR_BALANCE = 'btrfsBalanceStatusState';
 
     public const COUNT_SENSOR_IO_ERRORS = 'btrfsIoErrors';
@@ -40,6 +41,7 @@ class BtrfsSensorSync
         $this->stateSensorTypes = [
             self::STATE_SENSOR_IO,
             self::STATE_SENSOR_SCRUB,
+            self::STATE_SENSOR_SCRUB_OPS,
             self::STATE_SENSOR_BALANCE,
         ];
         $this->countSensorTypes = [
@@ -50,10 +52,12 @@ class BtrfsSensorSync
 
     public function ensureStateIndexes(): array
     {
-        $states = $this->statusMapper->getStatusStates();
         $indexes = [];
 
         foreach ($this->stateSensorTypes as $sensor_type) {
+            $states = $sensor_type === self::STATE_SENSOR_SCRUB_OPS
+                ? $this->statusMapper->getScrubOpsStates()
+                : $this->statusMapper->getStatusStates();
             $indexes[$sensor_type] = $this->ensureStateIndex($sensor_type, $states);
         }
 
@@ -67,7 +71,7 @@ class BtrfsSensorSync
         $state_index_id = $stateIndex->state_index_id;
         $created_index = $stateIndex->wasRecentlyCreated;
 
-        if (! $state_index_id) {
+        if ($state_index_id === null || $state_index_id === 0) {
             return null;
         }
 
@@ -81,7 +85,6 @@ class BtrfsSensorSync
             /** @var ?StateTranslation $existing */
             $existing = $existing_translations->get($state_value);
             $translation_data = [
-                'state_index_id' => $state_index_id,
                 'state_descr' => $state['descr'],
                 'state_draw_graph' => $state['graph'],
                 'state_value' => $state_value,
@@ -98,7 +101,12 @@ class BtrfsSensorSync
                     $updated++;
                 }
             } else {
-                StateTranslation::create($translation_data);
+                $stateIndex->translations()->create([
+                    'state_descr' => $state['descr'],
+                    'state_draw_graph' => $state['graph'],
+                    'state_value' => $state_value,
+                    'state_generic_value' => $state['generic'],
+                ]);
                 $created++;
             }
         }
@@ -125,13 +133,20 @@ class BtrfsSensorSync
     ): void {
         $sensor = $this->findOrCreateStateSensor($device, $sensor_index, $sensor_type, $sensor_descr, $sensor_current, $sensor_group);
 
-        $this->writeSensorRrd($device, 'state', $sensor_type, $sensor_descr, $sensor_current);
-
-        if (! $sensor || ! $state_index_id) {
+        if (! $state_index_id) {
             return;
         }
 
         $this->syncSensorStateIndex($sensor, $state_index_id);
+    }
+
+    /**
+     * Write the RRD value for a state sensor. Called every poll regardless of
+     * structure changes, so the sensor graph always reflects the current status.
+     */
+    public function writeStateSensorRrd(array $device, string $sensor_index, string $sensor_type, string $sensor_descr, int $sensor_current): void
+    {
+        $this->writeSensorRrd($device, 'state', $sensor_type, $sensor_index, $sensor_descr, (float) $sensor_current);
     }
 
     private function findOrCreateStateSensor(
@@ -141,7 +156,7 @@ class BtrfsSensorSync
         string $sensor_descr,
         int $sensor_current,
         string $sensor_group
-    ): ?Sensor {
+    ): Sensor {
         return Sensor::withoutGlobalScopes()->updateOrCreate(
             [
                 'device_id' => $device['device_id'],
@@ -203,7 +218,7 @@ class BtrfsSensorSync
     ): void {
         $this->findOrCreateCountSensor($device, $sensor_index, $sensor_type, $sensor_descr, $sensor_current, $sensor_group);
 
-        $this->writeSensorRrd($device, 'count', $sensor_type, $sensor_descr, $sensor_current);
+        $this->writeSensorRrd($device, 'count', $sensor_type, $sensor_index, $sensor_descr, $sensor_current);
     }
 
     private function findOrCreateCountSensor(
@@ -213,7 +228,7 @@ class BtrfsSensorSync
         string $sensor_descr,
         float $sensor_current,
         string $sensor_group
-    ): ?Sensor {
+    ): Sensor {
         return Sensor::withoutGlobalScopes()->updateOrCreate(
             [
                 'device_id' => $device['device_id'],
@@ -236,16 +251,17 @@ class BtrfsSensorSync
         );
     }
 
-    private function writeSensorRrd(array $device, string $sensor_class, string $sensor_type, string $sensor_descr, float $sensor_current): void
+    private function writeSensorRrd(array $device, string $sensor_class, string $sensor_type, string $sensor_index, string $sensor_descr, float $sensor_current): void
     {
         $sensor_rrd_def = \LibreNMS\RRD\RrdDefinition::make()->addDataset('sensor', 'GAUGE');
 
         app('Datastore')->put($device, 'sensor', [
             'sensor_class' => $sensor_class,
             'sensor_type' => $sensor_type,
+            'sensor_index' => $sensor_index,
             'sensor_descr' => $sensor_descr,
             'rrd_def' => $sensor_rrd_def,
-            'rrd_name' => null,
+            'rrd_name' => ['sensor', $sensor_class, $sensor_type, $sensor_index],
         ], ['sensor' => $sensor_current]);
     }
 

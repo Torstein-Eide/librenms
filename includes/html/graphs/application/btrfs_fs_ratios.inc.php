@@ -1,5 +1,7 @@
 <?php
 
+require_once base_path('includes/html/pages/btrfs-common.inc.php');
+
 $name = 'btrfs';
 $unit_text = 'ratio';
 $colours = 'psychedelic';
@@ -8,9 +10,14 @@ $printtotal = 0;
 $addarea = 0;
 $transparency = 15;
 
-$fs_entry = $app->data['filesystems'][$vars['fs']] ?? null;
-$fs_rrd_id = is_array($fs_entry) ? ($fs_entry['rrd_key'] ?? $vars['fs']) : $vars['fs'];
-$rrd_filename = \App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id]);
+$fs_param = $vars['fs'] ?? null;
+if (! is_string($fs_param) || $fs_param === '') {
+    return;
+}
+
+$discovery_fs = \LibreNMS\Plugins\Btrfs\btrfs_get_discovery_by_uuid($app, $fs_param);
+$fs_rrd_id = is_array($discovery_fs) ? ($discovery_fs['rrd_key'] ?? $fs_param) : $fs_param;
+$rrd_filename = App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id]);
 
 $rrd_list = [
     [

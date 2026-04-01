@@ -76,7 +76,6 @@ foreach ($apps as $app_entry) {
 
     // Collect filesystem name and label suggestions.
     $app_filesystems = $app_entry->data['filesystems'] ?? [];
-    $app_filesystem_meta = $app_entry->data['filesystem_meta'] ?? [];
     foreach ($app_filesystems as $fs_name => $fs_entry) {
         $fs_value = trim((string) $fs_name);
         if ($fs_value === '') {
@@ -87,7 +86,7 @@ foreach ($apps as $app_entry) {
         $filesystem_suggestions[$fs_value] = $fs_value;
 
         // Add filesystem label and labeled variant.
-        $fs_label = trim((string) ($app_filesystem_meta[$fs_name]['label'] ?? ''));
+        $fs_label = trim((string) ($fs_entry['meta']['label'] ?? ''));
         if ($fs_label !== '') {
             $filesystem_suggestions[$fs_label] = $fs_label;
             $filesystem_suggestions[$fs_label . ' (' . $fs_value . ')'] = $fs_label . ' (' . $fs_value . ')';
@@ -201,7 +200,7 @@ if ($apps->isEmpty()) {
 
 // Build overview table header with heredoc.
 $table_header = <<<'HTML'
-<thead><tr><th>Device</th><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Missing</th><th>Devices</th><th>Ops</th><th>Bps</th><th>Combined Status</th></tr></thead>
+<thead><tr><th>Device</th><th>Filesystem</th><th>Status</th><th>Scrub</th><th>Balance</th><th>Scrub Progress</th><th>IO Errors</th><th>% Used</th><th>Used</th><th>Free (Estimated)</th><th>Device Size</th><th>Devices</th><th>Ops</th><th>Bps</th><th>Combined Status</th></tr></thead>
 HTML;
 
 echo <<<HTML
@@ -308,14 +307,14 @@ foreach ($apps as $app) {
 
         // Build combined status graph parameters.
         $graphArray = [
-            'height' => 40,
-            'width' => 180,
+            'height' => 30,
+            'width' => 120,
+            'from' => App\Facades\LibrenmsConfig::get('time.day'),
             'to' => App\Facades\LibrenmsConfig::get('time.now'),
             'id' => $app->app_id,
             'type' => 'application_btrfs_fs_status',
             'fs' => $fs,
             'legend' => 'no',
-            'from' => App\Facades\LibrenmsConfig::get('time.week'),
         ];
         // Build graph link for overlib popup.
         $graphLinkArray = $graphArray;
@@ -372,7 +371,7 @@ foreach ($apps as $app) {
             htmlspecialchars(format_metric_value($fsData['used'] ?? null, 'used')),
             htmlspecialchars(format_metric_value($fsData['free_estimated'] ?? null, 'free_estimated')),
             htmlspecialchars(format_metric_value($fsData['device_size'] ?? null, 'device_size')),
-            $missing_badge,
+           // $missing_badge,
             number_format(count($fsDevices)),
             generate_link(Url::lazyGraphTag($opsGraph), $fsDetailLink),
             generate_link(Url::lazyGraphTag($bpsGraph), $fsDetailLink),

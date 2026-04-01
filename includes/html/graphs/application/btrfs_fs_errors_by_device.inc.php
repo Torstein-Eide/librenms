@@ -1,5 +1,7 @@
 <?php
 
+require_once base_path('includes/html/pages/btrfs-common.inc.php');
+
 require 'includes/html/graphs/common.inc.php';
 
 $name = 'btrfs';
@@ -8,19 +10,19 @@ $graph_params->scale_min = 0;
 $graph_params->base = 1000;
 $colours = 'psychedelic';
 
-$fs = $vars['fs'] ?? null;
-if (! is_string($fs) || $fs === '') {
+$fs_param = $vars['fs'] ?? null;
+if (! is_string($fs_param) || $fs_param === '') {
     return;
 }
 
-$fs_entry = $app->data['filesystems'][$fs] ?? null;
-$fs_rrd_id = is_array($fs_entry)
-    ? ($fs_entry['rrd_key'] ?? strtolower(trim((string) preg_replace('/[^A-Za-z0-9]+/', '_', $fs), '_')))
+$discovery_fs = \LibreNMS\Plugins\Btrfs\btrfs_get_discovery_by_uuid($app, $fs_param);
+$fs_rrd_id = is_array($discovery_fs)
+    ? ($discovery_fs['rrd_key'] ?? strtolower(trim((string) preg_replace('/[^A-Za-z0-9]+/', '_', $fs), '_')))
     : strtolower(trim((string) preg_replace('/[^A-Za-z0-9]+/', '_', $fs), '_'));
 if (! is_string($fs_rrd_id) || $fs_rrd_id === '') {
     $fs_rrd_id = 'root';
 }
-$device_map = is_array($fs_entry) ? ($fs_entry['device_map'] ?? []) : [];
+$device_map = is_array($discovery_fs) ? ($discovery_fs['devices'] ?? []) : [];
 
 if (! is_array($device_map) || count($device_map) === 0) {
     return;
@@ -40,25 +42,12 @@ $error_ds = [
     'scrub_t_corrected',
 ];
 
-$build_sum_expr = static function (array $ids): ?string {
-    if (count($ids) === 0) {
-        return null;
-    }
-
-    $expr = array_shift($ids);
-    foreach ($ids as $id) {
-        $expr .= ',' . $id . ',+';
-    }
-
-    return $expr;
-};
-
 $rrd_options[] = 'COMMENT:Device                       Now       Min       Max      Avg\\l';
 
 $dev_index = 0;
 foreach ($device_map as $dev_id => $dev_path) {
-    $rrd_filename = \App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id, 'device_' . $dev_id]);
-    if (! \App\Facades\Rrd::checkRrdExists($rrd_filename)) {
+    $rrd_filename = App\Facades\Rrd::name($device['hostname'], ['app', $name, $app->app_id, $fs_rrd_id . '_device_' . $dev_id]);
+    if (! App\Facades\Rrd::checkRrdExists($rrd_filename)) {
         continue;
     }
 
@@ -71,7 +60,7 @@ foreach ($device_map as $dev_id => $dev_path) {
         $def_ids[] = $safe_def_id;
     }
 
-    $sum_expr = $build_sum_expr($def_ids);
+    $sum_expr = \LibreNMS\Plugins\Btrfs\build_sum_expr($def_ids);
     if ($sum_expr === null) {
         $dev_index++;
         continue;

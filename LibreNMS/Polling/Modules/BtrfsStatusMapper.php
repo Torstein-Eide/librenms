@@ -71,7 +71,7 @@ class BtrfsStatusMapper
         return $has_error ? self::STATUS_ERROR : self::STATUS_OK;
     }
 
-    public function getDevScrubStatusCode(bool $has_data, bool $has_error, bool $is_running): int
+    public function getDevScrubStatusCode(bool $has_data, bool $has_error): int
     {
         if (! $has_data) {
             return self::STATUS_NA;
@@ -79,10 +79,6 @@ class BtrfsStatusMapper
 
         if ($has_error) {
             return self::STATUS_ERROR;
-        }
-
-        if ($is_running) {
-            return self::STATUS_RUNNING;
         }
 
         return self::STATUS_OK;
@@ -118,17 +114,6 @@ class BtrfsStatusMapper
         return self::STATUS_NA;
     }
 
-    public function getGenericValue(int $status_code): int
-    {
-        return match ($status_code) {
-            self::STATUS_OK => 0,
-            self::STATUS_RUNNING => 1,
-            self::STATUS_NA => 3,
-            self::STATUS_ERROR, self::STATUS_MISSING => 2,
-            default => 3,
-        };
-    }
-
     public function getBalanceStatusCodeFromFlat(array $balance_status): int
     {
         if (empty($balance_status)) {
@@ -157,6 +142,14 @@ class BtrfsStatusMapper
             ['value' => self::STATUS_NA, 'generic' => 3, 'graph' => 0, 'descr' => 'N/A'],
             ['value' => self::STATUS_ERROR, 'generic' => 2, 'graph' => 0, 'descr' => 'Error'],
             ['value' => self::STATUS_MISSING, 'generic' => 2, 'graph' => 0, 'descr' => 'Missing'],
+        ];
+    }
+
+    public function getScrubOpsStates(): array
+    {
+        return [
+            ['value' => 0, 'generic' => 0, 'graph' => 0, 'descr' => 'Idle'],
+            ['value' => 1, 'generic' => 1, 'graph' => 0, 'descr' => 'Running'],
         ];
     }
 }

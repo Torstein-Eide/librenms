@@ -24,7 +24,7 @@ class BtrfsPayloadParser
             $id = preg_replace('/[^A-Za-z0-9._-]/', '_', $value);
             $id = trim((string) $id, '_');
 
-            return $id === '' ? 'id' : $id;
+            return $id;
         };
     }
 
@@ -113,16 +113,6 @@ class BtrfsPayloadParser
         return $devices;
     }
 
-    public function extractScrubStatus(array $tables, string $fs_uuid): array
-    {
-        return $tables['scrub_status_filesystems'][$fs_uuid] ?? [];
-    }
-
-    public function extractScrubDevices(array $tables, string $fs_uuid): array
-    {
-        return $tables['scrub_status_devices'][$fs_uuid] ?? [];
-    }
-
     public function extractBalanceStatus(array $tables, string $fs_uuid): array
     {
         return $tables['balance_status_filesystems'][$fs_uuid] ?? [];
@@ -181,6 +171,7 @@ class BtrfsPayloadParser
             $row['data_bytes'] = (float) ($dev['data'] ?? 0);
             $row['metadata_bytes'] = (float) ($dev['metadata'] ?? 0);
             $row['system_bytes'] = (float) ($dev['system'] ?? 0);
+            $row['backing_device_path'] = $dev['backing_device_path'] ?? null;
 
             $dev_profiles = $dev['profiles'] ?? $dev['raid_profiles'] ?? null;
             if (is_array($dev_profiles)) {
@@ -215,55 +206,94 @@ class BtrfsPayloadParser
         return $totals;
     }
 
-    public function extractSysBlockMetadata(array $tables, string $fs_uuid): array
+    public function extractScrubStatus(array $tables, string $fs_uuid): array
     {
-        return [];
+        return $tables['scrub_status_filesystems'][$fs_uuid] ?? [];
     }
 
-    public function extractRunningFlag(array $data): ?bool
+    public function extractScrubDevices(array $tables, string $fs_uuid): array
     {
-        foreach (['running', 'is_running', 'in_progress'] as $key) {
-            if (array_key_exists($key, $data)) {
-                $flag = $this->toBool($data[$key]);
-                if ($flag !== null) {
-                    return $flag;
-                }
-            }
-        }
-
-        $status = strtolower(trim((string) ($data['status'] ?? '')));
-        foreach (['running', 'in-progress', 'in_progress'] as $t) {
-            if ($status === $t) {
-                return true;
-            }
-        }
-        foreach (['finished', 'done', 'idle', 'stopped', 'completed'] as $t) {
-            if ($status === $t) {
-                return false;
-            }
-        }
-
-        return null;
+        return $tables['scrub_status_devices'][$fs_uuid] ?? [];
     }
 
-    public function getScrubStatusDevicesForPath(array $scrub_devices, array $show_devices_by_path): array
+    public function extractSingleScrubDevice(array $tables, string $fs_uuid, string $devid): ?array
     {
-        $result = [];
-        foreach ($scrub_devices as $devid => $dev) {
-            if (! is_array($dev)) {
-                continue;
-            }
+        $devices = $tables['scrub_status_devices'][$fs_uuid] ?? [];
+        $dev = $devices[$devid] ?? null;
 
-            $devid = (string) $devid;
-            $path = $this->pathOrMissing($dev, $devid, $dev['path'] ?? null);
-            if ($path === null) {
-                $path = $devid;
-            }
+        return is_array($dev) ? $dev : null;
+    }
 
-            $result[$path] = $dev;
+    public function processSingleDeviceScrub(array $deviceScrubData, ?float $previousProgress): array
+    {
+        $health = 0;
+        $progress = null;
+        $bytesScrubbed = null;
+        $scrubStarted = null;
+
+        $data = $this->normalizeDeviceScrubStatus($deviceScrubData, $previousProgress);
+
+        // ops_status: -1 = unknown, 0 = idle, 1 = running
+        $ops = (int) ($data['ops_status'] ?? -1);
+        $running = $ops === 1;
+
+        $health = $this->computeScrubHealth($data);
+
+        $progress = $data['progress_percent'] ?? null;
+        $bytesScrubbed = $data['bytes_scrubbed'] ?? null;
+        $scrubStarted = $data['scrub_started'] ?? null;
+
+        return [
+            'running' => $running,
+            'ops' => $ops,
+            'health' => $health,
+            'progress' => is_numeric($progress) ? (float) $progress : null,
+            'bytes_scrubbed' => is_numeric($bytesScrubbed) ? (float) $bytesScrubbed : null,
+            'scrub_started' => is_string($scrubStarted) ? $scrubStarted : null,
+            'data' => $data,
+        ];
+    }
+
+    private function normalizeDeviceScrubStatus(array $deviceScrubData, ?float $previousProgress): array
+    {
+        $data = $deviceScrubData;
+
+        if (($data['status'] ?? null) === null) {
+            if ($previousProgress !== null && $previousProgress >= 100.0) {
+                $data['status'] = 'finished';
+                $data['progress_percent'] = 100;
+            }
         }
 
-        return $result;
+        if (array_key_exists('progress_percent', $data) && $data['progress_percent'] === null) {
+            if (strtolower(trim($data['status'] ?? '')) === 'finished') {
+                $data['progress_percent'] = 100;
+            }
+        }
+
+        return $data;
+    }
+
+    public function computeScrubHealth(array $scrub_device): int
+    {
+        $uncorrectable = (int) ($scrub_device['uncorrectable_errors'] ?? 0);
+        $super_errors = (int) ($scrub_device['super_errors'] ?? 0);
+        $malloc_errors = (int) ($scrub_device['malloc_errors'] ?? 0);
+
+        if ($uncorrectable > 0 || $super_errors > 0 || $malloc_errors > 0) {
+            return 2;
+        }
+
+        $corrected = (int) ($scrub_device['corrected_errors'] ?? 0);
+        $read_errors = (int) ($scrub_device['read_errors'] ?? 0);
+        $verify_errors = (int) ($scrub_device['verify_errors'] ?? 0);
+        $unverified = (int) ($scrub_device['unverified_errors'] ?? 0);
+
+        if ($corrected > 0 || $read_errors > 0 || $verify_errors > 0 || $unverified > 0) {
+            return 1;
+        }
+
+        return 0;
     }
 
     public function getFilesystemsByMountpoint(array $tables): array
@@ -285,27 +315,6 @@ class BtrfsPayloadParser
     private function isMissing(array $entry): bool
     {
         return ! empty($entry['missing']) || ! empty($entry['device_missing']);
-    }
-
-    private function toBool($value): ?bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-        if (is_numeric($value)) {
-            return ((int) $value) !== 0;
-        }
-        if (is_string($value)) {
-            $v = strtolower(trim($value));
-            if (in_array($v, ['1', 'true', 'yes', 'y'], true)) {
-                return true;
-            }
-            if (in_array($v, ['0', 'false', 'no', 'n'], true)) {
-                return false;
-            }
-        }
-
-        return null;
     }
 
     private function pathOrMissing(array $entry, string $devid, ?string $path): ?string
