@@ -7,35 +7,15 @@ if (! is_string($fs_param) || $fs_param === '') {
     throw new LibreNMS\Exceptions\RrdGraphException('No filesystem selected');
 }
 
-// $fs_param is UUID, look up mountpoint
-$mountpoint_to_uuid = [];
-$uuid_to_mountpoint = [];
-$tables_fs = $app->data['tables']['filesystems'] ?? [];
-foreach ($tables_fs as $uuid => $fs_entry) {
-    $mp = $fs_entry['mountpoint'] ?? null;
-    if ($mp !== null) {
-        $mountpoint_to_uuid[$mp] = $uuid;
-        $uuid_to_mountpoint[$uuid] = $mp;
-    }
-}
-
-// Determine if fs_param is UUID or mountpoint
-if (isset($uuid_to_mountpoint[$fs_param])) {
-    // It's a UUID
-    $fs_uuid = $fs_param;
-    $fs = $uuid_to_mountpoint[$fs_param] ?? $fs_param;
-} elseif (isset($mountpoint_to_uuid[$fs_param])) {
-    // It's a mountpoint
-    $fs = $fs_param;
-    $fs_uuid = $mountpoint_to_uuid[$fs_param];
-} else {
+$discovery_fs = $app->data['discovery']['filesystems'][$fs_param] ?? null;
+if (! is_array($discovery_fs)) {
     throw new LibreNMS\Exceptions\RrdGraphException('Unknown filesystem: ' . $fs_param);
 }
 
-$discovery_fs = $app->data['discovery']['filesystems'][$fs_uuid] ?? null;
-$fs_entry = $tables_fs[$fs_uuid] ?? null;
-$device_map = is_array($discovery_fs) ? ($discovery_fs['devices'] ?? []) : [];
-$device_metadata = $app->data['filesystems'][$fs_uuid]['device_metadata'] ?? [];
+$fs_uuid = $fs_param;
+$fs = $discovery_fs['mountpoint'] ?? $fs_uuid;
+$device_map = $discovery_fs['devices'] ?? [];
+$device_metadata = $discovery_fs['device_metadata'] ?? [];
 
 if (! is_array($device_map) || count($device_map) === 0) {
     throw new LibreNMS\Exceptions\RrdGraphException('No filesystem devices');
