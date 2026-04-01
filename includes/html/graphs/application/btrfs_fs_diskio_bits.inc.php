@@ -8,8 +8,8 @@ $colours_out = 'blues';
 $format = 'bytes';
 
 $nototal = 1;
-$ds_in = 'read';
-$ds_out = 'written';
+$ds_in = 'reads';
+$ds_out = 'writes';
 
 require 'includes/html/graphs/application/btrfs_fs_diskio_common.inc.php';
 

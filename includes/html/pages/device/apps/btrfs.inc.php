@@ -15,6 +15,30 @@
 
 use Illuminate\Support\Facades\Log;
 
+// DEBUG: Print full app->data
+if (isset($_GET['debug_btrfs'])) {
+    echo '<pre style="background:#f5f5f5;border:1px solid #ccc;padding:10px;margin:10px;overflow:auto;">';
+    echo '<h3>app->data (full)</h3>';
+    echo htmlspecialchars(print_r($app->data, true));
+    echo '</pre>';
+}
+
+// DEBUG: Print discovery data specifically
+if (isset($_GET['debug_btrfs_discovery'])) {
+    echo '<pre style="background:#e8f5e9;border:1px solid #4caf50;padding:10px;margin:10px;overflow:auto;">';
+    echo '<h3>app->data[\'discovery\']</h3>';
+    echo htmlspecialchars(print_r($app->data['discovery'] ?? [], true));
+    echo '</pre>';
+}
+
+// DEBUG: Print filesystem entries specifically
+if (isset($_GET['debug_btrfs_fs'])) {
+    echo '<pre style="background:#e3f2fd;border:1px solid #2196f3;padding:10px;margin:10px;overflow:auto;">';
+    echo '<h3>app->data[\'filesystems\']</h3>';
+    echo htmlspecialchars(print_r($app->data['filesystems'] ?? [], true));
+    echo '</pre>';
+}
+
 // =============================================================================
 // Namespace Imports
 // Import shared helper functions from the common btrfs module.
@@ -31,10 +55,16 @@ use function LibreNMS\Plugins\Btrfs\initialize_data;
 use function LibreNMS\Plugins\Btrfs\load_state_sensors;
 use function LibreNMS\Plugins\Btrfs\render_diskio_graphs;
 use function LibreNMS\Plugins\Btrfs\render_fs_diskio_graphs;
+use function LibreNMS\Plugins\Btrfs\scrub_health_badge;
+use function LibreNMS\Plugins\Btrfs\scrub_health_state;
+use function LibreNMS\Plugins\Btrfs\scrub_operation_state;
+use function LibreNMS\Plugins\Btrfs\scrub_ops_badge;
 use function LibreNMS\Plugins\Btrfs\scrub_progress_text_from_status;
+use function LibreNMS\Plugins\Btrfs\scrub_state_from_operation_health;
 use function LibreNMS\Plugins\Btrfs\scrub_status_to_state;
 use function LibreNMS\Plugins\Btrfs\state_code_from_running_flag;
 use function LibreNMS\Plugins\Btrfs\state_code_from_sensor;
+use function LibreNMS\Plugins\Btrfs\state_to_code;
 use function LibreNMS\Plugins\Btrfs\status_badge;
 use function LibreNMS\Plugins\Btrfs\status_from_code;
 use function LibreNMS\Plugins\Btrfs\total_io_errors;
@@ -68,6 +98,11 @@ echo '<style>
 @media (min-width: 1800px) {
     .btrfs-panels > .panel { flex: 1 1 23%; }
     .btrfs-panels > .panel-wide { flex: 1 1 23%; }
+}
+.btrfs-keyval td:first-child {
+    text-align: right;
+    padding-right: 15px;
+    white-space: nowrap;
 }
 </style>';
 
@@ -117,6 +152,7 @@ function btrfs_renderNavigation(array $link_array, array $data): void
     $filesystems = $data['filesystems'] ?? [];
     $selected_fs = $data['selected_fs'];
     $selected_dev = $data['selected_dev'];
+    $fs_mountpoint = $data['fs_mountpoint'] ?? [];
     $filesystem_meta = $data['filesystem_meta'] ?? [];
     $device_map = $data['device_map'] ?? [];
     $device_tables = $data['device_tables'] ?? [];
@@ -131,28 +167,31 @@ function btrfs_renderNavigation(array $link_array, array $data): void
     // Render filesystem submenu if filesystems exist.
     if (count($filesystems) > 0) {
         echo ' | Filesystems: ';
-        foreach ($filesystems as $index => $fs) {
+        foreach ($filesystems as $index => $fs_uuid) {
             Log::debug('Btrfs navigation: rendering filesystem', [
-                'fs' => $fs,
+                'fs_uuid' => $fs_uuid,
                 'index' => $index,
             ]);
+            // Get mountpoint for display
+            $mountpoint = $fs_mountpoint[$fs_uuid] ?? $fs_uuid;
             // Determine display label: prefer label, then 'root', then mountpoint.
-            $filesystem_label = $filesystem_meta[$fs]['label'] ?? null;
+            $filesystem_label = $filesystem_meta[$fs_uuid]['label'] ?? null;
             if (! empty($filesystem_label)) {
                 $display_fs = (string) $filesystem_label;
-            } elseif ($fs === '/') {
+            } elseif ($mountpoint === '/') {
                 $display_fs = 'root';
             } else {
-                $display_fs = (string) $fs;
+                $display_fs = (string) $mountpoint;
             }
 
             // Highlight currently selected filesystem.
             $fs_label = htmlspecialchars($display_fs);
-            $label = ($selected_fs === $fs)
+            $label = ($selected_fs === $fs_uuid)
                 ? '<span class="pagemenu-selected">' . $fs_label . '</span>'
                 : $fs_label;
 
-            echo generate_link($label, $link_array, ['fs' => $fs]);
+            // Use UUID for links
+            echo generate_link($label, $link_array, ['fs' => $fs_uuid]);
             if ($index < (count($filesystems) - 1)) {
                 echo ', ';
             }
@@ -221,12 +260,15 @@ function btrfs_renderOverviewPage(App\Models\Application $app, array $device, ar
 {
     // Extract required data arrays.
     $filesystems = $data['filesystems'] ?? [];
+    $fs_mountpoint = $data['fs_mountpoint'] ?? [];
     $filesystem_meta = $data['filesystem_meta'] ?? [];
     $filesystem_tables = $data['filesystem_tables'] ?? [];
     $device_map = $data['device_map'] ?? [];
     $device_tables = $data['device_tables'] ?? [];
     $scrub_status_fs = $data['scrub_status_fs'] ?? [];
     $scrub_is_running_fs = $data['scrub_is_running_fs'] ?? [];
+    $scrub_operation_fs = $data['scrub_operation_fs'] ?? [];
+    $scrub_health_fs = $data['scrub_health_fs'] ?? [];
     $balance_is_running_fs = $data['balance_is_running_fs'] ?? [];
     $fs_rrd_key = $data['fs_rrd_key'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
@@ -242,9 +284,9 @@ function btrfs_renderOverviewPage(App\Models\Application $app, array $device, ar
 <tr>
 <th>Filesystem</th>
 <th>Status</th>
-<th>Scrub</th>
+<th>Scrub Ops</th>
+<th>Scrub Health</th>
 <th>Balance</th>
-<th>Scrub Progress</th>
 <th>IO Errors</th>
 <th>% Used</th>
 <th>Used</th>
@@ -263,49 +305,45 @@ HTML;
     if (empty($filesystems)) {
         Log::error('Btrfs overview: no filesystems to render in table');
     }
-    foreach ($filesystems as $fs) {
+    foreach ($filesystems as $fs_uuid) {
         Log::debug('Btrfs overview: rendering filesystem row', [
-            'fs' => $fs,
+            'fs_uuid' => $fs_uuid,
         ]);
+        // Get mountpoint for display
+        $mountpoint = $fs_mountpoint[$fs_uuid] ?? $fs_uuid;
         // Extract filesystem data for this entry.
-        $fs_data = $filesystem_tables[$fs] ?? [];
-        $fs_devices = $device_map[$fs] ?? [];
-        $fs_label = trim((string) ($filesystem_meta[$fs]['label'] ?? ''));
-        $display_name = $fs_label !== '' ? $fs_label . ' (' . $fs . ')' : (string) $fs;
-        $scrub_status = $scrub_status_fs[$fs] ?? [];
-
-        // Calculate scrub progress percentage.
-        $scrub_progress_text = is_array($scrub_status) && count($scrub_status) > 0
-            ? scrub_progress_text_from_status($scrub_status)
-            : 'N/A';
+        $fs_data = $filesystem_tables[$fs_uuid] ?? [];
+        $fs_devices = $device_map[$fs_uuid] ?? [];
+        $fs_label = trim((string) ($filesystem_meta[$fs_uuid]['label'] ?? ''));
+        $display_name = $fs_label !== '' ? $fs_label . ' (' . $mountpoint . ')' : (string) $mountpoint;
 
         // Calculate total I/O errors across all devices.
-        $total_errors = total_io_errors($device_tables[$fs] ?? []);
+        $total_errors = total_io_errors($device_tables[$fs_uuid] ?? []);
 
         // Calculate used percentage.
         $used_pct_text = used_percent_text($fs_data['used'] ?? null, $fs_data['device_size'] ?? null);
 
         // Resolve state sensor codes with poller fallback.
-        $fs_rrd_id = $fs_rrd_key[$fs] ?? $fs;
+        $fs_rrd_id = $fs_rrd_key[$fs_uuid] ?? $fs_uuid;
         $io_code = state_code_from_sensor($state_sensor_values, 'btrfsIoStatusState', (string) $fs_rrd_id . '.io', $fs_data['io_status_code'] ?? null);
-        $scrub_fallback_code = state_code_from_running_flag($scrub_is_running_fs[$fs] ?? null, $fs_data['scrub_status_code'] ?? null);
-        $balance_fallback_code = state_code_from_running_flag($balance_is_running_fs[$fs] ?? null, $fs_data['balance_status_code'] ?? null);
-        $scrub_code = state_code_from_sensor($state_sensor_values, 'btrfsScrubStatusState', (string) $fs_rrd_id . '.scrub', $scrub_fallback_code);
+        $scrub_operation = $scrub_operation_fs[$fs_uuid] ?? 0;
+        $scrub_health = $scrub_health_fs[$fs_uuid] ?? 0;
+        $scrub_state = scrub_state_from_operation_health($scrub_operation, $scrub_health);
+        $balance_fallback_code = state_code_from_running_flag($balance_is_running_fs[$fs_uuid] ?? null, $fs_data['balance_status_code'] ?? null);
         $balance_code = state_code_from_sensor($state_sensor_values, 'btrfsBalanceStatusState', (string) $fs_rrd_id . '.balance', $balance_fallback_code);
         $io_state = status_from_code($io_code);
-        $scrub_state = status_from_code($scrub_code);
         $balance_state = status_from_code($balance_code);
 
-        // Build combined status graph parameters.
+        // Build combined status graph parameters (use UUID for fs parameter).
         $graph_array = [
-            'height' => 40,
-            'width' => 180,
+            'height' => 30,
+            'width' => 120,
             'to' => App\Facades\LibrenmsConfig::get('time.now'),
             'id' => $app['app_id'],
             'type' => 'application_btrfs_fs_status',
-            'fs' => $fs,
+            'fs' => $fs_uuid,
             'legend' => 'no',
-            'from' => App\Facades\LibrenmsConfig::get('time.week'),
+            'from' => App\Facades\LibrenmsConfig::get('time.day'),
         ];
 
         // Generate status graph link and image for overlib.
@@ -315,7 +353,7 @@ HTML;
         $graph_link = LibreNMS\Util\Url::generate($graph_link_array);
         $graph_img = LibreNMS\Util\Url::lazyGraphTag($graph_array);
 
-        // Build Ops/sec and Bps mini-graph parameters.
+        // Build Ops/sec and Bps mini-graph parameters (use UUID for fs parameter).
         $ops_graph = [
             'height' => 30,
             'width' => 120,
@@ -323,7 +361,7 @@ HTML;
             'from' => App\Facades\LibrenmsConfig::get('time.day'),
             'id' => $app['app_id'],
             'type' => 'application_btrfs_fs_diskio_ops',
-            'fs' => $fs,
+            'fs' => $fs_uuid,
             'legend' => 'no',
         ];
         $bps_graph = [
@@ -333,25 +371,25 @@ HTML;
             'from' => App\Facades\LibrenmsConfig::get('time.day'),
             'id' => $app['app_id'],
             'type' => 'application_btrfs_fs_diskio_bits',
-            'fs' => $fs,
+            'fs' => $fs_uuid,
             'legend' => 'no',
         ];
 
         // Define table cells for this row
         $row_cells = [
-            generate_link(htmlspecialchars((string) $display_name), ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'], ['fs' => $fs]),
+            generate_link(htmlspecialchars((string) $display_name), ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'], ['fs' => $fs_uuid]),
             status_badge($io_state),
-            status_badge($scrub_state),
+            scrub_ops_badge($scrub_operation),
+            scrub_health_badge($scrub_health),
             status_badge($balance_state),
-            htmlspecialchars($scrub_progress_text),
             htmlspecialchars(number_format($total_errors)),
             htmlspecialchars($used_pct_text),
             htmlspecialchars(format_metric_value($fs_data['used'] ?? null, 'used')),
             htmlspecialchars(format_metric_value($fs_data['free_estimated'] ?? null, 'free_estimated')),
             htmlspecialchars(format_metric_value($fs_data['device_size'] ?? null, 'device_size')),
             number_format(count($fs_devices)),
-            generate_link(LibreNMS\Util\Url::lazyGraphTag($ops_graph), ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'], ['fs' => $fs]),
-            generate_link(LibreNMS\Util\Url::lazyGraphTag($bps_graph), ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'], ['fs' => $fs]),
+            generate_link(LibreNMS\Util\Url::lazyGraphTag($ops_graph), ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'], ['fs' => $fs_uuid]),
+            generate_link(LibreNMS\Util\Url::lazyGraphTag($bps_graph), ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'], ['fs' => $fs_uuid]),
             LibreNMS\Util\Url::overlibLink($graph_link, $graph_img, $display_name . ' - Combined Status'),
         ];
 
@@ -403,10 +441,13 @@ function btrfs_renderOverviewPageGraphs(App\Models\Application $app, array $devi
 {
     // Extract required data arrays.
     $filesystems = $data['filesystems'] ?? [];
+    $fs_mountpoint = $data['fs_mountpoint'] ?? [];
     $filesystem_meta = $data['filesystem_meta'] ?? [];
     $filesystem_tables = $data['filesystem_tables'] ?? [];
     $fs_rrd_key = $data['fs_rrd_key'] ?? [];
     $scrub_is_running_fs = $data['scrub_is_running_fs'] ?? [];
+    $scrub_operation_fs = $data['scrub_operation_fs'] ?? [];
+    $scrub_health_fs = $data['scrub_health_fs'] ?? [];
     $balance_is_running_fs = $data['balance_is_running_fs'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
 
@@ -425,14 +466,16 @@ function btrfs_renderOverviewPageGraphs(App\Models\Application $app, array $devi
     if (empty($filesystems)) {
         Log::error('Btrfs overview graphs: no filesystems to render');
     }
-    foreach ($filesystems as $fs) {
+    foreach ($filesystems as $fs_uuid) {
         Log::debug('Btrfs overview graphs: rendering filesystem panel', [
-            'fs' => $fs,
+            'fs_uuid' => $fs_uuid,
         ]);
+        // Get mountpoint for display
+        $mountpoint = $fs_mountpoint[$fs_uuid] ?? $fs_uuid;
         // Extract filesystem data and build display name.
-        $fs_data = $filesystem_tables[$fs] ?? [];
-        $fs_label = trim((string) ($filesystem_meta[$fs]['label'] ?? ''));
-        $display_name = $fs_label !== '' ? $fs_label . ' (' . $fs . ')' : (string) $fs;
+        $fs_data = $filesystem_tables[$fs_uuid] ?? [];
+        $fs_label = trim((string) ($filesystem_meta[$fs_uuid]['label'] ?? ''));
+        $display_name = $fs_label !== '' ? $fs_label . ' (' . $mountpoint . ')' : (string) $mountpoint;
 
         // Calculate used space percentage for header.
         $used_value = (float) ($fs_data['used'] ?? 0);
@@ -444,22 +487,24 @@ function btrfs_renderOverviewPageGraphs(App\Models\Application $app, array $devi
             : 'N/A';
 
         // Calculate combined status for badge.
-        $fs_rrd_id = $fs_rrd_key[$fs] ?? $fs;
+        $fs_rrd_id = $fs_rrd_key[$fs_uuid] ?? $fs_uuid;
         $io_code = state_code_from_sensor($state_sensor_values, 'btrfsIoStatusState', (string) $fs_rrd_id . '.io', $fs_data['io_status_code'] ?? null);
-        $scrub_fallback_code = state_code_from_running_flag($scrub_is_running_fs[$fs] ?? null, $fs_data['scrub_status_code'] ?? null);
-        $balance_fallback_code = state_code_from_running_flag($balance_is_running_fs[$fs] ?? null, $fs_data['balance_status_code'] ?? null);
-        $scrub_code = state_code_from_sensor($state_sensor_values, 'btrfsScrubStatusState', (string) $fs_rrd_id . '.scrub', $scrub_fallback_code);
+        $scrub_operation = $scrub_operation_fs[$fs_uuid] ?? 0;
+        $scrub_health = $scrub_health_fs[$fs_uuid] ?? 0;
+        $scrub_state = scrub_state_from_operation_health($scrub_operation, $scrub_health);
+        $scrub_code = state_to_code($scrub_state);
+        $balance_fallback_code = state_code_from_running_flag($balance_is_running_fs[$fs_uuid] ?? null, $fs_data['balance_status_code'] ?? null);
         $balance_code = state_code_from_sensor($state_sensor_values, 'btrfsBalanceStatusState', (string) $fs_rrd_id . '.balance', $balance_fallback_code);
         $overall_code = combine_state_code([$io_code, $scrub_code, $balance_code]);
         $overall_state = status_from_code($overall_code);
 
-        // Build link to filesystem detail view.
+        // Build link to filesystem detail view (use UUID for fs parameter).
         $fs_link = LibreNMS\Util\Url::generate([
             'page' => 'device',
             'device' => $device['device_id'],
             'tab' => 'apps',
             'app' => 'btrfs',
-            'fs' => $fs,
+            'fs' => $fs_uuid,
         ]);
 
         // Render panel header with name, usage, and status badge.
@@ -467,7 +512,7 @@ function btrfs_renderOverviewPageGraphs(App\Models\Application $app, array $devi
         echo '<div class="panel-heading"><h3 class="panel-title"><a href="' . $fs_link . '" style="color:#337ab7;">' . htmlspecialchars($display_name) . '</a><div class="pull-right"><small class="text-muted">' . htmlspecialchars($used_text . '/' . $total_text . ' ' . $used_percent_text) . '</small> ' . status_badge($overall_state) . '</div></h3></div>';
         echo '<div class="panel-body"><div class="row">';
 
-        // Render each mini-graph with title and link.
+        // Render each mini-graph with title and link (use UUID for fs parameter).
         foreach ($overview_graph_types as $graph_type => $graph_title) {
             $graph_array = [
                 'height' => '80',
@@ -476,7 +521,7 @@ function btrfs_renderOverviewPageGraphs(App\Models\Application $app, array $devi
                 'from' => App\Facades\LibrenmsConfig::get('time.day'),
                 'id' => $app['app_id'],
                 'type' => 'application_' . $graph_type,
-                'fs' => $fs,
+                'fs' => $fs_uuid,
                 'legend' => 'no',
             ];
 
@@ -517,22 +562,18 @@ function btrfs_renderDevView(
     array $data
 ): void {
     // Extract required data arrays.
-    $filesystem_meta = $data['filesystem_meta'] ?? [];
-    $filesystem_tables = $data['filesystem_tables'] ?? [];
-    $device_map = $data['device_map'] ?? [];
     $device_tables = $data['device_tables'] ?? [];
-    $filesystem_profiles = $data['filesystem_profiles'] ?? [];
-    $scrub_status_fs = $data['scrub_status_fs'] ?? [];
     $scrub_status_devices = $data['scrub_status_devices'] ?? [];
-    $scrub_is_running_fs = $data['scrub_is_running_fs'] ?? [];
+    $scrub_operation_fs = $data['scrub_operation_fs'] ?? [];
+    $scrub_health_fs = $data['scrub_health_fs'] ?? [];
     $filesystem_uuid = $data['filesystem_uuid'] ?? [];
     $fs_rrd_key = $data['fs_rrd_key'] ?? [];
+    $fs_mountpoint = $data['fs_mountpoint'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
     $tables = $app->data['tables'] ?? [];
 
     // Resolve RRD key and build base link.
     $selected_fs_rrd_id = $fs_rrd_key[$selected_fs] ?? $selected_fs;
-    $link_array = ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'];
 
     // Extract device tables from raw app data.
     $dev_tables = $tables['filesystem_devices'] ?? [];
@@ -543,7 +584,6 @@ function btrfs_renderDevView(
     $fs_uuid = $filesystem_uuid[$selected_fs] ?? '';
     $dev_data = $dev_tables[$fs_uuid][$selected_dev] ?? [];
     $dev_path = $dev_data['device_path'] ?? '';
-    $dev_missing = $dev_data['missing'] ?? false;
     $backing_path = $dev_data['backing_device_path'] ?? null;
 
     // Get device status codes from stored poller data.
@@ -558,89 +598,85 @@ function btrfs_renderDevView(
     $overall_state = status_from_code($overall_code);
     $overall_state_badge = status_badge($overall_state);
 
-    // Begin device info panel.
+    // Build device info for key-value display.
+    $device_info = $dev_info[$dev_path] ?? [];
+    $id_model = $device_info['id_model'] ?? $device_info['model'] ?? '-';
+    $id_serial = $device_info['id_serial_short'] ?? '-';
+
+    // Device display (with backing device if present).
+    $dev_display = htmlspecialchars($dev_path);
+    if ($backing_path !== null) {
+        $dev_display .= ' (' . htmlspecialchars($backing_path) . ')';
+    }
+
+    // Model display (with backing model if present).
+    $model_display = htmlspecialchars($id_model);
+    if ($backing_path !== null) {
+        $backing_info = $dev_backing[$backing_path] ?? [];
+        $backing_model = $backing_info['id_model'] ?? null;
+        if ($backing_model !== null) {
+            $model_display .= ' (' . htmlspecialchars($backing_model) . ')';
+        }
+    }
+    // Serial display (with backing serial if present).
+    $serial_display = htmlspecialchars($id_serial);
+    if ($backing_path !== null) {
+        $backing_info = $dev_backing[$backing_path] ?? [];
+        $backing_serial = $backing_info['id_serial_short'] ?? null;
+        if ($backing_serial !== null) {
+            $serial_display .= ' (' . htmlspecialchars($backing_serial) . ')';
+        }
+    }
+
+    // I/O error counters.
+    $dev_errors = $device_tables[$selected_fs][$selected_dev]['errors'] ?? [];
+    $corruption_errs = format_metric_value($dev_errors['corruption_errs'] ?? 0, 'corruption_errs');
+    $flush_io_errs = format_metric_value($dev_errors['flush_io_errs'] ?? 0, 'flush_io_errs');
+    $generation_errs = format_metric_value($dev_errors['generation_errs'] ?? 0, 'generation_errs');
+    $read_io_errs = format_metric_value($dev_errors['read_io_errs'] ?? 0, 'read_io_errs');
+    $write_io_errs = format_metric_value($dev_errors['write_io_errs'] ?? 0, 'write_io_errs');
+
+    // Usage data.
+    $usage = $device_tables[$selected_fs][$selected_dev]['usage'] ?? [];
+    $slack = format_metric_value($usage['slack'] ?? null, 'device_slack');
+    $unallocated = format_metric_value($usage['unallocated'] ?? null, 'unallocated');
+    $size = format_metric_value($usage['size'] ?? null, 'device_size');
+
+    // RAID profile allocations.
+    $dev_profiles = $device_tables[$selected_fs][$selected_dev]['raid_profiles'] ?? [];
+
+    // Build key-value table rows.
+    $info_rows = '';
+    $info_rows .= '<tr><td>Model</td><td>' . $model_display . '</td></tr>';
+    $info_rows .= '<tr><td>Serial</td><td>' . $serial_display . '</td></tr>';
+    $info_rows .= '<tr><td>Corruption Errors</td><td>' . $corruption_errs . '</td></tr>';
+    $info_rows .= '<tr><td>Flush Io Errors</td><td>' . $flush_io_errs . '</td></tr>';
+    $info_rows .= '<tr><td>Generation Errors</td><td>' . $generation_errs . '</td></tr>';
+    $info_rows .= '<tr><td>Read Io Errors</td><td>' . $read_io_errs . '</td></tr>';
+    $info_rows .= '<tr><td>Write Io Errors</td><td>' . $write_io_errs . '</td></tr>';
+    $info_rows .= '<tr><td>Slack</td><td>' . $slack . '</td></tr>';
+    foreach ($dev_profiles as $profile_key => $profile_bytes) {
+        $info_rows .= '<tr><td>' . htmlspecialchars(format_display_name($profile_key)) . '</td><td>' . htmlspecialchars(format_metric_value($profile_bytes, 'bytes')) . '</td></tr>';
+    }
+    $info_rows .= '<tr><td>Unallocated</td><td>' . $unallocated . '</td></tr>';
+    $info_rows .= '<tr><td>Size</td><td>' . $size . '</td></tr>';
+
+    // Render device info table with ID and Device in header, Status on right.
+
     echo <<<HTML
 <div class="btrfs-panels">
 <div class="panel panel-default panel-wide">
-<div class="panel-heading"><h3 class="panel-title">Device Info<div class="pull-right">{$overall_state_badge}</div></h3></div>
+<div class="panel-heading"><h3 class="panel-title">Device: {$selected_dev} - {$dev_display}<div class="pull-right">{$overall_state_badge}</div></h3></div>
 <div class="panel-body">
-HTML;
-
-    // Build info rows array with key-value pairs.
-    $info_rows = [];
-    $info_rows[] = ['key' => 'name', 'value' => $dev_path];
-    $info_rows[] = ['key' => 'dev_id', 'value' => $selected_dev];
-    if ($fs_uuid !== '') {
-        $info_rows[] = ['key' => 'uuid', 'value' => $fs_uuid];
-    }
-
-    // Add device identity info from lsblk/sysfs.
-    $device_info = $dev_info[$dev_path] ?? [];
-    $id_model = $device_info['id_model'] ?? $device_info['model'] ?? null;
-    $id_serial = $device_info['id_serial_short'] ?? null;
-    if ($id_model !== null) {
-        $info_rows[] = ['key' => 'model', 'value' => $id_model];
-    }
-    if ($id_serial !== null) {
-        $info_rows[] = ['key' => 'serial', 'value' => $id_serial];
-    }
-
-    // Add backing device info if available (for loopback/qemu).
-    if ($backing_path !== null) {
-        $backing_info = $dev_backing[$backing_path] ?? [];
-        $info_rows[] = ['key' => 'backing_device', 'value' => $backing_path];
-        $backing_model = $backing_info['id_model'] ?? null;
-        $backing_serial = $backing_info['id_serial_short'] ?? null;
-        $backing_size = $backing_info['size_bytes'] ?? null;
-        if ($backing_model !== null) {
-            $info_rows[] = ['key' => 'backing_model', 'value' => $backing_model];
-        }
-        if ($backing_serial !== null) {
-            $info_rows[] = ['key' => 'backing_serial', 'value' => $backing_serial];
-        }
-        if ($backing_size !== null) {
-            $info_rows[] = ['key' => 'backing_size', 'value' => format_metric_value($backing_size, 'bytes')];
-        }
-    }
-
-    // Add device size.
-    $size = $dev_data['size'] ?? null;
-    if ($size !== null) {
-        $info_rows[] = ['key' => 'size', 'value' => format_metric_value($size, 'bytes')];
-    }
-
-    // Add I/O error counters.
-    $dev_errors = $device_tables[$selected_fs][$selected_dev]['errors'] ?? [];
-    $error_keys = ['write_io_errs', 'read_io_errs', 'flush_io_errs', 'corruption_errs', 'generation_errs'];
-    foreach ($error_keys as $err_key) {
-        if (isset($dev_errors[$err_key])) {
-            $info_rows[] = ['key' => $err_key, 'value' => format_metric_value($dev_errors[$err_key], $err_key)];
-        }
-    }
-
-    // Add RAID profile allocations.
-    $dev_profiles = $device_tables[$selected_fs][$selected_dev]['raid_profiles'] ?? [];
-    foreach ($dev_profiles as $profile_key => $profile_bytes) {
-        $info_rows[] = ['key' => $profile_key, 'value' => format_metric_value($profile_bytes, 'bytes')];
-    }
-
-    // Render info table.
-    echo <<<'HTML'
 <div class="table-responsive">
-<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
-<thead><tr><th>Key</th><th>Value</th></tr></thead>
+<table class="table table-condensed table-striped table-hover btrfs-sticky-first btrfs-keyval">
 <tbody>
-HTML;
-    foreach ($info_rows as $row) {
-        $key_display = htmlspecialchars(format_display_name((string) $row['key']));
-        $value_display = htmlspecialchars($row['value']);
-        echo <<<HTML
-<tr><td>{$key_display}</td><td>{$value_display}</td></tr>
-HTML;
-    }
-    echo <<<'HTML'
+{$info_rows}
 </tbody>
 </table>
+<p class="text-muted">To reset IO stats errors, run: <code>btrfs device stats -z {$fs_mountpoint[$selected_fs]}</code> on  {$device['hostname']}</p>
+
+
 </div>
 </div>
 </div>
@@ -648,16 +684,27 @@ HTML;
 
     // Build scrub status badge.
     $dev_scrub = $scrub_status_devices[$selected_fs][$selected_dev] ?? [];
+    $dev_scrub_code = $device_tables[$selected_fs][$selected_dev]['scrub_status_code'] ?? null;
     $scrub_status_code = state_code_from_sensor(
         $state_sensor_values,
         'btrfsScrubStatusState',
-        $selected_fs_rrd_id . '.scrub',
-        state_code_from_running_flag($scrub_is_running_fs[$selected_fs] ?? false, $filesystem_tables[$selected_fs]['scrub_status_code'] ?? null)
+        $selected_fs_rrd_id . '.dev.' . $selected_dev . '.scrub',
+        $dev_scrub_code
     );
     $scrub_badge = status_badge(status_from_code($scrub_status_code));
 
+    // Build scrub ops and health badges for device scrub panel.
+    $scrub_ops_code = state_code_from_sensor(
+        $state_sensor_values,
+        'btrfsScrubOpsState',
+        $selected_fs_rrd_id . '.scrub_ops',
+        $scrub_operation_fs[$selected_fs] ?? 0
+    );
+    $scrub_ops_badge = scrub_ops_badge($scrub_ops_code);
+    $scrub_health_badge = scrub_health_badge($scrub_health_fs[$selected_fs] ?? 0);
+
     // Render scrub status panel.
-    $scrub_hidden = ['path'];
+    $scrub_hidden = ['path', 'is_running'];
     $scrub_keys = array_keys($dev_scrub);
     $scrub_display_keys = array_diff($scrub_keys, $scrub_hidden);
 
@@ -668,14 +715,14 @@ HTML;
         $key_display = htmlspecialchars(format_display_name((string) $key));
         $value_display = htmlspecialchars($display_value);
         $scrub_table_rows .= <<<HTML
-<tr><td>{$key_display}</td><td>{$value_display}</td></tr>
+<tr><td style="min-width:150px;">{$key_display}</td><td style="min-width:100px;">{$value_display}</td></tr>
 
 HTML;
     }
 
     echo <<<HTML
 <div class="panel panel-default panel-wide">
-<div class="panel-heading"><h3 class="panel-title">Scrub<div class="pull-right">{$scrub_badge}</div></h3></div>
+<div class="panel-heading"><h3 class="panel-title">Scrub<div class="pull-right">{$scrub_ops_badge} {$scrub_health_badge}</div></h3></div>
 <div class="panel-body">
 HTML;
 
@@ -684,8 +731,7 @@ HTML;
     } else {
         echo <<<HTML
 <div class="table-responsive">
-<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
-<thead><tr><th>Key</th><th>Value</th></tr></thead>
+<table class="table table-condensed table-striped table-hover btrfs-sticky-first btrfs-keyval">
 <tbody>
 {$scrub_table_rows}</tbody>
 </table>
@@ -734,6 +780,8 @@ function btrfs_renderFsView(
     $scrub_status_devices = $data['scrub_status_devices'] ?? [];
     $balance_status_fs = $data['balance_status_fs'] ?? [];
     $scrub_is_running_fs = $data['scrub_is_running_fs'] ?? [];
+    $scrub_operation_fs = $data['scrub_operation_fs'] ?? [];
+    $scrub_health_fs = $data['scrub_health_fs'] ?? [];
     $balance_is_running_fs = $data['balance_is_running_fs'] ?? [];
     $fs_rrd_key = $data['fs_rrd_key'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
@@ -755,6 +803,16 @@ function btrfs_renderFsView(
         state_code_from_running_flag($scrub_is_running_fs[$selected_fs] ?? false, $filesystem_tables[$selected_fs]['scrub_status_code'] ?? null)
     );
     $scrub_badge = status_badge(status_from_code($scrub_status_code));
+
+    // Build scrub ops badge for filesystem-level scrub operation status.
+    $scrub_ops_code = state_code_from_sensor(
+        $state_sensor_values,
+        'btrfsScrubOpsState',
+        $selected_fs_rrd_id . '.scrub_ops',
+        $scrub_operation_fs[$selected_fs] ?? 0
+    );
+    $scrub_ops_badge = scrub_ops_badge($scrub_ops_code);
+    $scrub_health_badge_html = scrub_health_badge($scrub_health_fs[$selected_fs] ?? 0);
 
     // Prepare scrub status data split by device for per-device table.
     $scrub_split = [
@@ -788,7 +846,8 @@ function btrfs_renderFsView(
         $selected_fs,
         $selected_fs_rrd_id,
         $scrub_split,
-        $scrub_badge,
+        $scrub_health_badge_html,
+        $scrub_ops_badge,
         $data,
         $balance_status_fs,
         $scrub_is_running_fs
@@ -805,12 +864,19 @@ function btrfs_renderFsView(
     );
 
     // Render Scrub Per Device table.
+    Log::debug('Btrfs FsView: Scrub Per Device', [
+        'selected_fs' => $selected_fs,
+        'scrub_operation_fs_keys' => array_keys($scrub_operation_fs),
+        'scrub_operation_fs_value' => $scrub_operation_fs[$selected_fs] ?? 'NOT_FOUND',
+    ]);
     btrfs_renderScrubPerDevice(
         $scrub_split,
         $path_to_dev_id,
         $device['device_id'],
         $selected_fs,
-        $data
+        $data,
+        $scrub_operation_fs[$selected_fs] ?? 0,
+        $scrub_health_fs[$selected_fs] ?? 0
     );
 }
 
@@ -826,10 +892,6 @@ function btrfs_renderFsView(
 function btrfs_renderOverviewTable(array $pairs, int $columns): void
 {
     $rows = (int) ceil(count($pairs) / $columns);
-    $header_cells = '';
-    for ($c = 0; $c < $columns; $c++) {
-        $header_cells .= '<th>Metric</th><th>Value</th>';
-    }
 
     $table_rows = '';
     for ($r = 0; $r < $rows; $r++) {
@@ -848,8 +910,7 @@ function btrfs_renderOverviewTable(array $pairs, int $columns): void
     }
 
     echo <<<HTML
-<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
-<thead><tr>{$header_cells}</tr></thead>
+<table class="table table-condensed table-striped table-hover btrfs-sticky-first btrfs-keyval">
 <tbody>
 {$table_rows}</tbody>
 </table>
@@ -904,8 +965,7 @@ function btrfs_renderBalancePanel(array $split, array $rows, ?string $panel_col_
     $idle_message = ($is_idle && ! $has_profiles) ? '<p class="text-muted">No balance operation running.</p>' : '';
     $table_section = ($show_overview && count($overview_rows) > 0) ? <<<HTML
 <div class="table-responsive">
-<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
-<thead><tr><th>Key</th><th>Value</th></tr></thead>
+<table class="table table-condensed table-striped table-hover btrfs-sticky-first btrfs-keyval">
 <tbody>
 {$table_rows}</tbody>
 </table>
@@ -932,22 +992,18 @@ HTML;
  *
  * Shows scrub status and progress metrics for the filesystem.
  *
- * @param  array  $split   Scrub data split with overview/devices.
- * @param  array  $rows    Overview rows for display.
- * @param  string $badge   Pre-rendered scrub status badge.
+ * @param  array  $split         Scrub data split with overview/devices.
+ * @param  array  $rows          Overview rows for display.
+ * @param  string $badge         Pre-rendered scrub health badge.
+ * @param  string $scrub_ops_badge  Pre-rendered scrub ops badge.
  * @return void
  */
-function btrfs_renderScrubOverviewPanel(array $split, array $rows, string $badge): void
+function btrfs_renderScrubOverviewPanel(array $split, array $rows, string $badge, string $scrub_ops_badge): void
 {
-    Log::debug('Btrfs renderScrubOverviewPanel: rendering', [
-        'badge' => $badge,
-        'overview_count' => count($split['overview'] ?? []),
-    ]);
-
     if (count($rows) === 0) {
         echo <<<HTML
 <div class="panel panel-default panel-wide">
-<div class="panel-heading"><h3 class="panel-title">Scrub<div class="pull-right">{$badge}</div></h3></div>
+<div class="panel-heading"><h3 class="panel-title">Scrub<div class="pull-right">{$scrub_ops_badge} {$badge}</div></h3></div>
 <div class="panel-body">
 <em>No data returned</em>
 </div>
@@ -967,7 +1023,7 @@ HTML;
         $key = $overview_row['key'];
         $value = $overview_row['value'];
 
-        if ($key === 'status' || $key === 'uuid' || $key === 'bytes_scrubbed.progress') {
+        if ($key === 'status' || $key === 'uuid' || $key === 'bytes_scrubbed.progress' || $key === 'is_running') {
             continue;
         }
 
@@ -983,6 +1039,8 @@ HTML;
             $display_key = 'total_bytes_done';
         } elseif ($key === 'total_to_scrub') {
             $display_value = format_metric_value($value, 'bytes');
+        } elseif ($key === 'progress_percent') {
+            $display_value = format_metric_value($value, $key) . '%';
         }
 
         $key_display = htmlspecialchars(format_display_name($display_key));
@@ -992,11 +1050,10 @@ HTML;
 
     echo <<<HTML
 <div class="panel panel-default panel-wide">
-<div class="panel-heading"><h3 class="panel-title">Scrub<div class="pull-right">{$badge}</div></h3></div>
+<div class="panel-heading"><h3 class="panel-title">Scrub<div class="pull-right">{$scrub_ops_badge} {$badge}</div></h3></div>
 <div class="panel-body">
 <div class="table-responsive">
-<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
-<thead><tr><th>Key</th><th>Value</th></tr></thead>
+<table class="table table-condensed table-striped table-hover btrfs-sticky-first btrfs-keyval">
 <tbody>
 {$table_rows}</tbody>
 </table>
@@ -1014,7 +1071,8 @@ HTML;
  * @param  string                    $selected_fs         Selected filesystem name.
  * @param  string                    $selected_fs_rrd_id   RRD key for filesystem.
  * @param  array                     $scrub_split         Scrub data split by device.
- * @param  string                    $scrub_badge         Pre-rendered scrub status badge.
+ * @param  string                    $scrub_badge         Pre-rendered scrub health badge.
+ * @param  string                    $scrub_ops_badge     Pre-rendered scrub ops badge.
  * @param  array                    $data                Initialized data array.
  * @param  array                    $balance_status_fs   Balance status per filesystem.
  * @param  array                    $scrub_is_running_fs Scrub running state per filesystem.
@@ -1027,12 +1085,14 @@ function btrfs_renderFsPanelsRow1(
     string $selected_fs_rrd_id,
     array $scrub_split,
     string $scrub_badge,
+    string $scrub_ops_badge,
     array $data,
     array $balance_status_fs,
     array $scrub_is_running_fs
 ): void {
     $filesystem_meta = $data['filesystem_meta'] ?? [];
     $filesystem_tables = $data['filesystem_tables'] ?? [];
+    $filesystem_uuid = $data['filesystem_uuid'] ?? [];
 
     Log::debug('Btrfs renderFsPanelsRow1: rendering', [
         'selected_fs' => $selected_fs,
@@ -1040,22 +1100,29 @@ function btrfs_renderFsPanelsRow1(
     ]);
 
     // Build overview metric pairs for the overview table.
-    $overview_metric_keys = ['device_size', 'device_unallocated', 'free_estimated', 'free_statfs_df', 'device_allocated', 'used', 'free_estimated_min', 'global_reserve'];
+    $overview_metric_keys = ['device_size',
+        'device_unallocated',
+        'free_estimated',
+        'free_statfs_df',
+        'device_allocated', 'used', 'free_estimated_min', 'global_reserve'];
+
     $overview_pairs = [];
     foreach ($overview_metric_keys as $metric_key) {
         $overview_pairs[] = ['metric' => $metric_key, 'value' => $filesystem_tables[$selected_fs][$metric_key] ?? null];
     }
     $fs_label = $filesystem_meta[$selected_fs]['label'] ?? null;
-    $fs_title = ! empty($fs_label) ? $fs_label . ' (' . $selected_fs . ')' : $selected_fs;
-    $fs_uuid = $filesystem_meta[$selected_fs]['uuid'] ?? '';
+    $mountpoint = $data['fs_mountpoint'][$selected_fs] ?? $selected_fs;
+    $fs_title = ! empty($fs_label) ? $fs_label . ' (' . $mountpoint . ')' : $mountpoint;
+    $fs_uuid = $filesystem_uuid[$selected_fs] ?? '';
+
+    echo '<div class="btrfs-panels">';
 
     // Render Overview panel.
     $fs_uuid_section = $fs_uuid !== '' ? '<p><strong>UUID:</strong> ' . htmlspecialchars($fs_uuid) . '</p>' : '';
     echo <<<HTML
 <div class="panel panel-default panel-wide">
-<div class="panel-heading"><h3 class="panel-title">Overview</h3></div>
+<div class="panel-heading"><h3 class="panel-title">Overview <strong>{$fs_title}</strong> </h3></div>
 <div class="panel-body">
-<p><strong>Filesystem:</strong> {$fs_title}</p>
 {$fs_uuid_section}
 <div class="table-responsive">
 HTML;
@@ -1069,7 +1136,7 @@ HTML;
 HTML;
 
     // Render Scrub overview panel.
-    btrfs_renderScrubOverviewPanel($scrub_split, $scrub_split['overview'], $scrub_badge);
+    btrfs_renderScrubOverviewPanel($scrub_split, $scrub_split['overview'], $scrub_badge, $scrub_ops_badge);
 
     // Prepare and render balance panel.
     $balance_split = ['overview' => [], 'devices' => [], 'device_columns' => []];
@@ -1087,6 +1154,8 @@ HTML;
         }
     }
     btrfs_renderBalancePanel($balance_split, $balance_split['overview'], null, null, $filesystem_tables[$selected_fs]['balance_status_code'] ?? 2);
+
+    echo '</div>';
 }
 
 /**
@@ -1114,8 +1183,8 @@ function btrfs_renderFsPanelsRow2(
     $filesystem_tables = $data['filesystem_tables'] ?? [];
     $device_map = $data['device_map'] ?? [];
     $device_tables = $data['device_tables'] ?? [];
-    $device_metadata = $data['device_metadata'] ?? [];
     $filesystem_profiles = $data['filesystem_profiles'] ?? [];
+    $filesystem_uuid = $data['filesystem_uuid'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
 
     $link_array = ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'];
@@ -1125,15 +1194,40 @@ function btrfs_renderFsPanelsRow2(
         'selected_fs_rrd_id' => $selected_fs_rrd_id,
     ]);
 
-    // Collect device usage data and aggregate RAID profile columns.
-    $usage_devices = [];
+    // Get device info and backing devices from raw app data.
+    $tables = $app->data['tables'] ?? [];
+    $dev_info = $tables['devices'] ?? [];
+    $dev_backing = $tables['backing_devices'] ?? [];
+    $fs_devices = $tables['filesystem_devices'] ?? [];
+    $fs_uuid = $filesystem_uuid[$selected_fs] ?? '';
+
+    // Collect all devices and aggregate RAID profile columns.
+    $all_devices = [];
     $all_raid_profiles = [];
+    $error_columns = ['corruption_errs', 'flush_io_errs', 'generation_errs', 'read_io_errs', 'write_io_errs'];
+
     foreach ($device_map[$selected_fs] ?? [] as $dev_id => $dev_path) {
         $dev_stats = $device_tables[$selected_fs][$dev_id] ?? [];
         if (! is_array($dev_stats) || count($dev_stats) === 0) {
             continue;
         }
-        $usage_devices[$dev_path] = $dev_stats;
+
+        // Get backing device path and unallocated from filesystem device data.
+        $backing_path = null;
+        $unallocated = null;
+        if ($fs_uuid !== '') {
+            $fs_dev_data = $fs_devices[$fs_uuid][$dev_id] ?? [];
+            $backing_path = $fs_dev_data['backing_device_path'] ?? null;
+            $unallocated = $fs_dev_data['unallocated'] ?? null;
+        }
+
+        $all_devices[$dev_id] = [
+            'dev_id' => $dev_id,
+            'dev_path' => $dev_path,
+            'backing_path' => $backing_path,
+            'unallocated' => $unallocated,
+            'stats' => $dev_stats,
+        ];
         $raid_profiles = $dev_stats['raid_profiles'] ?? [];
         if (is_array($raid_profiles)) {
             $all_raid_profiles = array_unique(array_merge($all_raid_profiles, array_keys($raid_profiles)));
@@ -1141,111 +1235,166 @@ function btrfs_renderFsPanelsRow2(
     }
     sort($all_raid_profiles);
 
-    // Build Device Usage table rows.
-    $usage_header_cols = '';
-    foreach ($all_raid_profiles as $profile) {
-        $profile_display = htmlspecialchars(format_display_name($profile));
-        $usage_header_cols .= "<th>{$profile_display}</th>";
+    if (count($all_devices) === 0) {
+        Log::debug('Btrfs renderFsPanelsRow2: no devices found');
+
+        return;
     }
 
-    $usage_table_rows = '';
-    foreach ($usage_devices as $dev_path => $dev_stats) {
-        $usage = $dev_stats['usage'] ?? [];
-        $raid_profiles = $dev_stats['raid_profiles'] ?? [];
-        $dev_id = $path_to_dev_id[(string) $dev_path] ?? null;
-        $link = $dev_id !== null
-            ? generate_link(htmlspecialchars((string) $dev_path), $link_array, ['fs' => $selected_fs, 'dev' => $dev_id])
-            : htmlspecialchars((string) $dev_path);
-        $size_value = htmlspecialchars(format_metric_value($usage['size'] ?? null, 'device_size'));
+    // Calculate overall filesystem status badge.
+    $fs_io_code = state_code_from_sensor($state_sensor_values, 'btrfsIoStatusState', $selected_fs_rrd_id . '.io', $filesystem_tables[$selected_fs]['io_status_code'] ?? null);
+    $fs_scrub_code = state_code_from_sensor($state_sensor_values, 'btrfsScrubStatusState', $selected_fs_rrd_id . '.scrub', null);
+    $fs_balance_code = state_code_from_sensor($state_sensor_values, 'btrfsBalanceStatusState', $selected_fs_rrd_id . '.balance', null);
+    $fs_overall_code = combine_state_code([$fs_io_code, $fs_scrub_code, $fs_balance_code]);
+    $fs_overall_state = status_from_code($fs_overall_code);
+    $fs_overall_badge = status_badge($fs_overall_state);
+
+    // Build dynamic column headers.
+    $profile_header_cols = '';
+    foreach ($all_raid_profiles as $profile) {
+        $profile_display = htmlspecialchars(format_display_name($profile));
+        $profile_header_cols .= "<th>{$profile_display}</th>";
+    }
+
+    $error_header_titles = [
+        'corruption_errs' => 'Corruption Errors',
+        'flush_io_errs' => 'Flush I/O Errors',
+        'generation_errs' => 'Generation Errors',
+        'read_io_errs' => 'Read I/O Errors',
+        'write_io_errs' => 'Write I/O Errors',
+    ];
+    $error_header_cols = '';
+    foreach ($error_columns as $col) {
+        $col_display = htmlspecialchars(format_display_name($error_header_titles[$col] ?? $col));
+        $error_header_cols .= "<th>{$col_display}</th>";
+    }
+
+    // Build table rows.
+    $table_rows = '';
+    foreach ($all_devices as $dev_data) {
+        $dev_id = $dev_data['dev_id'];
+        $dev_path = $dev_data['dev_path'];
+        $backing_dev_path = $dev_data['backing_path'];
+        $stats = $dev_data['stats'];
+
+        // Get ID link and device link with backing path.
+        $id_link = generate_link(htmlspecialchars((string) $dev_id), $link_array, ['fs' => $selected_fs, 'dev' => $dev_id]);
+        if ($backing_dev_path !== null) {
+            $dev_link_text = htmlspecialchars((string) $dev_path) . ' (' . htmlspecialchars((string) $backing_dev_path) . ')';
+        } else {
+            $dev_link_text = htmlspecialchars((string) $dev_path);
+        }
+        $dev_link = generate_link($dev_link_text, $link_array, ['fs' => $selected_fs, 'dev' => $dev_id]);
+
+        // Get device status.
+        $dev_io_code = $stats['io_status_code'] ?? null;
+        $dev_scrub_code = $stats['scrub_status_code'] ?? null;
+        $dev_overall_code = combine_state_code([$dev_io_code ?? 2, $dev_scrub_code ?? 2]);
+        $dev_overall_state = status_from_code($dev_overall_code);
+        $status_badge_html = status_badge($dev_overall_state);
+
+        // Get device model (handle bcache backing devices).
+        $device_info = $dev_info[$dev_path] ?? [];
+        $model = $device_info['id_model'] ?? $device_info['model'] ?? null;
+        $backing_path = $dev_data['backing_path'];
+
+        // Build device info for key-value display.
+        $device_info = $dev_info[$dev_path] ?? [];
+        $id_model = $device_info['id_model'] ?? $device_info['model'] ?? '-';
+        $id_serial = $device_info['id_serial_short'] ?? '-';
+
+        // Device display (with backing device if present).
+        $dev_display = htmlspecialchars($dev_path);
+        if ($backing_path !== null) {
+            $dev_display .= ' (' . htmlspecialchars($backing_path) . ')';
+        }
+
+        // Model display (with backing model if present).
+        $model_display = htmlspecialchars($id_model);
+        if ($backing_path !== null) {
+            $backing_info = $dev_backing[$backing_path] ?? [];
+            $backing_model = $backing_info['id_model'] ?? null;
+            if ($backing_model !== null) {
+                $model_display .= ' (' . htmlspecialchars($backing_model) . ')';
+            }
+        }
+        // Serial display (with backing serial if present).
+        $serial_display = htmlspecialchars($id_serial);
+        if ($backing_path !== null) {
+            $backing_info = $dev_backing[$backing_path] ?? [];
+            $backing_serial = $backing_info['id_serial_short'] ?? null;
+            if ($backing_serial !== null) {
+                $serial_display .= ' (' . htmlspecialchars($backing_serial) . ')';
+            }
+        }
+
+        // Get errors.
+        $errors = $stats['errors'] ?? [];
+        $error_cells = '';
+        foreach ($error_columns as $col) {
+            $error_cells .= '<td>' . htmlspecialchars(format_metric_value($errors[$col] ?? null, $col)) . '</td>';
+        }
+
+        // Get usage.
+        $usage = $stats['usage'] ?? [];
         $slack_value = htmlspecialchars(format_metric_value($usage['slack'] ?? null, 'device_slack'));
+        $size_value = htmlspecialchars(format_metric_value($usage['size'] ?? null, 'device_size'));
+
+        // Get unallocated from device data.
+        $unallocated_value = htmlspecialchars(format_metric_value($dev_data['unallocated'] ?? null, 'device_unallocated'));
+
+        // Get RAID profile cells.
+        $raid_profiles = $stats['raid_profiles'] ?? [];
         $raid_cells = '';
         foreach ($all_raid_profiles as $profile) {
             $raid_cells .= '<td>' . htmlspecialchars(format_metric_value($raid_profiles[$profile] ?? null, 'bytes')) . '</td>';
         }
-        $usage_table_rows .= "<tr><td>{$link}</td><td>{$size_value}</td><td>{$slack_value}</td>{$raid_cells}</tr>";
-    }
-
-    $device_usage_panel = count($usage_devices) > 0 ? <<<HTML
-<div class="panel panel-default panel-wide">
-<div class="panel-heading"><h3 class="panel-title">Device Usage</h3></div>
-<div class="panel-body">
-<div class="table-responsive">
-<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
-<thead><tr><th>Device</th><th>Size</th><th>Slack</th>{$usage_header_cols}</tr></thead>
-<tbody>
-{$usage_table_rows}</tbody>
-</table>
-</div>
-</div>
-</div>
-
-HTML : '';
-
-    // Build device stats data for I/O error display.
-    $stats_split = ['overview' => [], 'devices' => [], 'device_columns' => ['corruption_errs', 'flush_io_errs', 'generation_errs', 'read_io_errs', 'write_io_errs']];
-    foreach ($device_map[$selected_fs] ?? [] as $dev_id => $dev_path) {
-        $dev_stats = $device_tables[$selected_fs][$dev_id] ?? [];
-        if (! is_array($dev_stats)) {
-            continue;
-        }
-        $stats_split['devices'][$dev_path] = $dev_stats;
-    }
-
-    // Build Device Stats panel.
-    $device_stats_panel = '';
-    if (count($stats_split['devices']) > 0) {
-        $fs_io_code = state_code_from_sensor($state_sensor_values, 'btrfsIoStatusState', $selected_fs_rrd_id . '.io', $filesystem_tables[$selected_fs]['io_status_code'] ?? null);
-        $fs_scrub_code = state_code_from_sensor($state_sensor_values, 'btrfsScrubStatusState', $selected_fs_rrd_id . '.scrub', null);
-        $fs_balance_code = state_code_from_sensor($state_sensor_values, 'btrfsBalanceStatusState', $selected_fs_rrd_id . '.balance', null);
-        $fs_overall_code = combine_state_code([$fs_io_code, $fs_scrub_code, $fs_balance_code]);
-        $fs_overall_state = status_from_code($fs_overall_code);
-        $fs_overall_badge = status_badge($fs_overall_state);
-
-        $stats_header_cols = '';
-        foreach ($stats_split['device_columns'] as $col) {
-            $col_display = htmlspecialchars(format_display_name($col));
-            $stats_header_cols .= "<th>{$col_display}</th>";
-        }
-
-        $stats_table_rows = '';
-        foreach ($stats_split['devices'] as $dev_path => $metrics) {
-            $dev_id = $path_to_dev_id[(string) $dev_path] ?? null;
-            $link = $dev_id !== null
-                ? generate_link(htmlspecialchars((string) $dev_path), $link_array, ['fs' => $selected_fs, 'dev' => $dev_id])
-                : htmlspecialchars((string) $dev_path);
-            $dev_io_code = $metrics['io_status_code'] ?? null;
-            $dev_scrub_code = $metrics['scrub_status_code'] ?? null;
-            $dev_overall_code = combine_state_code([$dev_io_code ?? 2, $dev_scrub_code ?? 2]);
-            $dev_overall_state = status_from_code($dev_overall_code);
-            $status_badge_html = status_badge($dev_overall_state);
-            $errors = $metrics['errors'] ?? [];
-            $error_cells = '';
-            foreach ($stats_split['device_columns'] as $col) {
-                $error_cells .= '<td>' . htmlspecialchars(format_metric_value($errors[$col] ?? null, $col)) . '</td>';
-            }
-            $stats_table_rows .= "<tr><td>{$link}</td><td>{$status_badge_html}</td>{$error_cells}</tr>";
-        }
-
-        $device_stats_panel = <<<HTML
-<div class="panel panel-default panel-wide">
-<div class="panel-heading"><h3 class="panel-title">Device Stats<div class="pull-right">{$fs_overall_badge}</div></h3></div>
-<div class="panel-body">
-<div class="table-responsive">
-<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
-<thead><tr><th>Device</th><th>Status</th>{$stats_header_cols}</tr></thead>
-<tbody>
-{$stats_table_rows}</tbody>
-</table>
-</div>
-</div>
-</div>
+        $table_header = <<<HTML
+    <tr>
+        <th>ID</th>
+        <th>Device</th>
+        <th>Status</th>
+        <th>Model</th>
+        <th>Serial</th>
+        {$error_header_cols}
+        <th>Slack</th>
+        {$profile_header_cols}
+        <th>Unallocated</th>
+        <th>Size</th>
+    </tr>
+    HTML;
+        $table_rows .= <<<HTML
+<tr>
+    <td>{$id_link}</td>
+    <td>{$dev_link}</td>
+    <td>{$status_badge_html}</td>
+    <td>{$model_display}</td>
+    <td>{$serial_display}</td>
+    {$error_cells}
+    <td>{$slack_value}</td>
+    {$raid_cells}
+    <td>{$unallocated_value}</td>
+    <td>{$size_value}</td>
+</tr>
 
 HTML;
     }
 
     echo <<<HTML
 <div class="btrfs-panels">
-{$device_usage_panel}{$device_stats_panel}</div>
+<div class="panel panel-default panel-wide">
+<div class="panel-heading"><h3 class="panel-title">Devices<div class="pull-right">{$fs_overall_badge}</div></h3></div>
+<div class="panel-body">
+<div class="table-responsive">
+<table class="table table-condensed table-striped table-hover btrfs-sticky-first">
+<thead>{$table_header}</thead>
+<tbody>
+{$table_rows}</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
 HTML;
 }
 
@@ -1267,7 +1416,9 @@ function btrfs_renderScrubPerDevice(
     array $path_to_dev_id,
     int $device_id,
     string $selected_fs,
-    array $data
+    array $data,
+    int $fs_scrub_operation = 0,
+    int $fs_scrub_health = 0
 ): void {
     $link_array = ['page' => 'device', 'device' => $device_id, 'tab' => 'apps', 'app' => 'btrfs'];
 
@@ -1277,13 +1428,32 @@ function btrfs_renderScrubPerDevice(
     ]);
 
     if (count($scrub_split['devices']) > 0) {
-        $hidden_columns = ['path', 'id', 'section', 'has_status_suffix', 'has_stats', 'no_stats_available', 'last_physical'];
+        $hidden_columns = ['status', 'path', 'id', 'section', 'has_status_suffix', 'has_stats', 'no_stats_available', 'last_physical', 'is_running', 'ops_status'];
+
+        $column_display_names = [
+            'status' => 'Status',
+            'duration' => 'Duration',
+            'time_left' => 'Time Left',
+            'total_to_scrub' => 'Total to Scrub',
+            'bytes_scrubbed' => 'Bytes Scrubbed',
+            'rate' => 'Rate',
+            'error_summary' => 'Error Summary',
+            'super_errors' => 'Super Errors',
+            'malloc_errors' => 'Malloc Errors',
+            'corrected_errors' => 'Corrected Errors',
+            'uncorrectable_errors' => 'Uncorrectable Errors',
+            'verified_errors' => 'Verified Errors',
+            'unverified_errors' => 'Unverified Errors',
+            'csum_errors' => 'Checksum Errors',
+            'read_errors' => 'Read Errors',
+            'verify_errors' => 'Verify Errors',
+        ];
 
         $header_cols = '';
         foreach ($scrub_split['device_columns'] as $column) {
             if (! in_array($column, $hidden_columns, true)) {
-                $col_display = htmlspecialchars(format_display_name($column));
-                $header_cols .= "<th>{$col_display}</th>";
+                $col_display = $column_display_names[$column] ?? format_display_name($column);
+                $header_cols .= '<th>' . htmlspecialchars($col_display) . '</th>';
             }
         }
 
@@ -1293,8 +1463,9 @@ function btrfs_renderScrubPerDevice(
             $link = $dev_id !== null
                 ? generate_link(htmlspecialchars((string) $device_name), $link_array, ['fs' => $selected_fs, 'dev' => $dev_id])
                 : htmlspecialchars((string) $device_name);
-            $scrub_state = scrub_status_to_state($metrics['status'] ?? '');
-            $status_badge_html = status_badge($scrub_state);
+            $dev_scrub_ops = $metrics['ops_status'] ?? $fs_scrub_operation;
+            $scrub_ops_badge_html = scrub_ops_badge($dev_scrub_ops);
+            $scrub_health_badge_html = scrub_health_badge($fs_scrub_health);
             $cells = '';
             foreach ($scrub_split['device_columns'] as $column) {
                 if (! in_array($column, $hidden_columns, true)) {
@@ -1302,7 +1473,7 @@ function btrfs_renderScrubPerDevice(
                     $cells .= '<td>' . htmlspecialchars(format_metric_value($value, $column)) . '</td>';
                 }
             }
-            $table_rows .= "<tr><td>{$link}</td><td>{$status_badge_html}</td>{$cells}</tr>";
+            $table_rows .= "<tr><td>{$link}</td><td>{$scrub_ops_badge_html}</td><td>{$scrub_health_badge_html}</td>{$cells}</tr>";
         }
 
         echo <<<HTML
@@ -1312,7 +1483,7 @@ function btrfs_renderScrubPerDevice(
 <div class="panel-body">
 <div class="table-responsive">
 <table class="table table-condensed table-striped table-hover btrfs-sticky-first">
-<thead><tr><th>Device</th><th>Status</th>{$header_cols}</tr></thead>
+<thead><tr><th>Device</th><th>Scrub Ops</th><th>Scrub Health</th>{$header_cols}</tr></thead>
 <tbody>
 {$table_rows}</tbody>
 </table>
@@ -1475,6 +1646,20 @@ Log::debug('Btrfs device page: start', [
     'app_id' => $app['app_id'] ?? null,
     'vars' => $vars,
 ]);
+
+if (empty($app->data)) {
+    Log::warning('Btrfs device page: no data in database for this device', [
+        'device_id' => $device['device_id'] ?? null,
+        'app_id' => $app['app_id'] ?? null,
+    ]);
+    echo '<div class="alert alert-info">';
+    echo '<strong>No btrfs data available.</strong> ';
+    echo 'The database is empty for this device. ';
+    echo 'Please wait for the next poll or run discovery/polling to collect btrfs data.';
+    echo '</div>';
+
+    return;
+}
 
 $data = initialize_data($app, $device, $vars);
 

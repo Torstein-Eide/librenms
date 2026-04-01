@@ -12,6 +12,31 @@ namespace LibreNMS\Plugins\Btrfs;
 
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Get filesystem discovery data by UUID.
+ * Graphs pass the UUID directly in $vars['fs'].
+ *
+ * @param  \App\Models\Application  $app
+ * @param  string|null             $uuid  Filesystem UUID
+ * @return array|null              Discovery entry or null if not found
+ */
+function btrfs_get_discovery_by_uuid(\App\Models\Application $app, ?string $uuid): ?array
+{
+    if ($uuid === null) {
+        return null;
+    }
+
+    return $app->data['discovery']['filesystems'][$uuid] ?? null;
+}
+
+/**
+ * @deprecated Use btrfs_get_discovery_by_uuid() — $vars['fs'] is now a UUID.
+ */
+function btrfs_get_discovery_by_mountpoint(\App\Models\Application $app, ?string $uuid): ?array
+{
+    return btrfs_get_discovery_by_uuid($app, $uuid);
+}
+
 // =============================================================================
 // Status Badge Rendering
 // Renders Bootstrap label badges for known status states.
@@ -40,6 +65,9 @@ function status_badge(string $state): string
     }
     if ($state_lc === 'na') {
         return '<span class="label label-default">N/A</span>';
+    }
+    if ($state_lc === 'idle') {
+        return '<span class="label label-default">Idle</span>';
     }
 
     return '<span class="label label-default">OK</span>';
@@ -70,6 +98,24 @@ function status_from_code($value): string
         3 => 'error',
         4 => 'missing',
         default => 'na',
+    };
+}
+
+/**
+ * Converts a normalized state string to a status code.
+ *
+ * @param  string  $state  Normalized state string.
+ * @return int             Numeric status code (0=ok, 1=running, 2=warning, 3=error, 4=missing).
+ */
+function state_to_code(string $state): int
+{
+    return match ($state) {
+        'ok' => 0,
+        'running' => 1,
+        'warning' => 2,
+        'error' => 3,
+        'missing' => 4,
+        default => 2,
     };
 }
 
@@ -227,6 +273,68 @@ function scrub_status_to_state(string $status): string
     };
 }
 
+/**
+ * Computes scrub display state from operation and health codes.
+ *
+ * Combines operation (0=idle, 1=running) and health (0=ok, 1=warning, 2=error)
+ * into a normalized status state for display.
+ *
+ * @param  int  $operation  Scrub operation code: 0=idle, 1=running
+ * @param  int  $health    Scrub health code: 0=ok, 1=warning, 2=error
+ * @return string          Normalized state: 'running', 'ok', 'warning', 'error', or 'na'
+ */
+function scrub_state_from_operation_health(int $operation, int $health): string
+{
+    if ($operation === 1 && $health === 2) {
+        return 'running';
+    }
+    if ($operation === 1) {
+        return 'running';
+    }
+    if ($health === 2) {
+        return 'error';
+    }
+    if ($health === 1) {
+        return 'warning';
+    }
+
+    return 'ok';
+}
+
+function scrub_operation_state(int $operation): string
+{
+    return $operation === 1 ? 'running' : 'idle';
+}
+
+function scrub_health_state(int $health): string
+{
+    return match ($health) {
+        0 => 'ok',
+        1 => 'warning',
+        2 => 'error',
+        default => 'ok',
+    };
+}
+
+function scrub_ops_badge(int $operation): string
+{
+    if ($operation === 1) {
+        return '<span class="label label-default">Running</span>';
+    }
+
+    return '<span class="label label-default">Idle</span>';
+}
+
+function scrub_health_badge(int $health): string
+{
+    return match ($health) {
+        0 => '<span class="label label-default">OK</span>',
+        1 => '<span class="label label-warning">Warning</span>',
+        2 => '<span class="label label-danger">Error</span>',
+        default => '<span class="label label-default">OK</span>',
+    };
+}
+
 // =============================================================================
 // Metric Formatting
 // Format raw metric values for display with appropriate units.
@@ -293,19 +401,32 @@ function format_metric_value($value, string $metric): string
         return '';
     }
 
+    if ($value === 'null') {
+        return '-';
+    }
+
     // Boolean passthrough for true/false states.
     if (is_bool($value)) {
         return $value ? 'true' : 'false';
     }
 
-    // Ratio metrics get two decimal places.
-    if (str_contains($metric, 'ratio')) {
-        return number_format((float) $value, 2);
+    // Duration/time_left strings are passed through unchanged (before ratio check
+    // because 'duration' contains 'ratio' as substring).
+    $time_duration_metrics = ['duration', 'time_left'];
+    if (in_array($metric, $time_duration_metrics, true) && is_string($value)) {
+        return $value === '' ? 'N/A' : $value;
     }
 
-    // Error metrics are always displayed as whole integers.
+    // Error metrics are always displayed as whole integers (before ratio check
+    // because 'generation_errs' contains 'ratio' as substring in 'generation').
     if (is_error_metric($metric) && is_numeric($value)) {
         return number_format((int) round((float) $value));
+    }
+
+    // Ratio metrics get two decimal places.
+    $ratio_metrics = ['data_ratio', 'metadata_ratio'];
+    if (in_array($metric, $ratio_metrics, true)) {
+        return number_format((float) $value, 2);
     }
 
     // Count metrics that benefit from SI suffixes.
@@ -316,11 +437,6 @@ function format_metric_value($value, string $metric): string
     ];
     if (in_array($metric, $si_count_metrics, true) && is_numeric($value)) {
         return \LibreNMS\Util\Number::formatSi((float) $value, 2, 0, '');
-    }
-
-    // Duration strings in HH:MM:SS format are passed through unchanged.
-    if ($metric === 'duration' && is_string($value) && str_contains($value, ':')) {
-        return $value;
     }
 
     // Byte-based metrics get binary unit formatting.
@@ -444,6 +560,20 @@ function used_percent_text($used_value, $size_value): string
     return rtrim(rtrim(number_format(($used / $size) * 100, 2, '.', ''), '0'), '.') . '%';
 }
 
+function build_sum_expr(array $ids): ?string
+{
+    if (count($ids) === 0) {
+        return null;
+    }
+
+    $expr = array_shift($ids);
+    foreach ($ids as $id) {
+        $expr .= ',' . $id . ',+';
+    }
+
+    return $expr;
+}
+
 // =============================================================================
 // State Sensor Loading
 // Retrieves live state sensor values from the database.
@@ -465,7 +595,7 @@ function load_state_sensors(int $device_id): array
     $btrfs_state_sensors = \App\Models\Sensor::where('device_id', $device_id)
         ->where('sensor_class', 'state')
         ->where('poller_type', 'agent')
-        ->whereIn('sensor_type', ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsBalanceStatusState'])
+        ->whereIn('sensor_type', ['btrfsIoStatusState', 'btrfsScrubStatusState', 'btrfsScrubOpsState', 'btrfsBalanceStatusState'])
         ->get(['sensor_type', 'sensor_index', 'sensor_current']);
     foreach ($btrfs_state_sensors as $state_sensor) {
         $state_sensor_values[$state_sensor->sensor_type][$state_sensor->sensor_index] = (int) $state_sensor->sensor_current;
@@ -524,10 +654,21 @@ function find_diskio(
     $diskio_candidates[] = basename($selected_dev_path);
 
     // Include backing device names with higher priority.
-    $selected_dev_metadata = $device_metadata[$selected_dev] ?? [];
+    $selected_dev_metadata = $device_metadata[$selected_fs][$selected_dev] ?? [];
     if (is_array($selected_dev_metadata)) {
         $primary_meta = $selected_dev_metadata['primary'] ?? [];
         $backing_meta = $selected_dev_metadata['backing'] ?? [];
+        $backing_path = trim((string) ($selected_dev_metadata['backing_path'] ?? ''));
+
+        // Add backing path candidates if available.
+        if ($backing_path !== '') {
+            $diskio_candidates[] = $backing_path;
+            $diskio_candidates[] = preg_replace('#^/dev/#', '', $backing_path);
+            $diskio_candidates[] = basename($backing_path);
+            // Backing device is preferred match.
+            $preferred_diskio_candidates[] = $backing_path;
+            $preferred_diskio_candidates[] = basename($backing_path);
+        }
 
         // Primary device node path variants.
         $primary_devnode = trim((string) ($primary_meta['devnode'] ?? ''));
@@ -688,14 +829,17 @@ function render_fs_diskio_graphs(\App\Models\Application $app, string $selected_
  * @param  array   $filesystem_entries  Raw filesystems array from poller.
  * @return array                          Normalized data arrays.
  */
-function extract_filesystem_data(array $filesystem_entries): array
+function extract_filesystem_data(array $filesystem_entries, array $discovery_filesystems = [], array $tables_filesystems = []): array
 {
     Log::debug('Btrfs extract_filesystem_data: start', [
         'entries_count' => count($filesystem_entries),
+        'discovery_count' => count($discovery_filesystems),
+        'tables_count' => count($tables_filesystems),
     ]);
 
     // Initialize all output arrays.
     $filesystems = [];
+    $fs_mountpoint = [];
     $filesystem_meta = [];
     $device_map = [];
     $filesystem_tables = [];
@@ -706,48 +850,90 @@ function extract_filesystem_data(array $filesystem_entries): array
     $scrub_status_devices = [];
     $balance_status_fs = [];
     $scrub_is_running_fs = [];
+    $scrub_operation_fs = [];
+    $scrub_health_fs = [];
     $balance_is_running_fs = [];
     $filesystem_uuid = [];
     $fs_rrd_key = [];
 
-    // Extract data from each filesystem entry.
-    foreach ($filesystem_entries as $fs_name => $entry) {
+    // Build mountpoint-to-UUID mapping from tables/filesystems
+    $mountpoint_to_uuid = [];
+    foreach ($tables_filesystems as $uuid => $fs_entry) {
+        $mountpoint = $fs_entry['mountpoint'] ?? null;
+        if ($mountpoint !== null) {
+            $mountpoint_to_uuid[$mountpoint] = $uuid;
+        }
+    }
+
+    // Build UUID-to-mountpoint mapping
+    $uuid_to_mountpoint = array_flip($mountpoint_to_uuid);
+
+    // If filesystem_entries is keyed by mountpoint, convert to UUID-based
+    $uuid_keyed_entries = [];
+    if (! empty($filesystem_entries)) {
+        $first_key = array_key_first($filesystem_entries);
+        // Check if first key looks like a UUID (36 chars with hyphens)
+        if (is_string($first_key) && strlen($first_key) === 36 && substr_count($first_key, '-') === 4) {
+            // Already UUID-keyed
+            $uuid_keyed_entries = $filesystem_entries;
+        } else {
+            // Keyed by mountpoint, convert to UUID
+            foreach ($filesystem_entries as $mountpoint => $entry) {
+                $uuid = $mountpoint_to_uuid[$mountpoint] ?? null;
+                if ($uuid !== null) {
+                    $uuid_keyed_entries[$uuid] = $entry;
+                } else {
+                    Log::warning('Btrfs extract_filesystem_data: no UUID for mountpoint', [
+                        'mountpoint' => $mountpoint,
+                    ]);
+                }
+            }
+        }
+    }
+
+    // Extract data from each filesystem entry keyed by UUID.
+    foreach ($uuid_keyed_entries as $fs_uuid => $entry) {
         if (! is_array($entry)) {
             Log::debug('Btrfs extract_filesystem_data: skipping non-array entry', [
-                'fs_name' => $fs_name,
+                'fs_uuid' => $fs_uuid,
                 'entry_type' => gettype($entry),
             ]);
             continue;
         }
 
-        // Register filesystem and copy indexed data arrays.
-        $filesystems[] = $fs_name;
-        $filesystem_meta[$fs_name] = is_array($entry['meta'] ?? null) ? $entry['meta'] : [];
-        $device_map[$fs_name] = is_array($entry['device_map'] ?? null) ? $entry['device_map'] : [];
-        $filesystem_tables[$fs_name] = is_array($entry['table'] ?? null) ? $entry['table'] : [];
-        $device_tables[$fs_name] = is_array($entry['device_tables'] ?? null) ? $entry['device_tables'] : [];
-        $device_metadata[$fs_name] = is_array($entry['device_metadata'] ?? null) ? $entry['device_metadata'] : [];
-        $filesystem_profiles[$fs_name] = is_array($entry['profiles'] ?? null) ? $entry['profiles'] : [];
+        // Register filesystem UUID
+        $filesystems[] = $fs_uuid;
+        $fs_mountpoint[$fs_uuid] = $uuid_to_mountpoint[$fs_uuid] ?? $fs_uuid;
+        $filesystem_meta[$fs_uuid] = is_array($entry['meta'] ?? null) ? $entry['meta'] : [];
+        $device_map[$fs_uuid] = is_array($entry['device_map'] ?? null) ? $entry['device_map'] : [];
+        $filesystem_tables[$fs_uuid] = is_array($entry['table'] ?? null) ? $entry['table'] : [];
+        $device_tables[$fs_uuid] = is_array($entry['device_tables'] ?? null) ? $entry['device_tables'] : [];
+        $device_metadata[$fs_uuid] = is_array($entry['device_metadata'] ?? null) ? $entry['device_metadata'] : [];
+        $filesystem_profiles[$fs_uuid] = is_array($entry['profiles'] ?? null) ? $entry['profiles'] : [];
 
         // Extract scrub status block.
         $scrub_block = is_array($entry['scrub'] ?? null) ? $entry['scrub'] : [];
         $balance_block = is_array($entry['balance'] ?? null) ? $entry['balance'] : [];
-        $scrub_status_fs[$fs_name] = is_array($scrub_block['status'] ?? null) ? $scrub_block['status'] : [];
-        $scrub_status_devices[$fs_name] = is_array($scrub_block['devices'] ?? null) ? $scrub_block['devices'] : [];
-        $scrub_is_running_fs[$fs_name] = (bool) ($scrub_block['is_running'] ?? false);
+        $scrub_status_fs[$fs_uuid] = is_array($scrub_block['status'] ?? null) ? $scrub_block['status'] : [];
+        $scrub_status_devices[$fs_uuid] = is_array($scrub_block['devices'] ?? null) ? $scrub_block['devices'] : [];
+        $scrub_is_running_fs[$fs_uuid] = (bool) ($scrub_block['is_running'] ?? false);
+        $scrub_operation_fs[$fs_uuid] = (int) ($scrub_block['operation'] ?? 0);
+        $scrub_health_fs[$fs_uuid] = (int) ($scrub_block['health'] ?? 0);
 
         // Extract balance status block.
-        $balance_status_fs[$fs_name] = is_array($balance_block['status'] ?? null) ? $balance_block['status'] : [];
-        $balance_is_running_fs[$fs_name] = (bool) ($balance_block['is_running'] ?? false);
+        $balance_status_fs[$fs_uuid] = is_array($balance_block['status'] ?? null) ? $balance_block['status'] : [];
+        $balance_is_running_fs[$fs_uuid] = (bool) ($balance_block['is_running'] ?? false);
 
         // Extract UUID and RRD key for filesystem.
-        $filesystem_uuid[$fs_name] = (string) ($entry['uuid'] ?? '');
-        $fs_rrd_key[$fs_name] = (string) ($entry['rrd_key'] ?? $fs_name);
+        $filesystem_uuid[$fs_uuid] = (string) ($entry['uuid'] ?? $fs_uuid);
+        // rrd_key comes from discovery cache
+        $fs_rrd_key[$fs_uuid] = (string) ($discovery_filesystems[$fs_uuid]['rrd_key'] ?? substr($fs_uuid, 0, 8));
 
         Log::debug('Btrfs extract_filesystem_data: processed entry', [
-            'fs_name' => $fs_name,
-            'device_map_count' => count($device_map[$fs_name] ?? []),
-            'device_tables_count' => count($device_tables[$fs_name] ?? []),
+            'fs_uuid' => $fs_uuid,
+            'mountpoint' => $fs_mountpoint[$fs_uuid],
+            'device_map_count' => count($device_map[$fs_uuid] ?? []),
+            'device_tables_count' => count($device_tables[$fs_uuid] ?? []),
         ]);
     }
 
@@ -760,11 +946,15 @@ function extract_filesystem_data(array $filesystem_entries): array
         ]);
     }
 
-    // Sort filesystems alphabetically for consistent display.
-    sort($filesystems);
+    // Sort filesystems by mountpoint for consistent display
+    $sorted_filesystems = $filesystems;
+    usort($sorted_filesystems, static function ($a, $b) use ($fs_mountpoint) {
+        return strcmp($fs_mountpoint[$a] ?? $a, $fs_mountpoint[$b] ?? $b);
+    });
 
     return [
-        'filesystems' => $filesystems,
+        'filesystems' => $sorted_filesystems,
+        'fs_mountpoint' => $fs_mountpoint,
         'filesystem_meta' => $filesystem_meta,
         'device_map' => $device_map,
         'filesystem_tables' => $filesystem_tables,
@@ -775,6 +965,8 @@ function extract_filesystem_data(array $filesystem_entries): array
         'scrub_status_devices' => $scrub_status_devices,
         'balance_status_fs' => $balance_status_fs,
         'scrub_is_running_fs' => $scrub_is_running_fs,
+        'scrub_operation_fs' => $scrub_operation_fs,
+        'scrub_health_fs' => $scrub_health_fs,
         'balance_is_running_fs' => $balance_is_running_fs,
         'filesystem_uuid' => $filesystem_uuid,
         'fs_rrd_key' => $fs_rrd_key,
@@ -810,22 +1002,38 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
         'selected_dev' => $selected_dev,
     ]);
 
-    // Check if filesystem data is in structured (normalized) format.
+    // Get discovery and tables data
+    $discovery_filesystems = $app->data['discovery']['filesystems'] ?? [];
+    $tables_filesystems = $app->data['tables']['filesystems'] ?? [];
     $filesystem_entries = $app->data['filesystems'] ?? [];
     $has_structured_filesystems = is_array($filesystem_entries) && count($filesystem_entries) > 0 && is_array(reset($filesystem_entries));
 
     Log::debug('Btrfs initialize_data: filesystem check', [
         'has_structured' => $has_structured_filesystems,
         'entries_count' => count($filesystem_entries),
+        'discovery_count' => count($discovery_filesystems),
         'first_key' => is_array($filesystem_entries) ? array_key_first($filesystem_entries) : null,
         'first_val_type' => is_array($filesystem_entries) ? gettype(reset($filesystem_entries)) : null,
     ]);
 
+    // Build mountpoint-to-UUID mapping from tables/filesystems
+    $mountpoint_to_uuid = [];
+    foreach ($tables_filesystems as $uuid => $fs_entry) {
+        $mountpoint = $fs_entry['mountpoint'] ?? null;
+        if ($mountpoint !== null) {
+            $mountpoint_to_uuid[$mountpoint] = $uuid;
+        }
+    }
+
+    // Build UUID-to-mountpoint mapping
+    $uuid_to_mountpoint = array_flip($mountpoint_to_uuid);
+
     // Extract filesystem data if structured format is available.
     if ($has_structured_filesystems) {
         Log::debug('Btrfs initialize_data: using structured format');
-        $extracted = extract_filesystem_data($filesystem_entries);
+        $extracted = extract_filesystem_data($filesystem_entries, $discovery_filesystems, $tables_filesystems);
         $filesystems = $extracted['filesystems'];
+        $fs_mountpoint = $extracted['fs_mountpoint'];
         $filesystem_meta = $extracted['filesystem_meta'];
         $device_map = $extracted['device_map'];
         $filesystem_tables = $extracted['filesystem_tables'];
@@ -836,6 +1044,8 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
         $scrub_status_devices = $extracted['scrub_status_devices'];
         $balance_status_fs = $extracted['balance_status_fs'];
         $scrub_is_running_fs = $extracted['scrub_is_running_fs'];
+        $scrub_operation_fs = $extracted['scrub_operation_fs'];
+        $scrub_health_fs = $extracted['scrub_health_fs'];
         $balance_is_running_fs = $extracted['balance_is_running_fs'];
         $filesystem_uuid = $extracted['filesystem_uuid'];
         $fs_rrd_key = $extracted['fs_rrd_key'];
@@ -854,6 +1064,7 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
         ]);
         // Initialize empty arrays for legacy/unstructured data.
         $filesystems = [];
+        $fs_mountpoint = [];
         $filesystem_meta = [];
         $device_map = [];
         $filesystem_tables = [];
@@ -864,13 +1075,40 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
         $scrub_status_devices = [];
         $balance_status_fs = [];
         $scrub_is_running_fs = [];
+        $scrub_operation_fs = [];
+        $scrub_health_fs = [];
         $balance_is_running_fs = [];
         $filesystem_uuid = [];
         $fs_rrd_key = [];
     }
 
+    // Resolve selected_fs: it can be UUID or mountpoint
+    if (is_string($selected_fs) && $selected_fs !== '') {
+        // Check if it's already a valid UUID in the filesystems list
+        if (in_array($selected_fs, $filesystems, true)) {
+            // Already a valid UUID
+            Log::debug('Btrfs initialize_data: selected_fs is valid UUID', ['selected_fs' => $selected_fs]);
+        } elseif (isset($mountpoint_to_uuid[$selected_fs])) {
+            // It's a mountpoint, convert to UUID
+            $selected_fs = $mountpoint_to_uuid[$selected_fs];
+            Log::debug('Btrfs initialize_data: converted mountpoint to UUID', [
+                'mountpoint' => $vars['fs'],
+                'uuid' => $selected_fs,
+            ]);
+        } else {
+            // Not found, clear selection
+            Log::debug('Btrfs initialize_data: selected_fs not found', [
+                'selected_fs' => $selected_fs,
+                'filesystems' => $filesystems,
+            ]);
+            $selected_fs = null;
+        }
+    } else {
+        $selected_fs = null;
+    }
+
     // Validate selected filesystem is in the filesystems list.
-    if (! is_string($selected_fs) || ! in_array($selected_fs, $filesystems, true)) {
+    if ($selected_fs !== null && ! in_array($selected_fs, $filesystems, true)) {
         Log::debug('Btrfs initialize_data: selected_fs cleared - not in filesystems list', [
             'selected_fs' => $selected_fs,
             'filesystems' => $filesystems,
@@ -918,6 +1156,7 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
         'is_overview' => $is_overview,
         // Data arrays.
         'filesystems' => $filesystems,
+        'fs_mountpoint' => $fs_mountpoint,
         'filesystem_meta' => $filesystem_meta,
         'device_map' => $device_map,
         'filesystem_tables' => $filesystem_tables,
@@ -928,6 +1167,8 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
         'scrub_status_fs' => $scrub_status_fs,
         'scrub_status_devices' => $scrub_status_devices,
         'scrub_is_running_fs' => $scrub_is_running_fs,
+        'scrub_operation_fs' => $scrub_operation_fs,
+        'scrub_health_fs' => $scrub_health_fs,
         // Balance status per filesystem.
         'balance_status_fs' => $balance_status_fs,
         'balance_is_running_fs' => $balance_is_running_fs,

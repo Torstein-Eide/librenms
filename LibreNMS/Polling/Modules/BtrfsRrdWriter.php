@@ -2,6 +2,7 @@
 
 namespace LibreNMS\Polling\Modules;
 
+use App_log;
 use LibreNMS\RRD\RrdDefinition;
 
 /**
@@ -23,6 +24,8 @@ class BtrfsRrdWriter extends AppRrdWriter
 {
     public const DS_IO_STATUS = 'io_status_code';
     public const DS_SCRUB_STATUS = 'scrub_status_code';
+    public const DS_SCRUB_OPERATION = 'scrub_operation';
+    public const DS_SCRUB_HEALTH = 'scrub_health';
     public const DS_BALANCE_STATUS = 'balance_status_code';
     public const DS_SCRUB_BYTES = 'scrub_bytes_scrubbe';
 
@@ -32,6 +35,41 @@ class BtrfsRrdWriter extends AppRrdWriter
     public RrdDefinition $dynamicTypeRrdDef;
     public array $ioErrorKeys;
     public array $scrubErrorKeys;
+
+    private static array $callCounters = [
+        'writeFsRrd' => 0,
+        'writeDeviceRrd' => 0,
+        'writeTypeRrd' => 0,
+        'writeDevTypeRrd' => 0,
+        'sumDeviceErrors' => 0,
+        'sumScrubErrors' => 0,
+        'hasDeviceError' => 0,
+        'hasAnyDeviceError' => 0,
+        'hasScrubError' => 0,
+        'buildDeviceFields' => 0,
+        'buildDeviceTableRow' => 0,
+        'sumUsageTotals' => 0,
+    ];
+
+    public static function getCallCounters(): array
+    {
+        return self::$callCounters;
+    }
+
+    public static function resetCallCounters(): void
+    {
+        foreach (self::$callCounters as $key => $value) {
+            self::$callCounters[$key] = 0;
+        }
+    }
+
+    public static function printCallCounters(): void
+    {
+        echo "BtrfsRrdWriter call counters:\n";
+        foreach (self::$callCounters as $method => $count) {
+            echo " btrfs $method: $count\n";
+        }
+    }
 
     public function __construct()
     {
@@ -64,6 +102,8 @@ class BtrfsRrdWriter extends AppRrdWriter
             ->addDataset(self::DS_SCRUB_BYTES, 'COUNTER', 0)
             ->addDataset(self::DS_IO_STATUS, 'GAUGE', 0)
             ->addDataset(self::DS_SCRUB_STATUS, 'GAUGE', 0)
+            ->addDataset(self::DS_SCRUB_OPERATION, 'GAUGE', 0)
+            ->addDataset(self::DS_SCRUB_HEALTH, 'GAUGE', 0)
             ->addDataset(self::DS_BALANCE_STATUS, 'GAUGE', 0);
 
         $this->deviceRrdDef = RrdDefinition::make()
@@ -89,6 +129,8 @@ class BtrfsRrdWriter extends AppRrdWriter
             ->addDataset('scrub_d_uncorrectable', 'DERIVE', 0)
             ->addDataset('scrub_d_unverified', 'DERIVE', 0)
             ->addDataset('scrub_d_corrected', 'DERIVE', 0)
+            ->addDataset(self::DS_SCRUB_OPERATION, 'GAUGE', 0)
+            ->addDataset(self::DS_SCRUB_HEALTH, 'GAUGE', 0)
             ->addDataset('usage_size', 'GAUGE', 0)
             ->addDataset('usage_slack', 'GAUGE', 0)
             ->addDataset('usage_unallocated', 'GAUGE', 0)
@@ -115,41 +157,52 @@ class BtrfsRrdWriter extends AppRrdWriter
 
     public function writeFsRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, array $fields, array $tags = []): void
     {
+        self::$callCounters['writeFsRrd']++;
         $this->write($device, $app_name, $app_id, $fs_rrd_id, $fields, array_merge($tags, ['rrd_def' => $this->fsRrdDef]));
     }
 
     public function writeDeviceRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, string $dev_id, array $fields, array $tags = []): void
     {
+        self::$callCounters['writeDeviceRrd']++;
         $this->write($device, $app_name, $app_id, $fs_rrd_id . '_device_' . $dev_id, $fields, array_merge($tags, ['rrd_def' => $this->deviceRrdDef]));
     }
 
     public function writeTypeRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, string $type_id, float $value, array $tags = []): void
     {
+        self::$callCounters['writeTypeRrd']++;
         $this->write($device, $app_name, $app_id, $fs_rrd_id . '-type_' . $type_id, ['value' => $value], array_merge($tags, ['rrd_def' => $this->dynamicTypeRrdDef]));
     }
 
     public function writeDevTypeRrd(array $device, string $app_name, int $app_id, string $fs_rrd_id, string $dev_id, string $type_id, float $value, array $tags = []): void
     {
+        self::$callCounters['writeDevTypeRrd']++;
         $this->write($device, $app_name, $app_id, $fs_rrd_id . '_device_' . $dev_id . '_type_' . $type_id, ['value' => $value], array_merge($tags, ['rrd_def' => $this->dynamicTypeRrdDef]));
     }
 
     public function sumDeviceErrors(array $dev_stats): float
     {
+        self::$callCounters['sumDeviceErrors']++;
+
         return $this->sumErrors($dev_stats, $this->ioErrorKeys);
     }
 
     public function sumScrubErrors(array $scrub_stats): float
     {
+        self::$callCounters['sumScrubErrors']++;
+
         return $this->sumErrors($scrub_stats, $this->scrubErrorKeys);
     }
 
     public function hasDeviceError(array $dev_stats): bool
     {
+        self::$callCounters['hasDeviceError']++;
+
         return $this->hasErrors($dev_stats, $this->ioErrorKeys);
     }
 
     public function hasAnyDeviceError(array $devices): bool
     {
+        self::$callCounters['hasAnyDeviceError']++;
         foreach ($devices as $dev) {
             if ($this->hasErrors($dev, $this->ioErrorKeys)) {
                 return true;
@@ -161,11 +214,15 @@ class BtrfsRrdWriter extends AppRrdWriter
 
     public function hasScrubError(array $scrub_stats): bool
     {
+        self::$callCounters['hasScrubError']++;
+
         return $this->hasErrors($scrub_stats, $this->scrubErrorKeys);
     }
 
-    public function buildDeviceFields(array $dev_stats, array $scrub_stats, array $usage_stats): array
+    public function buildDeviceFields(array $dev_stats, array $scrub_stats, array $usage_stats, ?int $scrub_operation = null, ?int $scrub_health = null): array
     {
+        self::$callCounters['buildDeviceFields']++;
+
         return [
             'io_d_corruption' => $dev_stats['corruption_errs'] ?? null,
             'io_d_flush' => $dev_stats['flush_io_errs'] ?? null,
@@ -189,6 +246,8 @@ class BtrfsRrdWriter extends AppRrdWriter
             'scrub_d_uncorrectable' => $scrub_stats['uncorrectable_errors'] ?? null,
             'scrub_d_unverified' => $scrub_stats['unverified_errors'] ?? null,
             'scrub_d_corrected' => $scrub_stats['corrected_errors'] ?? null,
+            self::DS_SCRUB_OPERATION => $scrub_operation,
+            self::DS_SCRUB_HEALTH => $scrub_health,
             'usage_size' => $usage_stats['device_size'] ?? null,
             'usage_slack' => $usage_stats['device_slack'] ?? null,
             'usage_unallocated' => $usage_stats['unallocated'] ?? null,
@@ -200,6 +259,8 @@ class BtrfsRrdWriter extends AppRrdWriter
 
     public function buildDeviceTableRow(string $dev_path, $device_numeric_id, array $dev_stats, array $usage_stats): array
     {
+        self::$callCounters['buildDeviceTableRow']++;
+
         return [
             'path' => $dev_path,
             'devid' => $device_numeric_id,
@@ -225,6 +286,7 @@ class BtrfsRrdWriter extends AppRrdWriter
 
     public function sumUsageTotals(array $usage_devices): array
     {
+        self::$callCounters['sumUsageTotals']++;
         $totals = [
             'usage_device_size' => 0,
             'usage_unallocated' => 0,
