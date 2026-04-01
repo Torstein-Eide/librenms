@@ -68,7 +68,7 @@ if ($width > 500) {
 
 $fs_uuid = is_string($vars['fs'] ?? null) ? $vars['fs'] : null;
 $discovery_fs = \LibreNMS\Plugins\Btrfs\btrfs_get_discovery_by_uuid($app, $fs_uuid);
-$fs_entry = $fs_uuid !== null ? ($app->data['tables']['filesystems'][$fs_uuid] ?? null) : null;
+$fs_entry = $fs_uuid !== null ? ($app->data['filesystems'][$fs_uuid] ?? null) : null;
 
 $normalize_profile_rows = static function (array $profiles): array {
     $normalized = [];
@@ -105,10 +105,6 @@ $normalize_profile_rows = static function (array $profiles): array {
 };
 
 $fs_types = is_array($fs_entry) ? $normalize_profile_rows($fs_entry['profiles'] ?? []) : [];
-if (count($fs_types) === 0 && $fs_uuid !== null) {
-    $tables_profiles = $app->data['tables']['filesystem_profiles'][$fs_uuid] ?? [];
-    $fs_types = $normalize_profile_rows($tables_profiles);
-}
 
 if (empty($fs_types)) {
     return;

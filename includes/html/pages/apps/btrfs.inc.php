@@ -75,21 +75,27 @@ foreach ($apps as $app_entry) {
     }
 
     // Collect filesystem name and label suggestions.
-    $app_filesystems = $app_entry->data['filesystems'] ?? [];
-    foreach ($app_filesystems as $fs_name => $fs_entry) {
-        $fs_value = trim((string) $fs_name);
+    $discovery_fs = $app_entry->data['discovery']['filesystems'] ?? [];
+    foreach ($discovery_fs as $fs_uuid => $fs_data) {
+        $fs_value = trim((string) $fs_uuid);
         if ($fs_value === '') {
             continue;
         }
 
-        // Add filesystem mountpoint/value itself.
+        // Add filesystem UUID itself.
         $filesystem_suggestions[$fs_value] = $fs_value;
 
         // Add filesystem label and labeled variant.
-        $fs_label = trim((string) ($fs_entry['meta']['label'] ?? ''));
+        $fs_label = trim((string) ($fs_data['label'] ?? ''));
         if ($fs_label !== '') {
             $filesystem_suggestions[$fs_label] = $fs_label;
             $filesystem_suggestions[$fs_label . ' (' . $fs_value . ')'] = $fs_label . ' (' . $fs_value . ')';
+        }
+
+        // Add mountpoint.
+        $mountpoint = trim((string) ($fs_data['mountpoint'] ?? ''));
+        if ($mountpoint !== '' && $mountpoint !== $fs_value) {
+            $filesystem_suggestions[$mountpoint] = $mountpoint;
         }
     }
 
@@ -217,42 +223,23 @@ foreach ($apps as $app) {
         continue;
     }
 
-    // Extract filesystem data from app data.
-    $filesystemEntries = $app->data['filesystems'] ?? [];
-    $structured = is_array($filesystemEntries) && count($filesystemEntries) > 0 && is_array(reset($filesystemEntries));
+    $discovery_fs = $app->data['discovery']['filesystems'] ?? [];
+    $filesystem_entries = $app->data['filesystems'] ?? [];
 
-    // Extract and normalize filesystem data if structured format available.
-    if ($structured) {
-        $filesystems = array_keys($filesystemEntries);
-        $filesystemMeta = [];
-        $filesystemTables = [];
-        $deviceMap = [];
-        $scrubStatusFs = [];
-        $scrubIsRunningFs = [];
-        $balanceIsRunningFs = [];
-        foreach ($filesystemEntries as $fsName => $entry) {
-            if (! is_array($entry)) {
-                continue;
-            }
-            $filesystemMeta[$fsName] = is_array($entry['meta'] ?? null) ? $entry['meta'] : [];
-            $filesystemTables[$fsName] = is_array($entry['table'] ?? null) ? $entry['table'] : [];
-            $deviceMap[$fsName] = is_array($entry['device_map'] ?? null) ? $entry['device_map'] : [];
-            $scrubBlock = is_array($entry['scrub'] ?? null) ? $entry['scrub'] : [];
-            $balanceBlock = is_array($entry['balance'] ?? null) ? $entry['balance'] : [];
-            $scrubStatusFs[$fsName] = is_array($scrubBlock['status'] ?? null) ? $scrubBlock['status'] : [];
-            $scrubIsRunningFs[$fsName] = (bool) ($scrubBlock['is_running'] ?? false);
-            $balanceIsRunningFs[$fsName] = (bool) ($balanceBlock['is_running'] ?? false);
-        }
-    } else {
-        // Initialize empty arrays for legacy/unstructured data.
-        $filesystems = [];
-        $filesystemMeta = [];
-        $filesystemTables = [];
-        $deviceMap = [];
-        $scrubStatusFs = [];
-        $scrubIsRunningFs = [];
-        $balanceIsRunningFs = [];
+    if (empty($filesystem_entries)) {
+        continue;
     }
+
+    $extracted = extract_filesystem_data($filesystem_entries, $discovery_fs);
+    $filesystems = $extracted['filesystems'];
+    $filesystemMeta = $extracted['filesystem_meta'];
+    $filesystemTables = $extracted['filesystem_tables'];
+    $deviceMap = $extracted['device_map'];
+    $scrubStatusFs = $extracted['scrub_status_fs'];
+    $scrubOperationFs = $extracted['scrub_operation_fs'];
+    $scrubHealthFs = $extracted['scrub_health_fs'];
+    $balanceStatusFs = $extracted['balance_status_fs'];
+    $deviceTables = $extracted['device_tables'];
 
     // Process each filesystem for this device.
     foreach ($filesystems as $fs) {
@@ -264,12 +251,8 @@ foreach ($apps as $app) {
 
         // Calculate status badges from stored poller status codes.
         $ioState = status_from_code($fsData['io_status_code'] ?? null);
-        $scrubCode = is_bool($scrubIsRunningFs[$fs] ?? null)
-            ? (($scrubIsRunningFs[$fs] ?? false) ? 1 : 0)
-            : ($fsData['scrub_status_code'] ?? null);
-        $balanceCode = is_bool($balanceIsRunningFs[$fs] ?? null)
-            ? (($balanceIsRunningFs[$fs] ?? false) ? 1 : 0)
-            : ($fsData['balance_status_code'] ?? null);
+        $scrubCode = (int) ($fsData['scrub_status_code'] ?? 0);
+        $balanceCode = (int) ($fsData['balance_status_code'] ?? 2);
         $scrubState = status_from_code($scrubCode);
         $balanceState = status_from_code($balanceCode);
         $overallCode = combine_state_code([$fsData['io_status_code'] ?? 2, $scrubCode, $balanceCode]);
@@ -299,8 +282,7 @@ foreach ($apps as $app) {
             : 'N/A';
 
         // Calculate total I/O errors across all devices.
-        $deviceTables = is_array($filesystemEntries[$fs]['device_tables'] ?? null) ? $filesystemEntries[$fs]['device_tables'] : [];
-        $totalErrors = total_io_errors($deviceTables);
+        $totalErrors = total_io_errors($deviceTables[$fs] ?? []);
 
         // Calculate used percentage.
         $usedPercentText = used_percent_text($fsData['used'] ?? null, $fsData['device_size'] ?? null);
@@ -371,7 +353,7 @@ foreach ($apps as $app) {
             htmlspecialchars(format_metric_value($fsData['used'] ?? null, 'used')),
             htmlspecialchars(format_metric_value($fsData['free_estimated'] ?? null, 'free_estimated')),
             htmlspecialchars(format_metric_value($fsData['device_size'] ?? null, 'device_size')),
-           // $missing_badge,
+            // $missing_badge,
             number_format(count($fsDevices)),
             generate_link(Url::lazyGraphTag($opsGraph), $fsDetailLink),
             generate_link(Url::lazyGraphTag($bpsGraph), $fsDetailLink),

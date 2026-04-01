@@ -570,21 +570,19 @@ function btrfs_renderDevView(
     $fs_rrd_key = $data['fs_rrd_key'] ?? [];
     $fs_mountpoint = $data['fs_mountpoint'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
-    $tables = $app->data['tables'] ?? [];
+    $device_metadata = $data['device_metadata'] ?? [];
 
     // Resolve RRD key and build base link.
     $selected_fs_rrd_id = $fs_rrd_key[$selected_fs] ?? $selected_fs;
 
-    // Extract device tables from raw app data.
-    $dev_tables = $tables['filesystem_devices'] ?? [];
-    $dev_backing = $tables['backing_devices'] ?? [];
-    $dev_info = $tables['devices'] ?? [];
-
     // Resolve filesystem UUID and device data.
     $fs_uuid = $filesystem_uuid[$selected_fs] ?? '';
-    $dev_data = $dev_tables[$fs_uuid][$selected_dev] ?? [];
-    $dev_path = $dev_data['device_path'] ?? '';
-    $backing_path = $dev_data['backing_device_path'] ?? null;
+    $dev_data = $device_tables[$selected_fs][$selected_dev] ?? [];
+    $dev_path = $dev_data['path'] ?? '';
+    $dev_meta = $device_metadata[$selected_fs][$selected_dev] ?? [];
+    $backing_info = $dev_meta['backing'] ?? null;
+    $backing_path = $dev_meta['backing_path'] ?? null;
+    $sys_block = $dev_meta['sys_block'] ?? [];
 
     // Get device status codes from stored poller data.
     $dev_status = $device_tables[$selected_fs][$selected_dev] ?? [];
@@ -598,11 +596,6 @@ function btrfs_renderDevView(
     $overall_state = status_from_code($overall_code);
     $overall_state_badge = status_badge($overall_state);
 
-    // Build device info for key-value display.
-    $device_info = $dev_info[$dev_path] ?? [];
-    $id_model = $device_info['id_model'] ?? $device_info['model'] ?? '-';
-    $id_serial = $device_info['id_serial_short'] ?? '-';
-
     // Device display (with backing device if present).
     $dev_display = htmlspecialchars($dev_path);
     if ($backing_path !== null) {
@@ -610,18 +603,18 @@ function btrfs_renderDevView(
     }
 
     // Model display (with backing model if present).
+    $id_model = $sys_block['id_model'] ?? '-';
     $model_display = htmlspecialchars($id_model);
-    if ($backing_path !== null) {
-        $backing_info = $dev_backing[$backing_path] ?? [];
+    if ($backing_info !== null) {
         $backing_model = $backing_info['id_model'] ?? null;
         if ($backing_model !== null) {
             $model_display .= ' (' . htmlspecialchars($backing_model) . ')';
         }
     }
     // Serial display (with backing serial if present).
+    $id_serial = $sys_block['id_serial_short'] ?? '-';
     $serial_display = htmlspecialchars($id_serial);
-    if ($backing_path !== null) {
-        $backing_info = $dev_backing[$backing_path] ?? [];
+    if ($backing_info !== null) {
         $backing_serial = $backing_info['id_serial_short'] ?? null;
         if ($backing_serial !== null) {
             $serial_display .= ' (' . htmlspecialchars($backing_serial) . ')';
@@ -1186,6 +1179,7 @@ function btrfs_renderFsPanelsRow2(
     $filesystem_profiles = $data['filesystem_profiles'] ?? [];
     $filesystem_uuid = $data['filesystem_uuid'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
+    $device_metadata = $data['device_metadata'] ?? [];
 
     $link_array = ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'btrfs'];
 
@@ -1194,14 +1188,8 @@ function btrfs_renderFsPanelsRow2(
         'selected_fs_rrd_id' => $selected_fs_rrd_id,
     ]);
 
-    // Get device info and backing devices from raw app data.
-    $tables = $app->data['tables'] ?? [];
-    $dev_info = $tables['devices'] ?? [];
-    $dev_backing = $tables['backing_devices'] ?? [];
-    $fs_devices = $tables['filesystem_devices'] ?? [];
     $fs_uuid = $filesystem_uuid[$selected_fs] ?? '';
 
-    // Collect all devices and aggregate RAID profile columns.
     $all_devices = [];
     $all_raid_profiles = [];
     $error_columns = ['corruption_errs', 'flush_io_errs', 'generation_errs', 'read_io_errs', 'write_io_errs'];
@@ -1212,19 +1200,19 @@ function btrfs_renderFsPanelsRow2(
             continue;
         }
 
-        // Get backing device path and unallocated from filesystem device data.
-        $backing_path = null;
-        $unallocated = null;
-        if ($fs_uuid !== '') {
-            $fs_dev_data = $fs_devices[$fs_uuid][$dev_id] ?? [];
-            $backing_path = $fs_dev_data['backing_device_path'] ?? null;
-            $unallocated = $fs_dev_data['unallocated'] ?? null;
-        }
+        $dev_meta = $device_metadata[$selected_fs][$dev_id] ?? [];
+        $backing_path = $dev_meta['backing_path'] ?? null;
+        $backing_info = $dev_meta['backing'] ?? null;
+        $sys_block = $dev_meta['sys_block'] ?? [];
+        $usage = $dev_stats['usage'] ?? [];
+        $unallocated = $usage['unallocated'] ?? null;
 
         $all_devices[$dev_id] = [
             'dev_id' => $dev_id,
             'dev_path' => $dev_path,
             'backing_path' => $backing_path,
+            'backing_info' => $backing_info,
+            'sys_block' => $sys_block,
             'unallocated' => $unallocated,
             'stats' => $dev_stats,
         ];
@@ -1293,26 +1281,17 @@ function btrfs_renderFsPanelsRow2(
         $dev_overall_state = status_from_code($dev_overall_code);
         $status_badge_html = status_badge($dev_overall_state);
 
-        // Get device model (handle bcache backing devices).
-        $device_info = $dev_info[$dev_path] ?? [];
-        $model = $device_info['id_model'] ?? $device_info['model'] ?? null;
+        // Get device metadata (model, serial from sys_block, backing info).
+        $sys_block = $dev_data['sys_block'] ?? [];
         $backing_path = $dev_data['backing_path'];
+        $backing_info = $dev_data['backing_info'] ?? null;
 
-        // Build device info for key-value display.
-        $device_info = $dev_info[$dev_path] ?? [];
-        $id_model = $device_info['id_model'] ?? $device_info['model'] ?? '-';
-        $id_serial = $device_info['id_serial_short'] ?? '-';
-
-        // Device display (with backing device if present).
-        $dev_display = htmlspecialchars($dev_path);
-        if ($backing_path !== null) {
-            $dev_display .= ' (' . htmlspecialchars($backing_path) . ')';
-        }
+        $id_model = $sys_block['id_model'] ?? '-';
+        $id_serial = $sys_block['id_serial_short'] ?? '-';
 
         // Model display (with backing model if present).
         $model_display = htmlspecialchars($id_model);
-        if ($backing_path !== null) {
-            $backing_info = $dev_backing[$backing_path] ?? [];
+        if ($backing_info !== null) {
             $backing_model = $backing_info['id_model'] ?? null;
             if ($backing_model !== null) {
                 $model_display .= ' (' . htmlspecialchars($backing_model) . ')';
@@ -1320,8 +1299,7 @@ function btrfs_renderFsPanelsRow2(
         }
         // Serial display (with backing serial if present).
         $serial_display = htmlspecialchars($id_serial);
-        if ($backing_path !== null) {
-            $backing_info = $dev_backing[$backing_path] ?? [];
+        if ($backing_info !== null) {
             $backing_serial = $backing_info['id_serial_short'] ?? null;
             if ($backing_serial !== null) {
                 $serial_display .= ' (' . htmlspecialchars($backing_serial) . ')';
