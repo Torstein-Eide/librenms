@@ -88,6 +88,25 @@ if (strcmp((string) $data['mode'], 'single') == 0
 // chunk counts, compressed/uncompressed sizes (total and unique).
 // In single mode, these totals represent the single repository.
 // In multi mode, these totals represent the sum across all repositories.
+
+// Handle locked state for single mode
+if (strcmp((string) $data['mode'], 'single') == 0) {
+    $is_locked = ($data['totals']['locked'] ?? 0) == 1 || ($data['totals']['locked_for'] ?? 0) > 0;
+    if ($is_locked && isset($app->data['repos']['single'])) {
+        Log::info('    Single repo is locked, using last known data');
+        $last_data = $app->data['repos']['single'];
+        $data['totals'] = array_merge($data['totals'], [
+            'time_since_last_modified' => $last_data['time_since_last_modified'] ?? $data['totals']['time_since_last_modified'] ?? null,
+            'total_chunks' => $last_data['total_chunks'] ?? $data['totals']['total_chunks'] ?? null,
+            'total_csize' => $last_data['total_csize'] ?? $data['totals']['total_csize'] ?? null,
+            'total_size' => $last_data['total_size'] ?? $data['totals']['total_size'] ?? null,
+            'total_unique_chunks' => $last_data['total_unique_chunks'] ?? $data['totals']['total_unique_chunks'] ?? null,
+            'unique_csize' => $last_data['unique_csize'] ?? $data['totals']['unique_csize'] ?? null,
+            'unique_size' => $last_data['unique_size'] ?? $data['totals']['unique_size'] ?? null,
+        ]);
+    }
+}
+
 Log::info('    Processing totals...');
 $total_vars = [
     'errored',
@@ -153,6 +172,55 @@ if (strcmp((string) $data['mode'], 'multi') == 0) {
 
         // Check if repository has valid data (total_size > 0)
         $repo_total_size = $repo_info['total_size'] ?? 0;
+
+        // If locked, copy last known data from existing app_data
+        $is_locked = ($repo_info['locked'] ?? 0) == 1 || ($repo_info['locked_for'] ?? 0) > 0;
+        if ($is_locked && isset($app->data['repos'][$repo_name])) {
+            Log::info('        -> Repository "' . $repo_name . '" is locked, using last known data');
+            $last_data = $app->data['repos'][$repo_name];
+            $app_data['repos'][$repo_name] = [
+                'error' => $repo_info['error'] ?? $last_data['error'] ?? null,
+                'errored' => $last_data['errored'] ?? 0,
+                'locked' => 1,
+                'locked_for' => $repo_info['locked_for'] ?? $last_data['locked_for'] ?? 0,
+                'time_since_last_modified' => $last_data['time_since_last_modified'] ?? null,
+                'total_chunks' => $last_data['total_chunks'] ?? null,
+                'total_csize' => $last_data['total_csize'] ?? null,
+                'total_size' => $last_data['total_size'] ?? null,
+                'total_unique_chunks' => $last_data['total_unique_chunks'] ?? null,
+                'unique_csize' => $last_data['unique_csize'] ?? null,
+                'unique_size' => $last_data['unique_size'] ?? null,
+            ];
+            // Still update RRD with last known values to keep graphs working
+            $repo_vars = [
+                'locked',
+                'locked_for',
+                'time_since_last_modified',
+                'total_chunks',
+                'total_csize',
+                'total_size',
+                'total_unique_chunks',
+                'unique_csize',
+                'unique_size',
+            ];
+            foreach ($repo_vars as $repo_var_key) {
+                $rrd_name = ['app', $name, $app->app_id, 'repos___' . $repo_key . '___' . $repo_var_key];
+                $value = $app_data['repos'][$repo_name][$repo_var_key] ?? null;
+                $fields = [
+                    'data' => is_numeric($value) ? $value : null,
+                ];
+                $tags = ['name' => $name, 'app_id' => $app->app_id, 'rrd_def' => $rrd_def, 'rrd_name' => $rrd_name];
+                app('Datastore')->put($device, 'app', $tags, $fields);
+                $metrics[$repo_key . '_' . $repo_var_key] = $value;
+            }
+            // Update locked_for RRD to track lock duration
+            $rrd_name = ['app', $name, $app->app_id, 'repos___' . $repo_key . '___locked_for'];
+            $fields = ['data' => (int) ($repo_info['locked_for'] ?? $last_data['locked_for'] ?? 0)];
+            $tags = ['name' => $name, 'app_id' => $app->app_id, 'rrd_def' => $rrd_def, 'rrd_name' => $rrd_name];
+            app('Datastore')->put($device, 'app', $tags, $fields);
+            continue;
+        }
+
         if ($repo_total_size == 0) {
             $repo_error = $repo_info['error'] ?? null;
             if ($repo_error && strcmp($repo_error, '') !== 0) {
