@@ -192,10 +192,10 @@ foreach ($apps as $app) {
             $status_badge = '<span class="label label-danger">Error</span>';
         } elseif ($locked) {
             $status = 'locked';
-            $status_badge = '<span class="label label-warning">Locked</span>';
+            $status_badge = '<span class="label label-default">Locked</span>';
         } else {
             $status = 'ok';
-            $status_badge = '<span class="label label-success">OK</span>';
+            $status_badge = '<span class="label label-default">OK</span>';
         }
 
         // Apply filters
@@ -337,7 +337,7 @@ foreach ($apps as $app) {
 
         $status_badge = $errored
             ? '<span class="label label-danger">Error</span>'
-            : ($locked ? '<span class="label label-warning">Locked</span>' : '<span class="label label-success">OK</span>');
+            : ($locked ? '<span class="label label-default">Locked</span>' : '<span class="label label-default">OK</span>');
 
         $header_link = Url::generate([
             'page' => 'device',
