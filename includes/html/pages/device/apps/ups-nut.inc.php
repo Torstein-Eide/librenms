@@ -75,31 +75,26 @@ $beeperMapping = [
     'muted' => 'Muted',
 ];
 
-function nut_getSensorValue(int $deviceId, string $sensorIndex): ?float
+function nut_getSensor(int $deviceId, string $sensorIndex): ?App\Models\Sensor
 {
-    $sensor = App\Models\Sensor::where('sensor_index', $sensorIndex)
+    return App\Models\Sensor::where('sensor_index', $sensorIndex)
         ->where('device_id', $deviceId)
         ->first();
+}
 
-    return $sensor?->sensor_current;
+function nut_getSensorValue(int $deviceId, string $sensorIndex): ?float
+{
+    return nut_getSensor($deviceId, $sensorIndex)?->sensor_current;
 }
 
 function nut_getSensorDescr(int $deviceId, string $sensorIndex): ?string
 {
-    $sensor = App\Models\Sensor::where('sensor_index', $sensorIndex)
-        ->where('device_id', $deviceId)
-        ->first();
-
-    return $sensor?->sensor_descr;
+    return nut_getSensor($deviceId, $sensorIndex)?->sensor_descr;
 }
 
 function nut_getStateValue(int $deviceId, string $sensorIndex): ?int
 {
-    $sensor = App\Models\Sensor::where('sensor_index', $sensorIndex)
-        ->where('device_id', $deviceId)
-        ->first();
-
-    return $sensor?->sensor_current;
+    return nut_getSensor($deviceId, $sensorIndex)?->sensor_current;
 }
 
 function nut_renderNavigation(array $link_array, array $upsList, ?string $selectedUps, ?string $graphType): void
@@ -150,7 +145,23 @@ function nut_renderNavigation(array $link_array, array $upsList, ?string $select
 
 function nut_renderOverviewTable(App\Models\Application $app, array $device, array $upsList, array $upsData): void
 {
-    echo '<!-- nut_renderOverviewTable: upsList count=' . count($upsList) . " -->\n";
+    $stateMapping = [
+        1 => 'Online',
+        2 => 'On Battery',
+        3 => 'Low Battery',
+        4 => 'High Battery',
+        5 => 'Replace Battery',
+        6 => 'Charging',
+        7 => 'Discharging',
+        8 => 'Bypass',
+        9 => 'Overload',
+        10 => 'Trim',
+        11 => 'Boost',
+        12 => 'Alarm',
+        13 => 'Forced Shutdown',
+    ];
+
+    $link_array = ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'ups-nut'];
 
     echo '<div class="panel panel-default">
 <div class="panel-heading"><h3 class="panel-title">UPS Devices</h3></div>
@@ -159,70 +170,72 @@ function nut_renderOverviewTable(App\Models\Application $app, array $device, arr
 <table class="table table-condensed table-striped table-hover">
 <thead>
 <tr>
-<th>ConfigName</th>
 <th>Model</th>
+<th>Serial</th>
 <th>Status</th>
-<th>Load %</th>
-<th>Load W</th>
+<th>Load</th>
+<th>Power</th>
+<th>Charge</th>
+<th>Runtime</th>
 </tr>
 </thead>
 <tbody>';
 
-    $link_array = ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'ups-nut'];
-
-    $statusNumericToString = [
-        1 => 'OL',
-        2 => 'OB',
-        3 => 'LB',
-        4 => 'HB',
-        5 => 'RB',
-        6 => 'CHRG',
-        7 => 'DISCHRG',
-        8 => 'BYPASS',
-        9 => 'OVER',
-        10 => 'TRIM',
-        11 => 'BOOST',
-        12 => 'ALARM',
-        13 => 'FSD',
-    ];
-
-    $statusStringMapping = [
-        'OL' => 'On Line',
-        'OB' => 'On Battery',
-        'LB' => 'Low Battery',
-        'HB' => 'High Battery',
-        'RB' => 'Replace Battery',
-        'CHRG' => 'Charging',
-        'DISCHRG' => 'Discharging',
-        'BYPASS' => 'Bypass',
-        'OVER' => 'Overload',
-        'TRIM' => 'Trim',
-        'BOOST' => 'Boost',
-        'ALARM' => 'Alarm',
-        'FSD' => 'Forced Shutdown',
-    ];
-
     foreach ($upsList as $upsName) {
         $upsInfo = $upsData[$upsName] ?? [];
-        $model = $upsInfo['model'] ?? 'Unknown';
 
-        // Get sensor values
+        $model = $upsInfo['device']['model'] ?? $upsInfo['ups']['model'] ?? 'Unknown';
+        $mfr = $upsInfo['device']['mfr'] ?? $upsInfo['ups']['mfr'] ?? '';
+        $modelDisplay = $mfr ? "$mfr $model" : $model;
+
+        $configName = $upsInfo['configname'] ?? '-';
+        if ($configName !== '-') {
+            $modelDisplay = "$modelDisplay ($configName)";
+        }
+
+        $serial = $upsInfo['device']['serial'] ?? $upsInfo['ups']['serial'] ?? '';
+        if ($serial === '' || preg_match('/^0+$/', $serial)) {
+            $serial = '-';
+        }
+
         $statusValue = nut_getStateValue($device['device_id'], "{$upsName}_ups_status") ?? 1;
-        $loadValue = nut_getSensorValue($device['device_id'], "{$upsName}_load") ?? 0;
-        $realpowerValue = nut_getSensorValue($device['device_id'], "{$upsName}_realpower") ?? 0;
+        $statusDescr = $stateMapping[$statusValue] ?? 'Unknown';
 
-        // Map status to human-readable
-        $statusStr = $statusNumericToString[$statusValue] ?? 'OL';
-        $statusDescr = $statusStringMapping[$statusStr] ?? 'Unknown';
+        $loadValue = nut_getSensorValue($device['device_id'], "{$upsName}_load") ?? '-';
+        $powerValue = nut_getSensorValue($device['device_id'], "{$upsName}_realpower") ?? '-';
+        $chargeValue = nut_getSensorValue($device['device_id'], "{$upsName}_charge") ?? '-';
+        $runtimeValue = nut_getSensorValue($device['device_id'], "{$upsName}_runtime") ?? '-';
+        if (is_numeric($runtimeValue)) {
+            $runtimeValue = (int) $runtimeValue . ' min';
+        }
+
+        $status_class = match (true) {
+            in_array($statusValue, [1]) => 'online',
+            in_array($statusValue, [2]) => 'on_battery',
+            in_array($statusValue, [3, 5]) => 'low_battery',
+            in_array($statusValue, [4, 6, 7, 10, 11]) => 'warning',
+            default => 'error',
+        };
+
+        $status_badge = match ($status_class) {
+            'online' => '<span class="label label-success">' . htmlspecialchars($statusDescr) . '</span>',
+            'on_battery' => '<span class="label label-warning">' . htmlspecialchars($statusDescr) . '</span>',
+            'low_battery' => '<span class="label label-danger">' . htmlspecialchars($statusDescr) . '</span>',
+            'warning' => '<span class="label label-warning">' . htmlspecialchars($statusDescr) . '</span>',
+            'error' => '<span class="label label-danger">' . htmlspecialchars($statusDescr) . '</span>',
+            default => htmlspecialchars($statusDescr),
+        };
 
         $ups_link = Url::generate(array_merge($link_array, ['nutups' => $upsName]));
 
         echo '<tr>';
-        echo '<td><a href="' . $ups_link . '">' . htmlspecialchars($upsName) . '</a></td>';
-        echo '<td>' . htmlspecialchars($model) . '</td>';
-        echo '<td>' . htmlspecialchars($statusDescr) . '</td>';
+        echo '<td><a href="' . $ups_link . '">' . htmlspecialchars($modelDisplay) . '</a></td>';
+        echo '<td>' . htmlspecialchars($serial) . '</td>';
+        echo '<td>' . $status_badge . '</td>';
         echo '<td>' . $loadValue . '%</td>';
-        echo '<td>' . $realpowerValue . 'W</td>';
+        echo '<td>' . $powerValue . 'W</td>';
+        echo '<td>' . $chargeValue . '%</td>';
+        echo '<td>' . $runtimeValue . '</td>';
         echo '</tr>';
     }
 
@@ -231,6 +244,106 @@ function nut_renderOverviewTable(App\Models\Application $app, array $device, arr
 </div>
 </div>
 </div>';
+
+    // Mini graphs for each UPS
+    $graph_types = [
+        'load' => 'Load',
+        'charge' => 'Charge',
+        'runtime' => 'Runtime',
+        'power' => 'Power',
+        'output_voltage' => 'Output Voltage',
+        'battery_voltage' => 'Battery Voltage',
+    ];
+
+    foreach ($upsList as $upsName) {
+        $upsInfo = $upsData[$upsName] ?? [];
+        $model = $upsInfo['device']['model'] ?? $upsInfo['ups']['model'] ?? 'Unknown';
+        $mfr = $upsInfo['device']['mfr'] ?? $upsInfo['ups']['mfr'] ?? '';
+        $modelDisplay = $mfr ? "$mfr $model" : $model;
+        $configName = $upsInfo['configname'] ?? '-';
+        if ($configName !== '-') {
+            $modelDisplay = "$modelDisplay ($configName)";
+        }
+
+        $statusValue = nut_getStateValue($device['device_id'], "{$upsName}_ups_status") ?? 1;
+        $statusDescr = $stateMapping[$statusValue] ?? 'Unknown';
+        $loadValue = nut_getSensorValue($device['device_id'], "{$upsName}_load") ?? '-';
+        $powerValue = nut_getSensorValue($device['device_id'], "{$upsName}_realpower") ?? '-';
+        $chargeValue = nut_getSensorValue($device['device_id'], "{$upsName}_charge") ?? '-';
+        $runtimeValue = nut_getSensorValue($device['device_id'], "{$upsName}_runtime") ?? '-';
+        if (is_numeric($runtimeValue)) {
+            $runtimeValue = (int) $runtimeValue . ' min';
+        }
+
+        $status_class = match (true) {
+            in_array($statusValue, [1]) => 'online',
+            in_array($statusValue, [2]) => 'on_battery',
+            in_array($statusValue, [3, 5]) => 'low_battery',
+            in_array($statusValue, [4, 6, 7, 10, 11]) => 'warning',
+            default => 'error',
+        };
+
+        $status_badge = match ($status_class) {
+            'online' => '<span class="label label-success">' . htmlspecialchars($statusDescr) . '</span>',
+            'on_battery' => '<span class="label label-warning">' . htmlspecialchars($statusDescr) . '</span>',
+            'low_battery' => '<span class="label label-danger">' . htmlspecialchars($statusDescr) . '</span>',
+            'warning' => '<span class="label label-warning">' . htmlspecialchars($statusDescr) . '</span>',
+            'error' => '<span class="label label-danger">' . htmlspecialchars($statusDescr) . '</span>',
+            default => htmlspecialchars($statusDescr),
+        };
+
+        $header_link = Url::generate(array_merge($link_array, ['nutups' => $upsName]));
+
+        $graphs_html = '';
+        foreach ($graph_types as $sensor_class => $graph_title) {
+            $sensorIndex = match ($sensor_class) {
+                'load' => "{$upsName}_load",
+                'charge' => "{$upsName}_charge",
+                'runtime' => "{$upsName}_runtime",
+                'power' => "{$upsName}_realpower",
+                'output_voltage' => "{$upsName}_output_voltage",
+                'battery_voltage' => "{$upsName}_battery_voltage",
+                default => null,
+            };
+
+            $actual_class = $sensor_class === 'output_voltage' || $sensor_class === 'battery_voltage' ? 'voltage' : $sensor_class;
+
+            if ($sensorIndex === null) {
+                continue;
+            }
+
+            $sensor = nut_getSensor($device['device_id'], $sensorIndex);
+            if (! $sensor) {
+                continue;
+            }
+
+            $graph_array = [
+                'height' => '80',
+                'width' => '180',
+                'to' => App\Facades\LibrenmsConfig::get('time.now'),
+                'from' => App\Facades\LibrenmsConfig::get('time.day'),
+                'id' => $sensor->sensor_id,
+                'type' => 'sensor_' . $actual_class,
+                'legend' => 'no',
+            ];
+
+            $graphs_html .= '<div class="pull-left" style="margin-right: 8px;">';
+            $graphs_html .= '<div class="text-muted" style="font-size: 11px; margin-bottom: 4px;">' . htmlspecialchars($graph_title) . '</div>';
+            $graphs_html .= '<a href="' . $header_link . '">' . Url::lazyGraphTag($graph_array) . '</a>';
+            $graphs_html .= '</div>';
+        }
+
+        if ($graphs_html !== '') {
+            echo <<<HTML
+<div class="panel panel-default" style="margin-bottom: 10px;">
+<div class="panel-heading"><h3 class="panel-title"><a href="{$header_link}" style="color:#337ab7;">{$modelDisplay}</a><div class="pull-right"><small class="text-muted">Load: {$loadValue}% | Power: {$powerValue}W | Charge: {$chargeValue}%</small> {$status_badge}</div></h3></div>
+<div class="panel-body"><div class="row">
+{$graphs_html}
+</div></div>
+</div>
+HTML;
+        }
+    }
 }
 
 function nut_renderGraphs(App\Models\Application $app, array $device, string $upsName, ?string $graphType = null): void
@@ -348,11 +461,13 @@ function nut_renderGraphs(App\Models\Application $app, array $device, string $up
 
 function nut_renderUpsDetail(App\Models\Application $app, array $device, string $upsName, array $upsInfo): void
 {
+    // --- Data Collection ---
     $model = $upsInfo['ups']['model'] ?? $upsInfo['device']['model'] ?? 'Unknown';
     $serial = $upsInfo['ups']['serial'] ?? $upsInfo['device']['serial'] ?? '';
     $mfr = $upsInfo['ups']['mfr'] ?? $upsInfo['device']['mfr'] ?? '';
+    $configName = $upsInfo['configname'] ?? '-';
+    $title = $model . ($configName !== '-' ? " ($configName)" : '');
 
-    // Get sensor values from sensors table
     $statusValue = nut_getStateValue($device['device_id'], "{$upsName}_ups_status") ?? 1;
     $beeperValue = nut_getStateValue($device['device_id'], "{$upsName}_beeper_status") ?? 2;
     $chargeValue = nut_getSensorValue($device['device_id'], "{$upsName}_charge") ?? 0;
@@ -363,148 +478,128 @@ function nut_renderUpsDetail(App\Models\Application $app, array $device, string 
     $outFreqValue = nut_getSensorValue($device['device_id'], "{$upsName}_output_frequency") ?? 0;
     $inVoltageValue = nut_getSensorValue($device['device_id'], "{$upsName}_input_voltage") ?? 0;
 
-    // Get config/threshold values from raw data
     $chargeLowValue = $upsInfo['battery']['charge_low'] ?? 0;
     $powerNominalValue = $upsInfo['ups']['power_nominal'] ?? 0;
     $outVoltageNomValue = $upsInfo['output']['voltage_nominal'] ?? 0;
     $inTransferHighValue = $upsInfo['input']['transfer_high'] ?? 0;
     $inTransferLowValue = $upsInfo['input']['transfer_low'] ?? 0;
-
-    // Get battery type from raw data
     $batteryType = $upsInfo['battery']['type'] ?? '';
+    $outlets = $upsInfo['outlets'] ?? [];
 
-    // Map numeric sensor value to human-readable status
-    $statusNumericToString = [
-        1 => 'OL',
-        2 => 'OB',
-        3 => 'LB',
-        4 => 'HB',
-        5 => 'RB',
-        6 => 'CHRG',
-        7 => 'DISCHRG',
-        8 => 'BYPASS',
-        9 => 'OVER',
-        10 => 'TRIM',
-        11 => 'BOOST',
-        12 => 'ALARM',
-        13 => 'FSD',
+    $statusMapping = [
+        1 => 'On Line', 2 => 'On Battery', 3 => 'Low Battery', 4 => 'High Battery',
+        5 => 'Replace Battery', 6 => 'Charging', 7 => 'Discharging', 8 => 'Bypass',
+        9 => 'Overload', 10 => 'Trim', 11 => 'Boost', 12 => 'Alarm', 13 => 'Forced Shutdown',
     ];
+    $statusDescr = $statusMapping[$statusValue] ?? 'Unknown';
 
-    $statusStringMapping = [
-        'OL' => 'On Line',
-        'OB' => 'On Battery',
-        'LB' => 'Low Battery',
-        'HB' => 'High Battery',
-        'RB' => 'Replace Battery',
-        'CHRG' => 'Charging',
-        'DISCHRG' => 'Discharging',
-        'BYPASS' => 'Bypass',
-        'OVER' => 'Overload',
-        'TRIM' => 'Trim',
-        'BOOST' => 'Boost',
-        'ALARM' => 'Alarm',
-        'FSD' => 'Forced Shutdown',
-    ];
+    $beeperMapping = [1 => 'Enabled', 2 => 'Disabled', 3 => 'Muted'];
+    $beeperDescr = $beeperMapping[$beeperValue] ?? 'Unknown';
 
-    $statusStr = $statusNumericToString[$statusValue] ?? 'OL';
-    $statusDescr = $statusStringMapping[$statusStr] ?? 'Unknown';
+    // --- Build Panels Array ---
+    $panels = [];
 
-    $beeperDescr = match ($beeperValue) {
-        1 => 'Enabled',
-        2 => 'Disabled',
-        3 => 'Muted',
-        default => 'Unknown',
-    };
+    // Device Info
+    $deviceRows = [];
+    if ($mfr) {
+        $deviceRows[] = ['MFR', $mfr];
+    }
+    $deviceRows[] = ['Model', $model];
+    if ($serial) {
+        $deviceRows[] = ['Serial', $serial];
+    }
+    $deviceRows[] = ['Status', $statusDescr];
+    $panels[] = ['title' => 'Device Information', 'rows' => $deviceRows];
 
-    // Header with status
+    // Battery (skip if charge/load are 0)
+    $batteryRows = [];
+    if ($chargeValue !== 0) {
+        $batteryRows[] = ['Charge', $chargeValue . '%'];
+    }
+    if ($chargeLowValue !== 0) {
+        $batteryRows[] = ['Charge Low', $chargeLowValue . '%'];
+    }
+    if ($runtimeValue !== 0) {
+        $batteryRows[] = ['Runtime', $runtimeValue . ' min'];
+    }
+    if ($batteryType) {
+        $batteryRows[] = ['Battery Type', $batteryType];
+    }
+    if (! empty($batteryRows)) {
+        $panels[] = ['title' => 'Battery', 'rows' => $batteryRows];
+    }
+
+    // Power (skip if load/realpower are 0)
+    $powerRows = [];
+    if ($loadValue !== 0) {
+        $powerRows[] = ['Load', $loadValue . '%'];
+    }
+    if ($realpowerValue !== 0) {
+        $powerRows[] = ['Real Power', $realpowerValue . 'W'];
+    }
+    if ($powerNominalValue !== 0) {
+        $powerRows[] = ['Power Nominal', $powerNominalValue . 'W'];
+    }
+    if (! empty($powerRows)) {
+        $panels[] = ['title' => 'Power', 'rows' => $powerRows];
+    }
+
+    // Output (skip if voltage is 0)
+    $outputRows = [];
+    if ($outVoltageValue !== 0) {
+        $outputRows[] = ['Voltage', $outVoltageValue . 'V'];
+    }
+    if ($outVoltageNomValue !== 0) {
+        $outputRows[] = ['Voltage Nominal', $outVoltageNomValue . 'V'];
+    }
+    if ($outFreqValue !== 0) {
+        $outputRows[] = ['Frequency', $outFreqValue . 'Hz'];
+    }
+    foreach ($outlets as $outlet) {
+        $id = $outlet['id'] ?? '';
+        $desc = trim(str_replace('PowerShare ', '', $outlet['desc'] ?? 'Outlet ' . $id));
+        $switchable = ($outlet['switchable'] ?? 'no') === 'yes';
+        $status = $switchable ? ($outlet['status'] ?? 'unknown') : 'on';
+        $switchLabel = $switchable ? ' (switchable)' : '';
+        $outputRows[] = [$desc, ucfirst($status) . $switchLabel];
+    }
+    if (! empty($outputRows)) {
+        $panels[] = ['title' => 'Output', 'rows' => $outputRows];
+    }
+
+    // Input (skip if transfer values are 0)
+    if ($inTransferLowValue !== 0 || $inTransferHighValue !== 0) {
+        $panels[] = ['title' => 'Input', 'rows' => [
+            ['Transfer', $inTransferLowValue . '-' . $inTransferHighValue . 'V'],
+        ]];
+    }
+
+    // Beeper
+    $panels[] = ['title' => 'Beeper', 'rows' => [
+        ['Status', $beeperDescr],
+    ]];
+
+    // --- HTML Output ---
     echo '<div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">';
-    echo htmlspecialchars($upsName);
+    echo '<span>' . htmlspecialchars($title) . '</span>';
     echo '<div class="pull-right"><span class="label label-success">' . htmlspecialchars($statusDescr) . '</span></div>';
     echo '</h3></div>';
-    echo '<div class="panel-body"><div class="nut-panels">';
-
-    // Device Info Panel (with Status)
-    echo '<div class="col-md-4"><div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Device Information</h3></div>';
     echo '<div class="panel-body">';
-    echo '<table class="table table-condensed table-striped table-hover nut-keyval">';
-    echo '<tbody>';
-    if ($mfr) {
-        echo '<tr><td>MFR:</td><td>' . htmlspecialchars($mfr) . '</td></tr>';
+    echo '<div class="nut-panels" style="display: flex; flex-wrap: wrap; gap: 10px;">';
+
+    foreach ($panels as $panel) {
+        echo '<div style="flex: 1 1 250px; min-width: 200px;">';
+        echo '<div class="panel panel-default">';
+        echo '<div class="panel-heading"><h3 class="panel-title">' . htmlspecialchars($panel['title']) . '</h3></div>';
+        echo '<div class="panel-body">';
+        echo '<table class="table table-condensed table-striped table-hover nut-keyval"><tbody>';
+        foreach ($panel['rows'] as $row) {
+            echo '<tr><td>' . htmlspecialchars($row[0]) . ':</td><td>' . htmlspecialchars($row[1]) . '</td></tr>';
+        }
+        echo '</tbody></table>';
+        echo '</div></div></div>';
     }
-    echo '<tr><td>Model:</td><td>' . htmlspecialchars($model) . '</td></tr>';
-    if ($serial) {
-        echo '<tr><td>Serial:</td><td>' . htmlspecialchars($serial) . '</td></tr>';
-    }
-    echo '<tr><td>Status:</td><td>' . htmlspecialchars($statusDescr) . '</td></tr>';
-    echo '</tbody>';
-    echo '</table>';
-    echo '</div></div></div>';
-
-    // Battery Panel (with Battery Type)
-    echo '<div class="col-md-4"><div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Battery</h3></div>';
-    echo '<div class="panel-body">';
-    echo '<table class="table table-condensed table-striped table-hover nut-keyval">';
-    echo '<tbody>';
-    echo '<tr><td>Charge:</td><td>' . $chargeValue . '%</td></tr>';
-    echo '<tr><td>Charge Low:</td><td>' . $chargeLowValue . '%</td></tr>';
-    echo '<tr><td>Runtime:</td><td>' . $runtimeValue . ' seconds</td></tr>';
-    if ($batteryType) {
-        echo '<tr><td>Battery Type:</td><td>' . htmlspecialchars($batteryType) . '</td></tr>';
-    }
-    echo '</tbody>';
-    echo '</table>';
-    echo '</div></div></div>';
-
-    // Power Panel
-    echo '<div class="col-md-4"><div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Power</h3></div>';
-    echo '<div class="panel-body">';
-    echo '<table class="table table-condensed table-striped table-hover nut-keyval">';
-    echo '<tbody>';
-    echo '<tr><td>Load:</td><td>' . $loadValue . '%</td></tr>';
-    echo '<tr><td>Real Power:</td><td>' . $realpowerValue . 'W</td></tr>';
-    echo '<tr><td>Power Nominal:</td><td>' . $powerNominalValue . 'W</td></tr>';
-    echo '</tbody>';
-    echo '</table>';
-    echo '</div></div></div>';
-
-    // Output Panel
-    echo '<div class="col-md-4"><div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Output</h3></div>';
-    echo '<div class="panel-body">';
-    echo '<table class="table table-condensed table-striped table-hover nut-keyval">';
-    echo '<tbody>';
-    echo '<tr><td>Voltage:</td><td>' . $outVoltageValue . 'V</td></tr>';
-    echo '<tr><td>Voltage Nominal:</td><td>' . $outVoltageNomValue . 'V</td></tr>';
-    echo '<tr><td>Frequency:</td><td>' . $outFreqValue . 'Hz</td></tr>';
-    echo '</tbody>';
-    echo '</table>';
-    echo '</div></div></div>';
-
-    // Input Panel
-    echo '<div class="col-md-4"><div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Input</h3></div>';
-    echo '<div class="panel-body">';
-    echo '<table class="table table-condensed table-striped table-hover nut-keyval">';
-    echo '<tbody>';
-    echo '<tr><td>Transfer:</td><td>' . $inTransferLowValue . '-' . $inTransferHighValue . 'V</td></tr>';
-    echo '</tbody>';
-    echo '</table>';
-    echo '</div></div></div>';
-
-    // Beeper Panel
-    echo '<div class="col-md-4"><div class="panel panel-default">';
-    echo '<div class="panel-heading"><h3 class="panel-title">Beeper</h3></div>';
-    echo '<div class="panel-body">';
-    echo '<table class="table table-condensed table-striped table-hover nut-keyval">';
-    echo '<tbody>';
-    echo '<tr><td>Status:</td><td>' . htmlspecialchars($beeperDescr) . '</td></tr>';
-    echo '</tbody>';
-    echo '</table>';
-    echo '</div></div></div>';
 
     echo '</div></div></div>';
 
@@ -524,7 +619,6 @@ if (isset($selectedUps)) {
     }
 } else {
     nut_renderOverviewTable($app, $device, $upsList, $appData['data'] ?? []);
-    nut_renderGraphs($app, $device, $upsList[0] ?? 'default', $graphType);
 }
 
 // Version footer
