@@ -31,10 +31,8 @@ if ($version < 2) {
     echo '</div>';
 }
 
-$upsList = $appData['Discovery']['ups_list'] ?? [];
-$upsData = $appData['UPS'] ?? [];
-
-echo '<!-- NUT UI: upsList=' . count($upsList) . ' upsData=' . count($upsData) . " -->\n";
+$upsList = array_keys($appData['Discovery']['ups_list'] ?? []);
+$upsData = $appData['data'] ?? [];
 
 echo '<style>
 .nut-panels {
@@ -54,20 +52,21 @@ echo '<style>
 .nut-keyval td:first-child { text-align: right; padding-right: 15px; white-space: nowrap; }
 </style>';
 
+// Keys are numeric sensor_current values from NutPoller::STATE_MAPPING
 $stateMapping = [
-    'OL' => 'On Line',
-    'OB' => 'On Battery',
-    'LB' => 'Low Battery',
-    'HB' => 'High Battery',
-    'RB' => 'Replace Battery',
-    'CHRG' => 'Charging',
-    'DISCHRG' => 'Discharging',
-    'BYPASS' => 'Bypass',
-    'OVER' => 'Overload',
-    'TRIM' => 'Trim',
-    'BOOST' => 'Boost',
-    'ALARM' => 'Alarm',
-    'FSD' => 'Forced Shutdown',
+    1  => 'Online',
+    2  => 'On Battery',
+    3  => 'Battery Low',
+    4  => 'Battery High',
+    5  => 'Replace Battery',
+    6  => 'Charging',
+    7  => 'Discharging',
+    8  => 'Bypass',
+    9  => 'Overload',
+    10 => 'Trim Voltage',
+    11 => 'Boost Voltage',
+    12 => 'Alarm',
+    13 => 'Forced Shutdown',
 ];
 
 $beeperMapping = [
@@ -76,31 +75,28 @@ $beeperMapping = [
     'muted' => 'Muted',
 ];
 
-function nut_getSensorValue(string $sensorIndex): ?float
+function nut_getSensorValue(int $deviceId, string $sensorIndex): ?float
 {
     $sensor = App\Models\Sensor::where('sensor_index', $sensorIndex)
-        ->where('device_id', $GLOBALS['device']['device_id'])
+        ->where('device_id', $deviceId)
         ->first();
 
-    $value = $sensor?->sensor_current;
-    //echo "<!-- nut_getSensorValue($sensorIndex) = " . var_export($value, true) . " -->\n";
-
-    return $value;
+    return $sensor?->sensor_current;
 }
 
-function nut_getSensorDescr(string $sensorIndex): ?string
+function nut_getSensorDescr(int $deviceId, string $sensorIndex): ?string
 {
     $sensor = App\Models\Sensor::where('sensor_index', $sensorIndex)
-        ->where('device_id', $GLOBALS['device']['device_id'])
+        ->where('device_id', $deviceId)
         ->first();
 
     return $sensor?->sensor_descr;
 }
 
-function nut_getStateValue(string $sensorIndex): ?int
+function nut_getStateValue(int $deviceId, string $sensorIndex): ?int
 {
     $sensor = App\Models\Sensor::where('sensor_index', $sensorIndex)
-        ->where('device_id', $GLOBALS['device']['device_id'])
+        ->where('device_id', $deviceId)
         ->first();
 
     return $sensor?->sensor_current;
@@ -174,7 +170,23 @@ function nut_renderOverviewTable(App\Models\Application $app, array $device, arr
 
     $link_array = ['page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'ups-nut'];
 
-    $stateMapping = [
+    $statusNumericToString = [
+        1 => 'OL',
+        2 => 'OB',
+        3 => 'LB',
+        4 => 'HB',
+        5 => 'RB',
+        6 => 'CHRG',
+        7 => 'DISCHRG',
+        8 => 'BYPASS',
+        9 => 'OVER',
+        10 => 'TRIM',
+        11 => 'BOOST',
+        12 => 'ALARM',
+        13 => 'FSD',
+    ];
+
+    $statusStringMapping = [
         'OL' => 'On Line',
         'OB' => 'On Battery',
         'LB' => 'Low Battery',
@@ -195,12 +207,13 @@ function nut_renderOverviewTable(App\Models\Application $app, array $device, arr
         $model = $upsInfo['model'] ?? 'Unknown';
 
         // Get sensor values
-        $statusValue = nut_getStateValue("{$upsName}_ups_status") ?? 1;
-        $loadValue = nut_getSensorValue("{$upsName}_load") ?? 0;
-        $realpowerValue = nut_getSensorValue("{$upsName}_realpower") ?? 0;
+        $statusValue = nut_getStateValue($device['device_id'], "{$upsName}_ups_status") ?? 1;
+        $loadValue = nut_getSensorValue($device['device_id'], "{$upsName}_load") ?? 0;
+        $realpowerValue = nut_getSensorValue($device['device_id'], "{$upsName}_realpower") ?? 0;
 
-        // Map status to human-readable using local mapping
-        $statusDescr = $stateMapping[$statusValue] ?? 'Unknown';
+        // Map status to human-readable
+        $statusStr = $statusNumericToString[$statusValue] ?? 'OL';
+        $statusDescr = $statusStringMapping[$statusStr] ?? 'Unknown';
 
         $ups_link = Url::generate(array_merge($link_array, ['nutups' => $upsName]));
 
@@ -222,40 +235,88 @@ function nut_renderOverviewTable(App\Models\Application $app, array $device, arr
 
 function nut_renderGraphs(App\Models\Application $app, array $device, string $upsName, ?string $graphType = null): void
 {
+    $deviceId = $device['device_id'];
+
+    // Map graph types to sensor info: key => [index, class, unit, title]
     $graphTypes = [
-        'charge' => 'Charge',
-        'load' => 'Load',
-        'runtime' => 'Runtime',
-        'power' => 'Power',
-        'voltage' => 'Voltage',
-        'frequency' => 'Frequency',
+        'charge' => ['index' => 'charge', 'class' => 'charge', 'unit' => '%', 'title' => 'Charge'],
+        'load' => ['index' => 'load', 'class' => 'load', 'unit' => '%', 'title' => 'Load'],
+        'runtime' => ['index' => 'runtime', 'class' => 'runtime', 'unit' => 'min', 'title' => 'Runtime'],
+        'power' => ['index' => 'realpower', 'class' => 'power', 'unit' => 'W', 'title' => 'Power'],
+        'frequency' => ['index' => 'output_frequency', 'class' => 'frequency', 'unit' => 'Hz', 'title' => 'Frequency'],
     ];
 
-    $graphs = $graphType ? [$graphType => $graphTypes[$graphType]] : $graphTypes;
+    // Handle voltage separately (show input and output side by side)
+    if ($graphType === null || $graphType === 'voltage') {
+        $outVoltage = App\Models\Sensor::where('device_id', $deviceId)
+            ->where('sensor_index', "{$upsName}_output_voltage")
+            ->where('sensor_class', 'voltage')
+            ->first();
+        $inVoltage = App\Models\Sensor::where('device_id', $deviceId)
+            ->where('sensor_index', "{$upsName}_input_voltage")
+            ->where('sensor_class', 'voltage')
+            ->first();
 
-    foreach ($graphs as $graphKey => $graphTitle) {
-        $graph_array = [
-            'height' => '100',
-            'width' => '215',
-            'to' => App\Facades\LibrenmsConfig::get('time.now'),
-            'id' => $app['app_id'],
-            'type' => 'application_nut_' . $graphKey,
-            'nutups' => $upsName,
-            'legend' => 'no',
-        ];
+        foreach ([['sensor' => $outVoltage, 'title' => 'Output Voltage'], ['sensor' => $inVoltage, 'title' => 'Input Voltage']] as $voltageConfig) {
+            $sensor = $voltageConfig['sensor'];
+            if (! $sensor) {
+                continue;
+            }
+            $title = $voltageConfig['title'];
+            $value = $sensor->sensor_current;
+            $valueStr = is_numeric($value) ? $value . 'V' : '-';
 
-        // Get current value for display
-        $value = nut_getSensorValue("{$upsName}_{$graphKey}") ?? 0;
-        $unit = match ($graphKey) {
-            'charge', 'load' => '%',
-            'runtime' => 's',
-            'power' => 'W',
-            'voltage' => 'V',
-            'frequency' => 'Hz',
-            default => '',
-        };
+            echo '<div class="panel panel-default">
+<div class="panel-heading">
+    <h3 class="panel-title">
+        ' . $title . '
+        <div class="pull-right"><span class="text-muted">' . $valueStr . '</span></div>
+    </h3>
+</div>
+<div class="panel-body">
+<div class="row">';
 
+            $graph_array = [
+                'height' => '100',
+                'width' => '215',
+                'to' => App\Facades\LibrenmsConfig::get('time.now'),
+                'id' => $sensor->sensor_id,
+                'type' => 'sensor_voltage',
+                'legend' => 'no',
+            ];
+
+            include 'includes/html/print-graphrow.inc.php';
+
+            echo '</div>
+</div>
+</div>';
+        }
+    }
+
+    // If specific graph type requested, limit to just that
+    if ($graphType && $graphType !== 'voltage') {
+        $graphTypes = array_filter($graphTypes, fn ($key) => $key === $graphType, ARRAY_FILTER_USE_KEY);
+    }
+
+    foreach ($graphTypes as $graphKey => $graphInfo) {
+        $sensorIndex = "{$upsName}_{$graphInfo['index']}";
+        $sensorClass = $graphInfo['class'];
+        $unit = $graphInfo['unit'];
+        $graphTitle = $graphInfo['title'];
+
+        // Get sensor for this graph
+        $sensor = App\Models\Sensor::where('device_id', $deviceId)
+            ->where('sensor_index', $sensorIndex)
+            ->where('sensor_class', $sensorClass)
+            ->first();
+
+        if (! $sensor) {
+            continue;
+        }
+
+        $value = $sensor->sensor_current;
         $valueStr = is_numeric($value) ? $value . $unit : $value;
+        $sensorId = $sensor->sensor_id;
 
         echo '<div class="panel panel-default">
 <div class="panel-heading">
@@ -267,6 +328,16 @@ function nut_renderGraphs(App\Models\Application $app, array $device, string $up
 <div class="panel-body">
 <div class="row">';
 
+        // Use sensor graph
+        $graph_array = [
+            'height' => '100',
+            'width' => '215',
+            'to' => App\Facades\LibrenmsConfig::get('time.now'),
+            'id' => $sensorId,
+            'type' => 'sensor_' . $sensorClass,
+            'legend' => 'no',
+        ];
+
         include 'includes/html/print-graphrow.inc.php';
 
         echo '</div>
@@ -277,30 +348,49 @@ function nut_renderGraphs(App\Models\Application $app, array $device, string $up
 
 function nut_renderUpsDetail(App\Models\Application $app, array $device, string $upsName, array $upsInfo): void
 {
-    $model = $upsInfo['model'] ?? 'Unknown';
-    $serial = $upsInfo['serial'] ?? '';
-    $mfr = $upsInfo['mfr'] ?? '';
+    $model = $upsInfo['ups']['model'] ?? $upsInfo['device']['model'] ?? 'Unknown';
+    $serial = $upsInfo['ups']['serial'] ?? $upsInfo['device']['serial'] ?? '';
+    $mfr = $upsInfo['ups']['mfr'] ?? $upsInfo['device']['mfr'] ?? '';
 
-    // Get sensor values
-    $statusValue = nut_getStateValue("{$upsName}_ups_status") ?? 1;
-    $beeperValue = nut_getStateValue("{$upsName}_beeper_status") ?? 2;
-    $chargeValue = nut_getSensorValue("{$upsName}_charge") ?? 0;
-    $chargeLowValue = nut_getSensorValue("{$upsName}_charge_low") ?? 0;
-    $runtimeValue = nut_getSensorValue("{$upsName}_runtime") ?? 0;
-    $loadValue = nut_getSensorValue("{$upsName}_load") ?? 0;
-    $realpowerValue = nut_getSensorValue("{$upsName}_realpower") ?? 0;
-    $powerNominalValue = nut_getSensorValue("{$upsName}_power_nominal") ?? 0;
-    $outVoltageValue = nut_getSensorValue("{$upsName}_output_voltage") ?? 0;
-    $outVoltageNomValue = nut_getSensorValue("{$upsName}_output_voltage_nominal") ?? 0;
-    $outFreqValue = nut_getSensorValue("{$upsName}_output_frequency") ?? 0;
-    $inTransferHighValue = nut_getSensorValue("{$upsName}_input_transfer_high") ?? 0;
-    $inTransferLowValue = nut_getSensorValue("{$upsName}_input_transfer_low") ?? 0;
+    // Get sensor values from sensors table
+    $statusValue = nut_getStateValue($device['device_id'], "{$upsName}_ups_status") ?? 1;
+    $beeperValue = nut_getStateValue($device['device_id'], "{$upsName}_beeper_status") ?? 2;
+    $chargeValue = nut_getSensorValue($device['device_id'], "{$upsName}_charge") ?? 0;
+    $runtimeValue = nut_getSensorValue($device['device_id'], "{$upsName}_runtime") ?? 0;
+    $loadValue = nut_getSensorValue($device['device_id'], "{$upsName}_load") ?? 0;
+    $realpowerValue = nut_getSensorValue($device['device_id'], "{$upsName}_realpower") ?? 0;
+    $outVoltageValue = nut_getSensorValue($device['device_id'], "{$upsName}_output_voltage") ?? 0;
+    $outFreqValue = nut_getSensorValue($device['device_id'], "{$upsName}_output_frequency") ?? 0;
+    $inVoltageValue = nut_getSensorValue($device['device_id'], "{$upsName}_input_voltage") ?? 0;
 
-    // Get battery type from driver data if available
-    $batteryType = $upsInfo['battery_type'] ?? '';
+    // Get config/threshold values from raw data
+    $chargeLowValue = $upsInfo['battery']['charge_low'] ?? 0;
+    $powerNominalValue = $upsInfo['ups']['power_nominal'] ?? 0;
+    $outVoltageNomValue = $upsInfo['output']['voltage_nominal'] ?? 0;
+    $inTransferHighValue = $upsInfo['input']['transfer_high'] ?? 0;
+    $inTransferLowValue = $upsInfo['input']['transfer_low'] ?? 0;
 
-    // Map status to human-readable
-    $stateMapping = [
+    // Get battery type from raw data
+    $batteryType = $upsInfo['battery']['type'] ?? '';
+
+    // Map numeric sensor value to human-readable status
+    $statusNumericToString = [
+        1 => 'OL',
+        2 => 'OB',
+        3 => 'LB',
+        4 => 'HB',
+        5 => 'RB',
+        6 => 'CHRG',
+        7 => 'DISCHRG',
+        8 => 'BYPASS',
+        9 => 'OVER',
+        10 => 'TRIM',
+        11 => 'BOOST',
+        12 => 'ALARM',
+        13 => 'FSD',
+    ];
+
+    $statusStringMapping = [
         'OL' => 'On Line',
         'OB' => 'On Battery',
         'LB' => 'Low Battery',
@@ -316,7 +406,8 @@ function nut_renderUpsDetail(App\Models\Application $app, array $device, string 
         'FSD' => 'Forced Shutdown',
     ];
 
-    $statusDescr = $stateMapping[$statusValue] ?? 'Unknown';
+    $statusStr = $statusNumericToString[$statusValue] ?? 'OL';
+    $statusDescr = $statusStringMapping[$statusStr] ?? 'Unknown';
 
     $beeperDescr = match ($beeperValue) {
         1 => 'Enabled',
@@ -380,11 +471,6 @@ function nut_renderUpsDetail(App\Models\Application $app, array $device, string 
     echo '</table>';
     echo '</div></div></div>';
 
-    echo '</div></div></div>';
-
-    // Row 2: Output + Input
-    echo '<div class="panel panel-default"><div class="panel-body"><div class="nut-panels">';
-
     // Output Panel
     echo '<div class="col-md-4"><div class="panel panel-default">';
     echo '<div class="panel-heading"><h3 class="panel-title">Output</h3></div>';
@@ -432,12 +518,12 @@ $graphType = $vars['graphtype'] ?? null;
 nut_renderNavigation($link_array, $upsList, $selectedUps, $graphType);
 
 if (isset($selectedUps)) {
-    $currentUps = $upsData[$selectedUps] ?? [];
+    $currentUps = $appData['data'][$selectedUps] ?? [];
     if (! empty($currentUps)) {
         nut_renderUpsDetail($app, $device, $selectedUps, $currentUps);
     }
 } else {
-    nut_renderOverviewTable($app, $device, $upsList, $upsData);
+    nut_renderOverviewTable($app, $device, $upsList, $appData['data'] ?? []);
     nut_renderGraphs($app, $device, $upsList[0] ?? 'default', $graphType);
 }
 

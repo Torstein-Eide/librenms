@@ -69,17 +69,13 @@ class NutPoller
 
     private function run(): void
     {
-        echo "<!-- NutPoller: start -->\n";
-
         $this->loadAppData(); // from Database previous polls, used for discovery and to determine if discovery is needed on this poll
         $this->loadAgentData(); // from Agent JSON, used for processing and discovery on this poll
 
         // Determine if discovery is needed on this poll based on previous discovery data and current payload
         if ($this->Checkiftimefordiscovery()) {
-            echo '<!-- NutPoller: skipping discovery on this poll -->' . "\n";
-            $this->discovery['tick'] = $this->discovery['tick'] +1;
-        }
-        else {
+            $this->discovery['tick'] = $this->discovery['tick'] + 1;
+        } else {
             echo '<!-- NutPoller: discovery will run on this poll -->' . "\n";
 
             // store new discovery data for this UPS
@@ -89,7 +85,6 @@ class NutPoller
                 $this->discovery['ups_list'][$upsName] = [
                     'Device' => $upsData['Device'] ?? [],
                 ];
-                echo "<!-- NutPoller: running discovery for $upsName -->\n";
             }
             $this->Discovery();
             $this->discovery['tick'] = 0;
@@ -101,10 +96,10 @@ class NutPoller
             $this->pollerUpdate($upsName);
         }
 
-
         $this->saveAppData();
         $this->updateApplication();
     }
+
     private function loadAppData(): void
     {
         $data = $this->app->data;
@@ -117,49 +112,34 @@ class NutPoller
 
     private function loadAgentData(): void
     {
-        echo "<!-- NutPoller: loadAgentData start -->\n";
-
         try {
             $this->payload = json_app_get($this->device, 'ups-nut', self::VERSION);
         } catch (JsonAppMissingKeysException $e) {
-            echo '<!-- NutPoller: loadAgentData exception: ' . $e->getMessage() . " -->\n";
             update_application($this->app, $e->getCode() . ':' . $e->getMessage(), []);
 
             return;
         }
 
-        echo '<!-- NutPoller: payload keys=' . implode(',', array_keys($this->payload['data'])) . " -->\n";
-
         if (empty($this->payload['data'])) {
-            echo "<!-- NutPoller: loadAgentData no data -->\n";
             update_application($this->app, 'ERROR: No data', []);
 
             return;
         }
-
-        echo '<!-- NutPoller: loaded ' . count(array_keys($this->payload['data'])) . " UPS devices -->\n";
     }
 
     private function saveAppData(): void
     {
-        echo "<!-- NutPoller: saveAppData -->\n";
-
         $this->appData['Discovery'] = $this->discovery;
 
         if (isset($this->payload['data'])) {
             $this->appData['data'] = $this->payload['data'];
-            $this->appData['UPS'] = [];
-            foreach ($this->payload['data'] as $upsName => $upsData) {
-                $this->appData['UPS'][$upsName] = $upsData['device'] ?? [];
-            }
+
         }
         $this->appData['version'] = self::VERSION;
         $this->appData['schema_version'] = self::SCHEMA_VERSION;
 
         $this->app->data = $this->appData;
         $this->app->save();
-
-        echo '<!-- NutPoller: saved app_data, tick=' . $this->tick . " -->\n";
     }
 
     private function updateApplication(): void
@@ -175,14 +155,6 @@ class NutPoller
         $status = $this->working['status'] ? 'OK' : 'ERROR';
         update_application($this->app, $status, $metrics);
     }
-
-    ////////////////////////////////////////////////////
-    // Utility functions
-        private function sanitizeIndex(string $index): string
-    {
-        return preg_replace('/[^a-zA-Z0-9_]/', '', $index);
-    }
-
 
     private function getSeverityForState(int $value): Severity
     {
@@ -203,7 +175,6 @@ class NutPoller
     // it reduse some cycle time by skipping if no new devices and interval not reached
     // It creates/updates sensors for all UPS devices in the payload, and removes sensors for UPS devices that are no longer in the payload. It also removes old legacy sensors created by SNMP poller.
 
-
     private function Discovery(): void
     {
         $this->discovery['ups'] = [];
@@ -220,14 +191,10 @@ class NutPoller
     {
         // If we have no previous discovery data, we should run discovery to initialize it
         if (empty($this->appData['Discovery'])) {
-            echo '<!-- NutPoller: No previous discovery data - first poll, discovery will run -->\n';
-
             return false;  // force: first poll
         }
         // If we have more devices than last discovery, run discovery immediately to catch new devices faster
-        if ($this->discovery['counter'] >=  $this->payload['count']) {
-            echo '<!-- NutPoller: New UPS devices discovered since last poll, discovery will run -->\n';
-
+        if ($this->discovery['counter'] >= $this->payload['count']) {
             return false; // force: new devices
         }
         // poll_count is reset to 0 each time discovery runs, so it means
@@ -238,21 +205,20 @@ class NutPoller
 
         return false;  // run discovery
     }
-    private function discoverSensors( string $upsName): void
+
+    private function discoverSensors(string $upsName): void
     {
         //$upsName = $this->working['ups'];
         $data = $this->payload['data'][$upsName] ?? [];
 
-        echo "<!-- NutPoller: discoverSensors for ups=$upsName, model={$data['device']['model']} -->\n";
-
         // discoverNumericSensor(
-            // string $upsName,
-            // string $modelPrefix,
-            // string $type,
-            // string $class,
-            // string $descr,
-            // ?float $min = 0,
-            // ?float $max = null
+        // string $upsName,
+        // string $modelPrefix,
+        // string $type,
+        // string $class,
+        // string $descr,
+        // ?float $min = 0,
+        // ?float $max = null
 
         // Get model name for sensor descriptions
         $modelName = $data['device']['model'] ?? '';
@@ -316,8 +282,6 @@ class NutPoller
             $this->discovery['ups'][$upsName]['sensors'][] = 'battery_voltage';
             $this->discovery['ups'][$upsName]['sensor_oid']['battery_voltage'] = 'app:nut:' . $upsName . '_battery_voltage';
         }
-
-        echo "<!-- NutPoller: discoverSensors done -->\n";
     }
 
     private function discoverStateSensor(string $upsName, string $type, string $value, array $mapping): void
@@ -374,12 +338,9 @@ class NutPoller
                 'sensor_current' => $sensorCurrent,
             ]
         );
-
-        echo "<!-- NutPoller: created/updated state sensor id={$sensor->sensor_id} -->\n";
     }
 
-
-private function cleanupRemovedSensors(): void
+    private function cleanupRemovedSensors(): void
     {
         // Cleanup old legacy sensors from SNMP polling (first discovery run only)
 
@@ -404,24 +365,17 @@ private function cleanupRemovedSensors(): void
             ->where('sensor_oid', 'like', 'app:nut:%')
             ->get(['sensor_id', 'sensor_oid', 'sensor_class', 'poller_type']);
 
-        echo "<!-- NutPoller: All NUT app sensors: " . $allSensors->pluck('sensor_oid')->implode(', ') . " -->\n";
-
         $staleIds = $allSensors
             ->filter(fn ($s) => ! in_array($s->sensor_oid, $knownOids))
             ->pluck('sensor_id');
 
         if ($staleIds->isNotEmpty()) {
             Sensor::whereIn('sensor_id', $staleIds)->delete();
-            echo "<!-- NutPoller: deleted " . $staleIds->count() . " stale sensors -->\n";
         }
     }
 
     private function cleanupLegacySensors(): void
     {
-        echo "<!-- NutPoller: cleanupLegacySensors -->\n";
-
-
-
         // Remove old legacy sensors created by SNMP poller
         // These have sensor_class in ['charge', 'load', 'runtime'] etc and poller_type != 'app'
         $legacySensorClasses = ['charge', 'load', 'runtime', 'voltage', 'power', 'frequency', 'state'];
@@ -434,12 +388,9 @@ private function cleanupRemovedSensors(): void
                 ->delete();
 
             if ($deleted > 0) {
-                echo "<!-- NutPoller: deleted $deleted legacy sensors for class=$class -->\n";
             }
         }
     }
-
-
 
     private function upsertSensor(array $criteria, array $values): Sensor
     {
@@ -451,20 +402,20 @@ private function cleanupRemovedSensors(): void
         $sensorIndex = "{$upsName}_load";
         $this->upsertSensor(
             ['device_id' => $this->device['device_id'],
-             'sensor_class' => 'load',
-             'sensor_index' => $sensorIndex,
-             'poller_type' => 'app'],
+                'sensor_class' => 'load',
+                'sensor_index' => $sensorIndex,
+                'poller_type' => 'app'],
 
             ['sensor_oid' => 'app:nut:' . $sensorIndex,
-             'sensor_type' => '',
-             'sensor_descr' => "UPS {$modelName}",
-             'sensor_divisor' => 1,
-             'sensor_multiplier' => 1,
-             'sensor_current' => $data['ups']['load'],
-             'sensor_min' => 0,
-             'sensor_max' => 500,
-             'sensor_limit_warn' => 80,
-             'sensor_limit' => 90]
+                'sensor_type' => '',
+                'sensor_descr' => "UPS {$modelName}",
+                'sensor_divisor' => 1,
+                'sensor_multiplier' => 1,
+                'sensor_current' => $data['ups']['load'],
+                'sensor_min' => 0,
+                'sensor_max' => 500,
+                'sensor_limit_warn' => 80,
+                'sensor_limit' => 90]
         );
     }
 
@@ -473,19 +424,19 @@ private function cleanupRemovedSensors(): void
         $sensorIndex = "{$upsName}_charge";
         $this->upsertSensor(
             ['device_id' => $this->device['device_id'],
-             'sensor_class' => 'charge',
-             'sensor_index' => $sensorIndex,
-             'poller_type' => 'app'],
+                'sensor_class' => 'charge',
+                'sensor_index' => $sensorIndex,
+                'poller_type' => 'app'],
 
             ['sensor_oid' => 'app:nut:' . $sensorIndex,
-             'sensor_type' => '',
-             'sensor_descr' => "UPS {$modelName} battery",
-             'sensor_divisor' => 1,
-             'sensor_multiplier' => 1,
-             'sensor_current' => $data['battery']['charge'],
-             'sensor_min' => 0,
-             'sensor_max' => 1000,
-             'sensor_limit_low_warn' => $data['battery']['charge_low'] ?? 20]
+                'sensor_type' => '',
+                'sensor_descr' => "UPS {$modelName} battery",
+                'sensor_divisor' => 1,
+                'sensor_multiplier' => 1,
+                'sensor_current' => $data['battery']['charge'],
+                'sensor_min' => 0,
+                'sensor_max' => 1000,
+                'sensor_limit_low_warn' => $data['battery']['charge_low'] ?? 20]
         );
     }
 
@@ -494,17 +445,17 @@ private function cleanupRemovedSensors(): void
         $sensorIndex = "{$upsName}_runtime";
         $this->upsertSensor(
             ['device_id' => $this->device['device_id'],
-             'sensor_class' => 'runtime',
-             'sensor_index' => $sensorIndex,
-             'poller_type' => 'app'],
+                'sensor_class' => 'runtime',
+                'sensor_index' => $sensorIndex,
+                'poller_type' => 'app'],
 
             ['sensor_oid' => 'app:nut:' . $sensorIndex,
-             'sensor_type' => '',
-             'sensor_descr' => "UPS {$modelName}",
-             'sensor_divisor' => 60,
-             'sensor_multiplier' => 1,
-             'sensor_current' => $data['battery']['runtime'] / 60,
-             'sensor_min' => 0]
+                'sensor_type' => '',
+                'sensor_descr' => "UPS {$modelName}",
+                'sensor_divisor' => 60,
+                'sensor_multiplier' => 1,
+                'sensor_current' => $data['battery']['runtime'] / 60,
+                'sensor_min' => 0]
         );
     }
 
@@ -513,18 +464,18 @@ private function cleanupRemovedSensors(): void
         $sensorIndex = "{$upsName}_realpower";
         $this->upsertSensor(
             ['device_id' => $this->device['device_id'],
-             'sensor_class' => 'power',
-             'sensor_index' => $sensorIndex,
-             'poller_type' => 'app'],
+                'sensor_class' => 'power',
+                'sensor_index' => $sensorIndex,
+                'poller_type' => 'app'],
 
             ['sensor_oid' => 'app:nut:' . $sensorIndex,
-             'sensor_type' => '',
-             'sensor_descr' => "UPS {$modelName} output",
-             'sensor_divisor' => 1,
-             'sensor_multiplier' => 1,
-             'sensor_current' => $data['ups']['realpower'],
-             'sensor_min' => 0,
-             'sensor_max' => $data['ups']['power_nominal'] ?? null]
+                'sensor_type' => '',
+                'sensor_descr' => "UPS {$modelName} output",
+                'sensor_divisor' => 1,
+                'sensor_multiplier' => 1,
+                'sensor_current' => $data['ups']['realpower'],
+                'sensor_min' => 0,
+                'sensor_max' => $data['ups']['power_nominal'] ?? null]
         );
     }
 
@@ -533,20 +484,20 @@ private function cleanupRemovedSensors(): void
         $sensorIndex = "{$upsName}_output_frequency";
         $this->upsertSensor(
             ['device_id' => $this->device['device_id'],
-             'sensor_class' => 'frequency',
-             'sensor_index' => $sensorIndex,
-             'poller_type' => 'app'],
+                'sensor_class' => 'frequency',
+                'sensor_index' => $sensorIndex,
+                'poller_type' => 'app'],
 
             ['sensor_oid' => 'app:nut:' . $sensorIndex,
-             'sensor_type' => '',
-             'sensor_descr' => "UPS {$modelName} output",
-             'sensor_divisor' => 1,
-             'sensor_multiplier' => 1,
-             'sensor_current' => $data['output']['frequency'],
-             'sensor_min' => 0,
-             'sensor_limit' => ($data['output']['frequency_nominal'] ?? 0) + 2.5,
-             'sensor_limit_warn' => ($data['output']['frequency_nominal'] ?? 0) + 0.2,
-             'sensor_limit_low_warn' => ($data['output']['frequency_nominal'] ?? 0) - 0.2]
+                'sensor_type' => '',
+                'sensor_descr' => "UPS {$modelName} output",
+                'sensor_divisor' => 1,
+                'sensor_multiplier' => 1,
+                'sensor_current' => $data['output']['frequency'],
+                'sensor_min' => 0,
+                'sensor_limit' => ($data['output']['frequency_nominal'] ?? 0) + 2.5,
+                'sensor_limit_warn' => ($data['output']['frequency_nominal'] ?? 0) + 0.2,
+                'sensor_limit_low_warn' => ($data['output']['frequency_nominal'] ?? 0) - 0.2]
         );
     }
 
@@ -555,19 +506,19 @@ private function cleanupRemovedSensors(): void
         $sensorIndex = "{$upsName}_output_voltage";
         $this->upsertSensor(
             ['device_id' => $this->device['device_id'],
-             'sensor_class' => 'voltage',
-             'sensor_index' => $sensorIndex,
-             'poller_type' => 'app'],
+                'sensor_class' => 'voltage',
+                'sensor_index' => $sensorIndex,
+                'poller_type' => 'app'],
 
-             ['sensor_oid' => 'app:nut:' . $sensorIndex,
-             'sensor_type' => '',
-             'sensor_descr' => "UPS {$modelName} output",
-             'sensor_divisor' => 1,
-             'sensor_multiplier' => 1,
-             'sensor_current' => $data['output']['voltage'],
-             'sensor_min' => 0,
-             'sensor_limit_warn' => ($data['output']['voltage_nominal'] ?? 0) * 1.1,
-             'sensor_limit_low_warn' => ($data['output']['voltage_nominal'] ?? 0) * 0.9]
+            ['sensor_oid' => 'app:nut:' . $sensorIndex,
+                'sensor_type' => '',
+                'sensor_descr' => "UPS {$modelName} output",
+                'sensor_divisor' => 1,
+                'sensor_multiplier' => 1,
+                'sensor_current' => $data['output']['voltage'],
+                'sensor_min' => 0,
+                'sensor_limit_warn' => ($data['output']['voltage_nominal'] ?? 0) * 1.1,
+                'sensor_limit_low_warn' => ($data['output']['voltage_nominal'] ?? 0) * 0.9]
         );
     }
 
@@ -576,19 +527,19 @@ private function cleanupRemovedSensors(): void
         $sensorIndex = "{$upsName}_input_voltage";
         $this->upsertSensor(
             ['device_id' => $this->device['device_id'],
-             'sensor_class' => 'voltage',
-             'sensor_index' => $sensorIndex,
-             'poller_type' => 'app'],
+                'sensor_class' => 'voltage',
+                'sensor_index' => $sensorIndex,
+                'poller_type' => 'app'],
 
-             ['sensor_oid' => 'app:nut:' . $sensorIndex,
-             'sensor_type' => '',
-             'sensor_descr' => "UPS {$modelName} input",
-             'sensor_divisor' => 1,
-             'sensor_multiplier' => 1,
-             'sensor_current' => $data['input']['voltage'],
-             'sensor_min' => 0,
-             'sensor_limit_low_warn' => ($data['input']['voltage_transfer_low'] ?? $data['input']['voltage_nominal'] ?? $data['input']['voltage'] ?? 0) * 0.9,
-             'sensor_limit_warn' => ($data['input']['voltage_transfer_high'] ?? $data['input']['voltage_nominal'] ?? $data['input']['voltage'] ?? 0) * 1.1]
+            ['sensor_oid' => 'app:nut:' . $sensorIndex,
+                'sensor_type' => '',
+                'sensor_descr' => "UPS {$modelName} input",
+                'sensor_divisor' => 1,
+                'sensor_multiplier' => 1,
+                'sensor_current' => $data['input']['voltage'],
+                'sensor_min' => 0,
+                'sensor_limit_low_warn' => ($data['input']['voltage_transfer_low'] ?? $data['input']['voltage_nominal'] ?? $data['input']['voltage'] ?? 0) * 0.9,
+                'sensor_limit_warn' => ($data['input']['voltage_transfer_high'] ?? $data['input']['voltage_nominal'] ?? $data['input']['voltage'] ?? 0) * 1.1]
         );
     }
 
@@ -597,19 +548,19 @@ private function cleanupRemovedSensors(): void
         $sensorIndex = "{$upsName}_battery_voltage";
         $this->upsertSensor(
             ['device_id' => $this->device['device_id'],
-             'sensor_class' => 'voltage',
-             'sensor_index' => $sensorIndex,
-             'poller_type' => 'app'],
+                'sensor_class' => 'voltage',
+                'sensor_index' => $sensorIndex,
+                'poller_type' => 'app'],
 
-             ['sensor_oid' => 'app:nut:' . $sensorIndex,
-             'sensor_type' => '',
-             'sensor_descr' => "UPS {$modelName} battery",
-             'sensor_divisor' => 1,
-             'sensor_multiplier' => 1,
-             'sensor_current' => $data['battery']['voltage'],
-             'sensor_min' => 0,
-             'sensor_max' => $data['battery']['voltage'] * 10,
-             ]
+            ['sensor_oid' => 'app:nut:' . $sensorIndex,
+                'sensor_type' => '',
+                'sensor_descr' => "UPS {$modelName} battery",
+                'sensor_divisor' => 1,
+                'sensor_multiplier' => 1,
+                'sensor_current' => $data['battery']['voltage'],
+                'sensor_min' => 0,
+                'sensor_max' => $data['battery']['voltage'] * 10,
+            ]
         );
     }
 
@@ -620,11 +571,10 @@ private function cleanupRemovedSensors(): void
     /////////////////////////////////////////////////
     private function pollerUpdate(string $upsName): void
     {
-        echo "<!-- NutPoller: processing UPS=$upsName -->\n";
-
         $this->updateSensors($upsName);
-        $this->RrdWriteStats($upsName,  $this->payload['data'][$upsName] ?? []);
+        $this->RrdWriteStats($upsName, $this->payload['data'][$upsName] ?? []);
     }
+
     private function updateSensors(string $upsName): void
     {
         $data = $this->payload['data'][$upsName] ?? [];
@@ -670,8 +620,6 @@ private function cleanupRemovedSensors(): void
     // Null means the UPS does not report this value; RRD stores U (unknown) for that poll.
     private function updateNumericSensor(Sensor $sensor, ?float $value): void
     {
-        echo "<!-- NutPoller: updateNumericSensor index={$sensor->sensor_index}, value=$value -->\n";
-
         $sensor->sensor_current = $value;
         $sensor->save();
 
@@ -694,7 +642,6 @@ private function cleanupRemovedSensors(): void
     {
         // Map NUT status string to numeric state value (e.g. 'OL' -> 1)
         $currentValue = $mapping[$value]['value'] ?? 1;
-        echo "<!-- NutPoller: updateStateSensor index={$sensor->sensor_index}, value=$value, currentValue=$currentValue -->\n";
 
         $sensor->sensor_current = $currentValue;
         $sensor->sensor_prev = $currentValue;
@@ -713,15 +660,10 @@ private function cleanupRemovedSensors(): void
 
     private function RrdWriteStats(string $upsName, array $data): void
     {
-        echo "<!-- NutPoller: RrdWriteStats for $upsName -->\n";
-
         $writer = new NutRrdWriter();
         $fields = $writer->buildFields($data);
         $tags = ['rrd_name' => ['app', 'ups-nut', $this->app->app_id, $upsName]];
 
-        echo '<!-- NutPoller: RrdWriteStats rrdName=ups-nut/' . $this->app->app_id . '/' . $upsName . " -->\n";
-
         $writer->write($this->device, 'ups-nut', $this->app->app_id, $upsName, $fields, $tags);
     }
-
 }

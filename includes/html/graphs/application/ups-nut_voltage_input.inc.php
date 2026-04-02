@@ -34,8 +34,8 @@ $addarea = 1;
 $transparency = 33;
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'ups-nut', $app->app_id]);
 $array = [
-    'input_voltage' => ['descr' => 'Input', 'colour' => '630606'],
-    'line_nominal' => ['descr' => 'Nominal', 'colour' => '50C150'],
+    'in_voltage' => ['descr' => 'Input', 'colour' => '630606'],
+    'out_voltage' => ['descr' => 'Output', 'colour' => '006699'],
 ];
 
 $i = 0;
