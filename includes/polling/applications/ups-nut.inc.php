@@ -23,6 +23,76 @@
 
 use LibreNMS\RRD\RrdDefinition;
 
+function nut_clean_db(int $device_id, App\Models\Application $app): void
+{
+    echo "Cleaning {$app} database for device_id=$device_id, app_id={$app->app_id}\n";
+
+    // Delete NUT sensors (sensor_class in relevant classes)
+    $sensor_classes = ['charge', 'load', 'runtime', 'voltage', 'power', 'frequency', 'state'];
+    $sensors = App\Models\Sensor::where('device_id', $device_id)
+        ->whereIn('sensor_class', $sensor_classes)
+        ->where('poller_type', '!=', 'app')
+        ->delete();
+    echo "Deleted $sensors legacy NUT sensors\n";
+
+    // Reset app data using direct DB update to bypass Eloquent casts
+    Illuminate\Support\Facades\DB::table('applications')
+        ->where('app_id', $app->app_id)
+        ->update(['data' => null]);
+    // Reload the model to get fresh state
+    $app->refresh();
+    echo "Cleared app data\n";
+
+    echo "Done cleaning {$app->app_name} database\n";
+}
+
+//nut_clean_db($device['device_id'], $app);
+
+echo "<!-- ups-nut poller: start -->\n";
+
+// Check for NUT v2 agent data
+// First check if agent_data has the JSON, otherwise rely on json_app_get
+
+// Debug: Show full agent_data structure
+$agentDataStr = is_array($agent_data) ? json_encode($agent_data) : var_export($agent_data, true);
+echo '<!-- ups-nut: full agent_data: ' . substr($agentDataStr, 0, 500) . " -->\n";
+
+$agentJson = $agent_data['app']['ups-nut'] ?? $agent_data['ups-nut'] ?? null;
+echo '<!-- ups-nut: agentJson from agent_data: ' . ($agentJson ? 'exists' : 'NULL') . " -->\n";
+
+// If we have JSON from agent, check version
+if (! empty($agentJson)) {
+    $parsed = json_decode(stripslashes($agentJson), true);
+    echo '<!-- ups-nut: json_error=' . json_last_error_msg() . ' --->' . "\n";
+    $agentVersion = $parsed['version'] ?? 1;
+    echo "<!-- ups-nut: parsed version=$agentVersion -->\n";
+
+    if (isset($parsed['version']) && $parsed['version'] >= 2) {
+        echo "<!-- ups-nut: using NutPoller v2 (from agent_data) -->\n";
+        LibreNMS\Agent\Module\NutPoller::poll($app, $device);
+
+        return;
+    }
+}
+
+// Try to get data via json_app_get (SNMP)
+echo "<!-- ups-nut: trying json_app_get for version check -->\n";
+try {
+    $test_payload = json_app_get($device, 'ups-nut', 1);
+    echo '<!-- ups-nut: json_app_get returned, version=' . ($test_payload['version'] ?? 'none') . " -->\n";
+
+    if (isset($test_payload['version']) && $test_payload['version'] >= 2) {
+        echo "<!-- ups-nut: using NutPoller v2 (via json_app_get) -->\n";
+        LibreNMS\Agent\Module\NutPoller::poll($app, $device);
+
+        return;
+    }
+} catch (Exception $e) {
+    echo '<!-- ups-nut: json_app_get failed: ' . $e->getMessage() . " -->\n";
+}
+
+echo "<!-- ups-nut: using legacy SNMP polling -->\n";
+
 // (2016-11-25, R.Morris) ups-nut, try "extend" -> if not, fall back to "exec" support.
 // -> Similar to approach used by Distro, but skip "legacy UCD-MIB shell support"
 //
