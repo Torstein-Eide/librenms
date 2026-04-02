@@ -3,13 +3,10 @@
 namespace LibreNMS\Agent\Module;
 
 use App\Models\Application;
-use App\Models\Device;
 use App\Models\Sensor;
 use App\Models\StateTranslation;
-use Illuminate\Support\Facades\Cache;
 use LibreNMS\Enum\Severity;
 use LibreNMS\Exceptions\JsonAppMissingKeysException;
-use LibreNMS\OS;
 use LibreNMS\Polling\Modules\NutRrdWriter;
 use LibreNMS\RRD\RrdDefinition;
 
@@ -38,22 +35,6 @@ class NutPoller
     private const VERSION = 2;
     private const SCHEMA_VERSION = 1;
 
-    private const STATE_MAPPING = [
-        'OL' => ['value' => 1, 'name' => 'Online', 'descr' => 'ONLINE - The UPS is running on mains power.'],
-        'OB' => ['value' => 2, 'name' => 'On Battery', 'descr' => 'ONBATT - The UPS is running on battery power.'],
-        'LB' => ['value' => 3, 'name' => 'Battery Low', 'descr' => 'LOWBATT - The battery is low (often used as a trigger for shutdown).'],
-        'HB' => ['value' => 4, 'name' => 'Battery High', 'descr' => 'HIGHBATT - The battery is high.'],
-        'RB' => ['value' => 5, 'name' => 'Replace Battery', 'descr' => 'REPLBATT - The battery needs to be replaced.'],
-        'CHRG' => ['value' => 6, 'name' => 'Charging', 'descr' => 'CHARGING - The battery is charging.'],
-        'DISCHRG' => ['value' => 7, 'name' => 'Discharging', 'descr' => 'DISCHARGING - The battery is discharging.'],
-        'BYPASS' => ['value' => 8, 'name' => 'Bypass', 'descr' => 'BYPASS - The UPS is on bypass mode (load is fed from input).'],
-        'OVER' => ['value' => 9, 'name' => 'Overload', 'descr' => 'OVERLOAD - The UPS is overloaded.'],
-        'TRIM' => ['value' => 10, 'name' => 'Trim Voltage', 'descr' => 'TRIM - The UPS is trimming incoming voltage.'],
-        'BOOST' => ['value' => 11, 'name' => 'Boost Voltage', 'descr' => 'BOOST - The UPS is boosting incoming voltage.'],
-        'ALARM' => ['value' => 12, 'name' => 'ALARM', 'descr' => 'ALARM - The UPS has active alarms.'],
-        'FSD' => ['value' => 13, 'name' => 'Forced Shutdown', 'descr' => 'FSD - Forced Shutdown (usually set by upsmon to indicate a shutdown is in progress)'],
-    ];
-
     public static function poll(Application $app, array $device): void
     {
         $poller = new self($app, $device);
@@ -81,9 +62,9 @@ class NutPoller
             // store new discovery data for this UPS
             $this->discovery['counter'] = $this->payload['count'] ?? 0;
             $this->discovery['ups_list'] = [];
-            foreach ($this->payload['data'] ?? [] as $upsName => $upsData) {
-                $this->discovery['ups_list'][$upsName] = [
-                    'Device' => $upsData['Device'] ?? [],
+            foreach ($this->payload['data'] ?? [] as $upsID => $upsData) {
+                $this->discovery['ups_list'][$upsID] = [
+                    'device' => $upsData['device'] ?? [],
                 ];
             }
             $this->Discovery();
@@ -91,9 +72,9 @@ class NutPoller
         }
 
         // Process each UPS
-        foreach ($this->discovery['ups_list'] as $upsName => $upsInfo) {
-            $this->working['ups'] = $upsName;
-            $this->pollerUpdate($upsName);
+        foreach ($this->discovery['ups_list'] as $upsID => $upsInfo) {
+            $this->working['ups'] = $upsID;
+            $this->pollerUpdate($upsID);
         }
 
         $this->saveAppData();
@@ -146,25 +127,15 @@ class NutPoller
     {
         $metrics = [];
 
-        foreach ($this->NewData as $upsName => $data) {
-            $metrics["{$upsName}_load"] = $data['ups']['load'] ?? 0;
-            $metrics["{$upsName}_charge"] = $data['battery']['charge'] ?? 0;
-            $metrics["{$upsName}_runtime"] = $data['battery']['runtime'] ?? 0;
+        foreach ($this->NewData as $upsID => $data) {
+            $metrics["{$upsID}_load"] = $data['ups']['load'] ?? 0;
+            $metrics["{$upsID}_charge"] = $data['battery']['charge'] ?? 0;
+            $metrics["{$upsID}_runtime"] = $data['battery']['runtime'] ?? 0;
         }
 
-        $status = $this->working['status'] ? 'OK' : 'ERROR';
-        update_application($this->app, $status, $metrics);
+        update_application($this->app, "oKS", $metrics);
     }
 
-    private function getSeverityForState(int $value): Severity
-    {
-        return match ($value) {
-            1 => Severity::Ok,
-            2, 3, 5, 8, 9, 12, 13 => Severity::Error,
-            4, 6, 7, 10, 11 => Severity::Warning,
-            default => Severity::Unknown,
-        };
-    }
 
     ////////////////////////////////////////////////////
     // Discovery
@@ -177,14 +148,15 @@ class NutPoller
 
     private function Discovery(): void
     {
-        $this->discovery['ups'] = [];
-
-        foreach (array_keys($this->discovery['ups_list']) as $upsName) {
-            $this->working['ups'] = $upsName;
-            $this->discoverSensors($upsName);
-            $this->cleanupRemovedSensors();
+        foreach (array_keys($this->discovery['ups_list']) as $upsID) {
+            $this->working['ups'] = $upsID;
+            $this->discoverSensors($upsID);
             $this->cleanupLegacySensors();
         }
+
+        // Sync all discovered app sensors: creates new, updates existing, deletes sensors
+        // for UPS devices no longer in the payload — replaces manual cleanupRemovedSensors().
+        app('sensor-discovery')->sync(poller_type: 'app');
     }
 
     private function Checkiftimefordiscovery(): bool
@@ -206,362 +178,333 @@ class NutPoller
         return false;  // run discovery
     }
 
-    private function discoverSensors(string $upsName): void
+    private function discoverSensors(string $upsID): void
     {
-        //$upsName = $this->working['ups'];
-        $data = $this->payload['data'][$upsName] ?? [];
-
-        // discoverNumericSensor(
-        // string $upsName,
-        // string $modelPrefix,
-        // string $type,
-        // string $class,
-        // string $descr,
-        // ?float $min = 0,
-        // ?float $max = null
-
-        // Get model name for sensor descriptions
+        $data = $this->payload['data'][$upsID] ?? [];
         $modelName = $data['device']['model'] ?? '';
 
-        // State sensors (keep these)
-        $this->discoverStateSensor($upsName, 'ups_status', $data['ups']['status'] ?? 'OL', self::STATE_MAPPING);
-        $this->discovery['ups'][$upsName]['sensors'][] = 'ups_status';
-        $this->discovery['ups'][$upsName]['sensor_oid']['ups_status'] = 'app:nut:' . $upsName . '_ups_status';
+        // State sensors
+        $this->discoverStatusOnline($upsID, $data);
+        $this->discoverOutputVoltageRegulation($upsID, $data);
+        $this->discoverBatteryCharging($upsID, $data);
+        $this->discoverBatteryHealth($upsID, $data);
 
-        // Numeric sensors - only keep relevant ones
+        // Boolean status sensors — pass the actual data key since casing differs from sensor type name
+        $this->discoverStatusBool('status_bypass', 'Bypass', $upsID, $data, 'status_Bypass');
+        $this->discoverStatusBool('status_overload', 'Overload', $upsID, $data, 'status_Overload');
+        $this->discoverStatusBool('status_alarm', 'Alarm', $upsID, $data, 'status_Alarm');
+        $this->discoverStatusBool('status_forced_shutdown', 'Forced Shutdown', $upsID, $data, 'status_Forced_Shutdown');
 
+        // Numeric sensors
         // - sensor_limit - High alert (critical)
         // - sensor_limit_warn - High warning
         // - sensor_limit_low - Low alert (critical)
         // - sensor_limit_low_warn - Low warning
 
         if (! empty($data['ups']['load'])) {
-            $this->discoverLoad($upsName, $modelName, $data);
-            $this->discovery['ups'][$upsName]['sensors'][] = 'load';
-            $this->discovery['ups'][$upsName]['sensor_oid']['load'] = 'app:nut:' . $upsName . '_load';
+            $this->discoverLoad($upsID, $modelName, $data);
         }
-
         if (! empty($data['battery']['charge'])) {
-            $this->discoverCharge($upsName, $modelName, $data);
-            $this->discovery['ups'][$upsName]['sensors'][] = 'charge';
-            $this->discovery['ups'][$upsName]['sensor_oid']['charge'] = 'app:nut:' . $upsName . '_charge';
+            $this->discoverCharge($upsID, $modelName, $data);
         }
-
         if (! empty($data['battery']['runtime'])) {
-            $this->discoverRuntime($upsName, $modelName, $data);
-            $this->discovery['ups'][$upsName]['sensors'][] = 'runtime';
-            $this->discovery['ups'][$upsName]['sensor_oid']['runtime'] = 'app:nut:' . $upsName . '_runtime';
+            $this->discoverRuntime($upsID, $modelName, $data);
         }
-
         if (! empty($data['ups']['realpower'])) {
-            $this->discoverRealpower($upsName, $modelName, $data);
-            $this->discovery['ups'][$upsName]['sensors'][] = 'realpower';
-            $this->discovery['ups'][$upsName]['sensor_oid']['realpower'] = 'app:nut:' . $upsName . '_realpower';
+            $this->discoverRealpower($upsID, $modelName, $data);
         }
-
         if (! empty($data['output']['frequency'])) {
-            $this->discoverOutputFrequency($upsName, $modelName, $data);
-            $this->discovery['ups'][$upsName]['sensors'][] = 'output_frequency';
-            $this->discovery['ups'][$upsName]['sensor_oid']['output_frequency'] = 'app:nut:' . $upsName . '_output_frequency';
+            $this->discoverOutputFrequency($upsID, $modelName, $data);
         }
-
         if (! empty($data['output']['voltage'])) {
-            $this->discoverOutputVoltage($upsName, $modelName, $data);
-            $this->discovery['ups'][$upsName]['sensors'][] = 'output_voltage';
-            $this->discovery['ups'][$upsName]['sensor_oid']['output_voltage'] = 'app:nut:' . $upsName . '_output_voltage';
+            $this->discoverOutputVoltage($upsID, $modelName, $data);
         }
-
         if (! empty($data['input']['voltage'])) {
-            $this->discoverInputVoltage($upsName, $modelName, $data);
-            $this->discovery['ups'][$upsName]['sensors'][] = 'input_voltage';
-            $this->discovery['ups'][$upsName]['sensor_oid']['input_voltage'] = 'app:nut:' . $upsName . '_input_voltage';
+            $this->discoverInputVoltage($upsID, $modelName, $data);
         }
-
         if (! empty($data['battery']['voltage'])) {
-            $this->discoverBatteryVoltage($upsName, $modelName, $data);
-            $this->discovery['ups'][$upsName]['sensors'][] = 'battery_voltage';
-            $this->discovery['ups'][$upsName]['sensor_oid']['battery_voltage'] = 'app:nut:' . $upsName . '_battery_voltage';
-        }
-    }
-
-    private function discoverStateSensor(string $upsName, string $type, string $value, array $mapping): void
-    {
-        $sensorIndex = "{$upsName}_{$type}";
-
-        // Check if mapping uses nested array format or simple key=>value format
-        $firstValue = array_values($mapping)[0];
-        $isNestedFormat = is_array($firstValue);
-
-        $sensorCurrent = $isNestedFormat ? ($mapping[$value]['value'] ?? 1) : ($mapping[$value] ?? 1);
-
-        // Create state translations first (like btrfs)
-        foreach ($mapping as $state => $info) {
-            if ($isNestedFormat) {
-                $stateValue = $info['value'] ?? 1;
-                $stateDescr = $info['descr'] ?? $state;
-            } else {
-                $stateValue = is_array($info) ? ($info['value'] ?? 1) : $info;
-                $stateDescr = $state;
-            }
-
-            StateTranslation::firstOrCreate(
-                [
-                    'state_value' => $stateValue,
-                ],
-                [
-                    'state_descr' => $stateDescr,
-                    'state_draw_graph' => true,
-                    'state_generic_value' => match ($this->getSeverityForState($stateValue)) {
-                        Severity::Ok => 0,
-                        Severity::Warning => 1,
-                        Severity::Error => 2,
-                        default => 3,
-                    },
-                ]
-            );
-        }
-
-        // Use withoutGlobalScopes and proper sensor_oid like btrfs does
-        $sensor = $this->upsertSensor(
-            [
-                'device_id' => $this->device['device_id'],
-                'sensor_class' => 'state',
-                'sensor_type' => "{$type}",
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app',
-            ],
-            [
-                'sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_descr' => "NUT {$upsName} status",
-                'sensor_divisor' => 1,
-                'sensor_multiplier' => 1,
-                'sensor_current' => $sensorCurrent,
-            ]
-        );
-    }
-
-    private function cleanupRemovedSensors(): void
-    {
-        // Cleanup old legacy sensors from SNMP polling (first discovery run only)
-
-        $removedUps = array_diff(array_keys($this->discovery['ups_list']), array_keys($this->payload['data'] ?? []));
-
-        foreach ($removedUps as $removedUpsName) {
-            Sensor::where('device_id', $this->device['device_id'])
-                ->where('sensor_index', 'like', "{$removedUpsName}_%")
-                ->delete();
-        }
-
-        // Collect all sensor_oids known from current discovery
-        $knownOids = [];
-        foreach ($this->discovery['ups'] ?? [] as $upsInfo) {
-            foreach ($upsInfo['sensor_oid'] ?? [] as $oid) {
-                $knownOids[] = $oid;
-            }
-        }
-
-        // Find sensors in DB that are no longer in discovery and delete them
-        $allSensors = Sensor::where('device_id', $this->device['device_id'])
-            ->where('sensor_oid', 'like', 'app:nut:%')
-            ->get(['sensor_id', 'sensor_oid', 'sensor_class', 'poller_type']);
-
-        $staleIds = $allSensors
-            ->filter(fn ($s) => ! in_array($s->sensor_oid, $knownOids))
-            ->pluck('sensor_id');
-
-        if ($staleIds->isNotEmpty()) {
-            Sensor::whereIn('sensor_id', $staleIds)->delete();
+            $this->discoverBatteryVoltage($upsID, $modelName, $data);
         }
     }
 
     private function cleanupLegacySensors(): void
     {
         // Remove old legacy sensors created by SNMP poller
-        // These have sensor_class in ['charge', 'load', 'runtime'] etc and poller_type != 'app'
-        $legacySensorClasses = ['charge', 'load', 'runtime', 'voltage', 'power', 'frequency', 'state'];
+        // These have sensor_class in numeric classes and poller_type != 'app'
+        $legacySensorClasses = [
+            'charge', 'load', 'runtime', 'voltage', 'power', 'frequency', 'state',
+            'output_voltage_regulation', 'battery_charging', 'battery_health',
+            'status_online', 'status_bypass', 'status_overload', 'status_alarm', 'status_forced_shutdown',
+        ];
 
         foreach ($legacySensorClasses as $class) {
-            $deleted = Sensor::where('device_id', $this->device['device_id'])
+            $sensors = Sensor::where('device_id', $this->device['device_id'])
                 ->where('sensor_class', $class)
                 ->where('poller_type', '!=', 'app')
                 ->where('sensor_descr', 'like', 'NUT%')
-                ->delete();
+                ->get(['sensor_id', 'sensor_index', 'sensor_descr']);
 
+            foreach ($sensors as $sensor) {
+                echo "<!-- Deleting legacy sensor: {$sensor->sensor_index} ({$sensor->sensor_descr}) -->\n";
+            }
+
+            $deleted = $sensors->count();
             if ($deleted > 0) {
+                Sensor::whereIn('sensor_id', $sensors->pluck('sensor_id'))->delete();
             }
         }
     }
 
-    private function upsertSensor(array $criteria, array $values): Sensor
+    private function discoverLoad(string $upsID, string $modelName, array $data): void
     {
-        return Sensor::withoutGlobalScopes()->updateOrCreate($criteria, $values);
+        app('sensor-discovery')->discover(new Sensor([
+            'poller_type' => 'app',
+            'sensor_class' => 'load',
+            'sensor_index' => "{$upsID}_load",
+            'sensor_oid' => "app:nut:{$upsID}_load",
+            'sensor_descr' => "UPS {$modelName}",
+            'sensor_divisor' => 1,
+            'sensor_multiplier' => 1,
+            'sensor_current' => $data['ups']['load'],
+            'sensor_min' => 0,
+            'sensor_max' => 500,
+            'sensor_limit_warn' => 80,
+            'sensor_limit' => 90,
+        ]));
     }
 
-    private function discoverLoad(string $upsName, string $modelName, array $data): void
+    private function discoverCharge(string $upsID, string $modelName, array $data): void
     {
-        $sensorIndex = "{$upsName}_load";
-        $this->upsertSensor(
-            ['device_id' => $this->device['device_id'],
-                'sensor_class' => 'load',
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app'],
+        app('sensor-discovery')->discover(new Sensor([
+            'poller_type' => 'app',
+            'sensor_class' => 'charge',
+            'sensor_index' => "{$upsID}_charge",
+            'sensor_oid' => "app:nut:{$upsID}_charge",
+            'sensor_descr' => "UPS {$modelName} battery",
+            'sensor_divisor' => 1,
+            'sensor_multiplier' => 1,
+            'sensor_current' => $data['battery']['charge'],
+            'sensor_min' => 0,
+            'sensor_max' => 100,
+            'sensor_limit_low_warn' => $data['battery']['charge_low'] ?? 20,
+        ]));
+    }
 
-            ['sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_type' => '',
-                'sensor_descr' => "UPS {$modelName}",
+    private function discoverRuntime(string $upsID, string $modelName, array $data): void
+    {
+        app('sensor-discovery')->discover(new Sensor([
+            'poller_type' => 'app',
+            'sensor_class' => 'runtime',
+            'sensor_index' => "{$upsID}_runtime",
+            'sensor_oid' => "app:nut:{$upsID}_runtime",
+            'sensor_descr' => "UPS {$modelName}",
+            'sensor_divisor' => 60,
+            'sensor_multiplier' => 1,
+            'sensor_current' => $data['battery']['runtime'],
+            'sensor_min' => 0,
+        ]));
+    }
+
+    private function discoverRealpower(string $upsID, string $modelName, array $data): void
+    {
+        app('sensor-discovery')->discover(new Sensor([
+            'poller_type' => 'app',
+            'sensor_class' => 'power',
+            'sensor_index' => "{$upsID}_realpower",
+            'sensor_oid' => "app:nut:{$upsID}_realpower",
+            'sensor_descr' => "UPS {$modelName} output",
+            'sensor_divisor' => 1,
+            'sensor_multiplier' => 1,
+            'sensor_current' => $data['ups']['realpower'],
+            'sensor_min' => 0,
+            'sensor_max' => $data['ups']['power_nominal'] ?? null,
+        ]));
+    }
+
+    private function discoverOutputFrequency(string $upsID, string $modelName, array $data): void
+    {
+        $nom = $data['output']['frequency_nominal'] ?? 0;
+        app('sensor-discovery')->discover(new Sensor([
+            'poller_type' => 'app',
+            'sensor_class' => 'frequency',
+            'sensor_index' => "{$upsID}_output_frequency",
+            'sensor_oid' => "app:nut:{$upsID}_output_frequency",
+            'sensor_descr' => "UPS {$modelName} output",
+            'sensor_divisor' => 1,
+            'sensor_multiplier' => 1,
+            'sensor_current' => $data['output']['frequency'],
+            'sensor_min' => 0,
+            'sensor_limit' => $nom + 2.5,
+            'sensor_limit_warn' => $nom + 0.2,
+            'sensor_limit_low_warn' => $nom - 0.2,
+        ]));
+    }
+
+    private function discoverOutputVoltage(string $upsID, string $modelName, array $data): void
+    {
+        $nom = $data['output']['voltage_nominal'] ?? 0;
+        app('sensor-discovery')->discover(new Sensor([
+            'poller_type' => 'app',
+            'sensor_class' => 'voltage',
+            'sensor_index' => "{$upsID}_output_voltage",
+            'sensor_oid' => "app:nut:{$upsID}_output_voltage",
+            'sensor_descr' => "UPS {$modelName} output",
+            'sensor_divisor' => 1,
+            'sensor_multiplier' => 1,
+            'sensor_current' => $data['output']['voltage'],
+            'sensor_min' => 0,
+            'sensor_limit_warn' => $nom * 1.1,
+            'sensor_limit_low_warn' => $nom * 0.9,
+        ]));
+    }
+
+    private function discoverInputVoltage(string $upsID, string $modelName, array $data): void
+    {
+        $nomLow = $data['input']['voltage_transfer_low'] ?? $data['input']['voltage_nominal'] ?? $data['input']['voltage'] ?? 0;
+        $nomHigh = $data['input']['voltage_transfer_high'] ?? $data['input']['voltage_nominal'] ?? $data['input']['voltage'] ?? 0;
+        app('sensor-discovery')->discover(new Sensor([
+            'poller_type' => 'app',
+            'sensor_class' => 'voltage',
+            'sensor_index' => "{$upsID}_input_voltage",
+            'sensor_oid' => "app:nut:{$upsID}_input_voltage",
+            'sensor_descr' => "UPS {$modelName} input",
+            'sensor_divisor' => 1,
+            'sensor_multiplier' => 1,
+            'sensor_current' => $data['input']['voltage'],
+            'sensor_min' => 0,
+            'sensor_limit_low_warn' => $nomLow * 0.9,
+            'sensor_limit_warn' => $nomHigh * 1.1,
+        ]));
+    }
+
+    private function discoverBatteryVoltage(string $upsID, string $modelName, array $data): void
+    {
+        app('sensor-discovery')->discover(new Sensor([
+            'poller_type' => 'app',
+            'sensor_class' => 'voltage',
+            'sensor_index' => "{$upsID}_battery_voltage",
+            'sensor_oid' => "app:nut:{$upsID}_battery_voltage",
+            'sensor_descr' => "UPS {$modelName} battery",
+            'sensor_divisor' => 1,
+            'sensor_multiplier' => 1,
+            'sensor_current' => $data['battery']['voltage'],
+            'sensor_min' => 0,
+            'sensor_max' => $data['battery']['voltage'] * 10,
+        ]));
+    }
+
+    private function discoverBatteryHealth(string $upsID, array $data): void
+    {
+        $modelName = $data['device']['model'] ?? '';
+        app('sensor-discovery')
+            ->discover(new Sensor([
+                'poller_type' => 'app',
+                'sensor_class' => 'state',
+                'sensor_type' => 'nut_battery_health',
+                'sensor_index' => "{$upsID}_battery_health",
+                'sensor_oid' => "app:nut:{$upsID}_battery_health",
+                'sensor_descr' => "UPS {$modelName} battery health",
                 'sensor_divisor' => 1,
                 'sensor_multiplier' => 1,
-                'sensor_current' => $data['ups']['load'],
-                'sensor_min' => 0,
-                'sensor_max' => 500,
-                'sensor_limit_warn' => 80,
-                'sensor_limit' => 90]
-        );
+                'sensor_current' => (int) ($data['battery_health'] ?? -1),
+            ]))
+            ->withStateTranslations('nut_battery_health', [
+                StateTranslation::define('OK', 0, Severity::Ok),
+                StateTranslation::define('Low Battery', 1, Severity::Warning),
+                StateTranslation::define('High Battery', 2, Severity::Warning),
+                StateTranslation::define('Replace Battery', 4, Severity::Error),
+                StateTranslation::define('Low + Replace', 5, Severity::Error),
+                StateTranslation::define('High + Replace', 6, Severity::Error),
+                StateTranslation::define('Multiple Issues', 7, Severity::Error),
+            ]);
     }
 
-    private function discoverCharge(string $upsName, string $modelName, array $data): void
+    private function discoverStatusOnline(string $upsID, array $data): void
     {
-        $sensorIndex = "{$upsName}_charge";
-        $this->upsertSensor(
-            ['device_id' => $this->device['device_id'],
-                'sensor_class' => 'charge',
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app'],
-
-            ['sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_type' => '',
-                'sensor_descr' => "UPS {$modelName} battery",
+        $modelName = $data['device']['model'] ?? '';
+        app('sensor-discovery')
+            ->discover(new Sensor([
+                'poller_type' => 'app',
+                'sensor_class' => 'state',
+                'sensor_type' => 'nut_status_online',
+                'sensor_index' => "{$upsID}_status_online",
+                'sensor_oid' => "app:nut:{$upsID}_status_online",
+                'sensor_descr' => "UPS {$modelName} online status",
                 'sensor_divisor' => 1,
                 'sensor_multiplier' => 1,
-                'sensor_current' => $data['battery']['charge'],
-                'sensor_min' => 0,
-                'sensor_max' => 1000,
-                'sensor_limit_low_warn' => $data['battery']['charge_low'] ?? 20]
-        );
+                'sensor_current' => (int) ($data['status_online'] ?? -1),
+            ]))
+            ->withStateTranslations('nut_status_online', [
+                StateTranslation::define('Online', 0, Severity::Ok),
+                StateTranslation::define('On Battery', 1, Severity::Warning),
+            ]);
     }
 
-    private function discoverRuntime(string $upsName, string $modelName, array $data): void
+    private function discoverStatusBool(string $type, string $descr, string $upsID, array $data, string $dataKey = ''): void
     {
-        $sensorIndex = "{$upsName}_runtime";
-        $this->upsertSensor(
-            ['device_id' => $this->device['device_id'],
-                'sensor_class' => 'runtime',
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app'],
-
-            ['sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_type' => '',
-                'sensor_descr' => "UPS {$modelName}",
-                'sensor_divisor' => 60,
-                'sensor_multiplier' => 1,
-                'sensor_current' => $data['battery']['runtime'] / 60,
-                'sensor_min' => 0]
-        );
-    }
-
-    private function discoverRealpower(string $upsName, string $modelName, array $data): void
-    {
-        $sensorIndex = "{$upsName}_realpower";
-        $this->upsertSensor(
-            ['device_id' => $this->device['device_id'],
-                'sensor_class' => 'power',
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app'],
-
-            ['sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_type' => '',
-                'sensor_descr' => "UPS {$modelName} output",
+        $key = $dataKey ?: $type;
+        $modelName = $data['device']['model'] ?? '';
+        $stateType = 'nut_' . $type;
+        app('sensor-discovery')
+            ->discover(new Sensor([
+                'poller_type' => 'app',
+                'sensor_class' => 'state',
+                'sensor_type' => $stateType,
+                'sensor_index' => "{$upsID}_{$type}",
+                'sensor_oid' => "app:nut:{$upsID}_{$type}",
+                'sensor_descr' => "UPS {$modelName} {$descr}",
                 'sensor_divisor' => 1,
                 'sensor_multiplier' => 1,
-                'sensor_current' => $data['ups']['realpower'],
-                'sensor_min' => 0,
-                'sensor_max' => $data['ups']['power_nominal'] ?? null]
-        );
+                'sensor_current' => (int) ($data[$key] ?? -1),
+            ]))
+            ->withStateTranslations($stateType, [
+                StateTranslation::define('OK', 0, Severity::Ok),
+                StateTranslation::define($descr, 1, Severity::Error),
+            ]);
     }
 
-    private function discoverOutputFrequency(string $upsName, string $modelName, array $data): void
+    private function discoverOutputVoltageRegulation(string $upsID, array $data): void
     {
-        $sensorIndex = "{$upsName}_output_frequency";
-        $this->upsertSensor(
-            ['device_id' => $this->device['device_id'],
-                'sensor_class' => 'frequency',
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app'],
-
-            ['sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_type' => '',
-                'sensor_descr' => "UPS {$modelName} output",
+        $modelName = $this->payload['data'][$upsID]['device']['model'] ?? '';
+        app('sensor-discovery')
+            ->discover(new Sensor([
+                'poller_type' => 'app',
+                'sensor_class' => 'state',
+                'sensor_type' => 'nut_output_voltage_regulation',
+                'sensor_index' => "{$upsID}_output_voltage_regulation",
+                'sensor_oid' => "app:nut:{$upsID}_output_voltage_regulation",
+                'sensor_descr' => "UPS {$modelName} voltage regulation",
                 'sensor_divisor' => 1,
                 'sensor_multiplier' => 1,
-                'sensor_current' => $data['output']['frequency'],
-                'sensor_min' => 0,
-                'sensor_limit' => ($data['output']['frequency_nominal'] ?? 0) + 2.5,
-                'sensor_limit_warn' => ($data['output']['frequency_nominal'] ?? 0) + 0.2,
-                'sensor_limit_low_warn' => ($data['output']['frequency_nominal'] ?? 0) - 0.2]
-        );
+                'sensor_current' => (int) ($data['output_voltage_regulation'] ?? 0),
+            ]))
+            ->withStateTranslations('nut_output_voltage_regulation', [
+                StateTranslation::define('Normal', 0, Severity::Ok),
+                StateTranslation::define('Trim', 1, Severity::Warning),
+                StateTranslation::define('Boost', 2, Severity::Warning),
+            ]);
     }
 
-    private function discoverOutputVoltage(string $upsName, string $modelName, array $data): void
+    private function discoverBatteryCharging(string $upsID, array $data): void
     {
-        $sensorIndex = "{$upsName}_output_voltage";
-        $this->upsertSensor(
-            ['device_id' => $this->device['device_id'],
-                'sensor_class' => 'voltage',
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app'],
-
-            ['sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_type' => '',
-                'sensor_descr' => "UPS {$modelName} output",
+        $modelName = $data['device']['model'] ?? '';
+        app('sensor-discovery')
+            ->discover(new Sensor([
+                'poller_type' => 'app',
+                'sensor_class' => 'state',
+                'sensor_type' => 'nut_battery_charging',
+                'sensor_index' => "{$upsID}_battery_charging",
+                'sensor_oid' => "app:nut:{$upsID}_battery_charging",
+                'sensor_descr' => "UPS {$modelName} battery charging",
                 'sensor_divisor' => 1,
                 'sensor_multiplier' => 1,
-                'sensor_current' => $data['output']['voltage'],
-                'sensor_min' => 0,
-                'sensor_limit_warn' => ($data['output']['voltage_nominal'] ?? 0) * 1.1,
-                'sensor_limit_low_warn' => ($data['output']['voltage_nominal'] ?? 0) * 0.9]
-        );
-    }
-
-    private function discoverInputVoltage(string $upsName, string $modelName, array $data): void
-    {
-        $sensorIndex = "{$upsName}_input_voltage";
-        $this->upsertSensor(
-            ['device_id' => $this->device['device_id'],
-                'sensor_class' => 'voltage',
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app'],
-
-            ['sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_type' => '',
-                'sensor_descr' => "UPS {$modelName} input",
-                'sensor_divisor' => 1,
-                'sensor_multiplier' => 1,
-                'sensor_current' => $data['input']['voltage'],
-                'sensor_min' => 0,
-                'sensor_limit_low_warn' => ($data['input']['voltage_transfer_low'] ?? $data['input']['voltage_nominal'] ?? $data['input']['voltage'] ?? 0) * 0.9,
-                'sensor_limit_warn' => ($data['input']['voltage_transfer_high'] ?? $data['input']['voltage_nominal'] ?? $data['input']['voltage'] ?? 0) * 1.1]
-        );
-    }
-
-    private function discoverBatteryVoltage(string $upsName, string $modelName, array $data): void
-    {
-        $sensorIndex = "{$upsName}_battery_voltage";
-        $this->upsertSensor(
-            ['device_id' => $this->device['device_id'],
-                'sensor_class' => 'voltage',
-                'sensor_index' => $sensorIndex,
-                'poller_type' => 'app'],
-
-            ['sensor_oid' => 'app:nut:' . $sensorIndex,
-                'sensor_type' => '',
-                'sensor_descr' => "UPS {$modelName} battery",
-                'sensor_divisor' => 1,
-                'sensor_multiplier' => 1,
-                'sensor_current' => $data['battery']['voltage'],
-                'sensor_min' => 0,
-                'sensor_max' => $data['battery']['voltage'] * 10,
-            ]
-        );
+                'sensor_current' => (int) ($data['battery_charging'] ?? -1),
+            ]))
+            ->withStateTranslations('nut_battery_charging', [
+                StateTranslation::define('Idle', 0, Severity::Ok),
+                StateTranslation::define('Charging', 1, Severity::Ok),
+                StateTranslation::define('Discharging', 2, Severity::Warning),
+            ]);
     }
 
     /////////////////////////////////////////////////
@@ -569,47 +512,50 @@ class NutPoller
     //
     // Poller update is responsible for updating sensor values based on the current payload. It runs on every poll for each UPS device in the payload, after discovery has run.
     /////////////////////////////////////////////////
-    private function pollerUpdate(string $upsName): void
+    private function pollerUpdate(string $upsID): void
     {
-        $this->updateSensors($upsName);
-        $this->RrdWriteStats($upsName, $this->payload['data'][$upsName] ?? []);
+        $this->updateSensors($upsID);
+        $this->RrdWriteStats($upsID, $this->payload['data'][$upsID] ?? []);
     }
 
-    private function updateSensors(string $upsName): void
+    private function updateSensors(string $upsID): void
     {
-        $data = $this->payload['data'][$upsName] ?? [];
-        $sensorTypes = $this->discovery['ups'][$upsName]['sensors'] ?? [];
+        $data = $this->payload['data'][$upsID] ?? [];
 
-        // Build the value map for all sensors from the current payload
+        // Build value map keyed by the sensor_index suffix (everything after "{upsID}_")
         $values = [
-            'ups_status'       => $data['ups']['status'] ?? 'OL',
-            'load'             => $data['ups']['load'] ?? null,
-            'charge'           => $data['battery']['charge'] ?? null,
-            'runtime'          => isset($data['battery']['runtime']) ? (int) ($data['battery']['runtime'] / 60) : null,
-            'realpower'        => $data['ups']['realpower'] ?? null,
-            'output_voltage'   => $data['output']['voltage'] ?? null,
-            'output_frequency' => $data['output']['frequency'] ?? null,
-            'input_voltage'    => $data['input']['voltage'] ?? null,
-            'battery_voltage'  => $data['battery']['voltage'] ?? null,
+            'load'                       => $data['ups']['load'] ?? null,
+            'charge'                     => $data['battery']['charge'] ?? null,
+            'runtime'                    => $data['battery']['runtime'] ?? null,
+            'realpower'                  => $data['ups']['realpower'] ?? null,
+            'output_voltage'             => $data['output']['voltage'] ?? null,
+            'output_frequency'           => $data['output']['frequency'] ?? null,
+            'input_voltage'              => $data['input']['voltage'] ?? null,
+            'battery_voltage'            => $data['battery']['voltage'] ?? null,
+            'output_voltage_regulation'  => $data['output_voltage_regulation'] ?? null,
+            'battery_charging'           => $data['battery_charging'] ?? null,
+            'battery_health'             => $data['battery_health'] ?? null,
+            'status_online'              => $data['status_online'] ?? null,
+            'status_bypass'              => $data['status_Bypass'] ?? null,
+            'status_overload'            => $data['status_Overload'] ?? null,
+            'status_alarm'               => $data['status_Alarm'] ?? null,
+            'status_forced_shutdown'     => $data['status_Forced_Shutdown'] ?? null,
         ];
 
-        // Load all sensor models for this UPS in one query, keyed by sensor_index
-        $indices = array_map(fn ($type) => "{$upsName}_{$type}", $sensorTypes);
-        $sensorModels = Sensor::where('device_id', $this->device['device_id'])
-            ->whereIn('sensor_index', $indices)
-            ->get()
-            ->keyBy('sensor_index');
+        // Load all sensors for this UPS in one query
+        $prefix = $upsID . '_';
+        $sensors = Sensor::where('device_id', $this->device['device_id'])
+            ->where('sensor_oid', 'like', "app:nut:{$upsID}_%")
+            ->get();
 
-        foreach ($sensorTypes as $type) {
-            $sensor = $sensorModels["{$upsName}_{$type}"] ?? null;
-            if (! $sensor) {
-                continue;
-            }
+        foreach ($sensors as $sensor) {
+            $type = substr($sensor->sensor_index, strlen($prefix));
+            $value = $values[$type] ?? null;
 
-            if ($type === 'ups_status') {
-                $this->updateStateSensor($sensor, $values['ups_status'], self::STATE_MAPPING);
+            if ($sensor->sensor_class === 'state') {
+                $this->updateStateSensorValue($sensor, $value !== null ? (int) $value : null);
             } else {
-                $this->updateNumericSensor($sensor, $values[$type] ?? null);
+                $this->updateNumericSensor($sensor, $value);
             }
         }
     }
@@ -635,16 +581,12 @@ class NutPoller
     }
 
     // Update a state sensor value in the DB and write its individual sensor RRD.
-    // $value is the raw NUT status string (e.g. 'OL', 'OB'); $mapping translates it
-    // to a numeric value for storage. sensor_prev is also updated so state-change
-    // event logging works correctly on the next poll.
-    private function updateStateSensor(Sensor $sensor, string $value, ?array $mapping): void
+    // sensor_prev must be saved before overwriting sensor_current so state-change
+    // event logging can detect transitions on the next poll.
+    private function updateStateSensorValue(Sensor $sensor, ?int $value): void
     {
-        // Map NUT status string to numeric state value (e.g. 'OL' -> 1)
-        $currentValue = $mapping[$value]['value'] ?? 1;
-
+        $currentValue = $value ?? -1;
         $sensor->sensor_current = $currentValue;
-        $sensor->sensor_prev = $currentValue;
         $sensor->save();
 
         $tags = [
@@ -658,12 +600,12 @@ class NutPoller
         app('Datastore')->put($this->device, 'sensor', $tags, ['sensor' => $currentValue]);
     }
 
-    private function RrdWriteStats(string $upsName, array $data): void
+    private function RrdWriteStats(string $upsID, array $data): void
     {
         $writer = new NutRrdWriter();
         $fields = $writer->buildFields($data);
-        $tags = ['rrd_name' => ['app', 'ups-nut', $this->app->app_id, $upsName]];
+        $tags = ['rrd_name' => ['app', 'ups-nut', $this->app->app_id, $upsID]];
 
-        $writer->write($this->device, 'ups-nut', $this->app->app_id, $upsName, $fields, $tags);
+        $writer->write($this->device, 'ups-nut', $this->app->app_id, $upsID, $fields, $tags);
     }
 }

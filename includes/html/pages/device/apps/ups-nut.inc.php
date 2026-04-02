@@ -53,20 +53,21 @@ echo '<style>
 </style>';
 
 // Keys are numeric sensor_current values from NutPoller::STATE_MAPPING
+// Keyed by NUT status string from ups.status (e.g. 'OL', 'OB')
 $stateMapping = [
-    1  => 'Online',
-    2  => 'On Battery',
-    3  => 'Battery Low',
-    4  => 'Battery High',
-    5  => 'Replace Battery',
-    6  => 'Charging',
-    7  => 'Discharging',
-    8  => 'Bypass',
-    9  => 'Overload',
-    10 => 'Trim Voltage',
-    11 => 'Boost Voltage',
-    12 => 'Alarm',
-    13 => 'Forced Shutdown',
+    'OL'     => 'Online',
+    'OB'     => 'On Battery',
+    'LB'     => 'Battery Low',
+    'HB'     => 'Battery High',
+    'RB'     => 'Replace Battery',
+    'CHRG'   => 'Charging',
+    'DISCHRG' => 'Discharging',
+    'BYPASS' => 'Bypass',
+    'OVER'   => 'Overload',
+    'TRIM'   => 'Trim',
+    'BOOST'  => 'Boost',
+    'ALARM'  => 'Alarm',
+    'FSD'    => 'Forced Shutdown',
 ];
 
 $beeperMapping = [

@@ -23,17 +23,26 @@
 
 use LibreNMS\RRD\RrdDefinition;
 
-function nut_clean_db(int $device_id, App\Models\Application $app): void
-{
-    echo "Cleaning {$app} database for device_id=$device_id, app_id={$app->app_id}\n";
 
-    // Delete NUT sensors (sensor_class in relevant classes)
+// $oidPattern: SQL LIKE pattern for sensor_oid, defaults to all NUT sensors.
+//   Pass e.g. 'app:nut:eaton_3s_%' to restrict deletion to one UPS.
+function nut_clean_db(int $device_id, App\Models\Application $app, string $oidPattern = 'app:nut:%'): void
+{
+    echo "Cleaning {$app} database for device_id=$device_id, app_id={$app->app_id}, pattern={$oidPattern}\n";
+
+    // Delete NUT v2 app sensors matching the given sensor_oid pattern
+    $appSensors = App\Models\Sensor::where('device_id', $device_id)
+        ->where('sensor_oid', 'like', $oidPattern)
+        ->delete();
+    echo "Deleted $appSensors NUT app sensors\n";
+
+    // Delete legacy NUT sensors (sensor_class in relevant classes)
     $sensor_classes = ['charge', 'load', 'runtime', 'voltage', 'power', 'frequency', 'state'];
-    $sensors = App\Models\Sensor::where('device_id', $device_id)
+    $legacySensors = App\Models\Sensor::where('device_id', $device_id)
         ->whereIn('sensor_class', $sensor_classes)
         ->where('poller_type', '!=', 'app')
         ->delete();
-    echo "Deleted $sensors legacy NUT sensors\n";
+    echo "Deleted $legacySensors legacy NUT sensors\n";
 
     // Reset app data using direct DB update to bypass Eloquent casts
     Illuminate\Support\Facades\DB::table('applications')
@@ -45,17 +54,12 @@ function nut_clean_db(int $device_id, App\Models\Application $app): void
 
     echo "Done cleaning {$app->app_name} database\n";
 }
-
 //nut_clean_db($device['device_id'], $app);
-
-
 
 // Check for NUT v2 agent data
 // First check if agent_data has the JSON, otherwise rely on json_app_get
 
 // Debug: Show full agent_data structure
-
-
 
 // Try to get data via json_app_get (SNMP)
 try {
@@ -68,7 +72,7 @@ try {
 } catch (Exception $e) {
 
 }
-log::warning("ups-nut: json_app_get did not return valid data for device_id={$device['device_id']}, falling back to legacy SNMP polling");
+echo ("ups-nut: json_app_get did not return valid data for device_id={$device['device_id']}, falling back to legacy SNMP polling");
 
 // (2016-11-25, R.Morris) ups-nut, try "extend" -> if not, fall back to "exec" support.
 // -> Similar to approach used by Distro, but skip "legacy UCD-MIB shell support"
