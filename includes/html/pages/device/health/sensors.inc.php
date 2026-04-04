@@ -7,13 +7,70 @@ $row = 0;
 $unit ??= $class->unit();
 $graph_type ??= 'sensor_' . $class->value;
 
-$sensors = \App\Models\Sensor::where('sensor_class', $class)->where('device_id', $device['device_id'])->orderBy('sensor_descr')->get();
+// Sort by group path first so sensors in the same hierarchy are adjacent, then by
+// sensor_descr within each group.  The original sort was sensor_descr only.
+$sensors = App\Models\Sensor::where('sensor_class', $class)->where('device_id', $device['device_id'])->orderBy('group')->orderBy('sensor_descr')->get();
+
+// Build lookup tables for group heading suppression logic.
+// See sensor.inc.php (overview) for the full explanation; same rules apply here.
+$groupCounts = [];      // exact group string → sensor count
+$groupHasChildren = []; // group string → true when a deeper sub-path exists
 
 foreach ($sensors as $sensor) {
+    $g = $sensor->group ?? '';
+    $groupCounts[$g] = ($groupCounts[$g] ?? 0) + 1;
+    $parts = $g !== '' ? explode('::', $g) : [];
+    for ($i = 0; $i < count($parts) - 1; $i++) {
+        $ancestor = implode('::', array_slice($parts, 0, $i + 1));
+        $groupHasChildren[$ancestor] = true;
+    }
+}
+
+// Suppress a heading when the group has exactly one sensor and no child groups.
+$isGroupSuppressed = function (string $groupPath) use ($groupCounts, $groupHasChildren): bool {
+    if ($groupPath === '') {
+        return true;
+    }
+
+    return ($groupCounts[$groupPath] ?? 0) === 1 && empty($groupHasChildren[$groupPath]);
+};
+
+// Tracks which heading levels have already been rendered for the current position
+// in the sorted list.  Reset at each depth where the path changes.
+$currentPath = [];
+
+foreach ($sensors as $sensor) {
+    $groupStr = $sensor->group ?? '';
+    // Split '::'-separated group path into level names.
+    $parts = $groupStr !== '' ? explode('::', $groupStr) : [];
+
+    // Emit section heading divs for every path level that changed since the last
+    // sensor.  Depth 0 uses <h4>, deeper levels use <h5>; each is indented by
+    // 16 px per level so nested groups are visually distinct.
+    for ($depth = 0; $depth < count($parts); $depth++) {
+        if (($currentPath[$depth] ?? null) !== $parts[$depth]) {
+            $currentPath = array_slice($currentPath, 0, $depth);
+            for ($d = $depth; $d < count($parts); $d++) {
+                $pathToHere = implode('::', array_slice($parts, 0, $d + 1));
+                if (! $isGroupSuppressed($pathToHere)) {
+                    $marginLeft = $d * 16;
+                    $headingSize = $d === 0 ? 'h4' : 'h5';
+                    echo "<div style='margin-left:{$marginLeft}px; margin-top: 8px; margin-bottom: 4px;'>"
+                        . "<{$headingSize} class='section-heading'>{$parts[$d]}</{$headingSize}>"
+                        . '</div>';
+                }
+                $currentPath[$d] = $parts[$d];
+            }
+            break;
+        }
+    }
+    // Note: sensor_descr is NOT stripped on this page.  The full name is always shown
+    // because panels here appear without persistent group heading context.
+
     if (! is_int($row++ / 2)) {
-        $row_colour = \App\Facades\LibrenmsConfig::get('list_colour.even');
+        $row_colour = App\Facades\LibrenmsConfig::get('list_colour.even');
     } else {
-        $row_colour = \App\Facades\LibrenmsConfig::get('list_colour.odd');
+        $row_colour = App\Facades\LibrenmsConfig::get('list_colour.odd');
     }
 
     if ($sensor['poller_type'] == 'ipmi') {
