@@ -1,10 +1,12 @@
 <?php
+
 /* LibreNMS Disk Type Filter Utility
  *
  * This utility class provides disk drive classification and filtering functionality for the
  * Disk Type monitoring pages. It categorizes drives into physical/logical views with specific
  * subtypes based on naming patterns.
  */
+
 namespace LibreNMS\Util;
 
 final class DiskTypeFilter
@@ -57,8 +59,7 @@ final class DiskTypeFilter
             || preg_match('/^nvme\d+n\d+p\d+$/i', $diskName)
             || preg_match('/^mmcblk\d+p\d+$/i', $diskName)
             // Unix/FreeBSD/OpenBSD/NetBSD: da0p1, da0s1a, wd0d, ad0s1e, etc.
-            || preg_match('/^(da|wd|ad|cd|fd|md|gm|vn)\d+[sp]\d+/i', $diskName))
-            {
+            || preg_match('/^(da|wd|ad|cd|fd|md|gm|vn)\d+[sp]\d+/i', $diskName)) {
             return ['view' => 'logical', 'subtype' => 'partitions'];
         }
         // - Linux physical drive families: sd*, hd*, vd*, xvd* (covers most SCSI/SATA, IDE, and virtio block devices)
@@ -74,6 +75,7 @@ final class DiskTypeFilter
         if (preg_match('/^mmcblk\d+$/i', $diskName)) {
             return ['view' => 'physical', 'subtype' => 'mmcblk'];
         }
+
         // ## Unix/FreeBSD/OpenBSD/NetBSD physical drives, nummber is whole disk.
         // mostly legacy patterns but can still be found in use: cd0, fd0, md0, gm0, vn0, etc.
         // no need to do since the default case will catch these and classify as physical/other, but leaving here for clarity and potential future subtype classification if desired.
@@ -83,6 +85,7 @@ final class DiskTypeFilter
         // default classification for anything that doesn't match above patterns
         return ['view' => 'physical', 'subtype' => 'other'];
     }
+
     public static function matches(array $diskType, string $selectedView, string $selectedSubtype): bool
     {
         if ($selectedView !== 'all' && $diskType['view'] !== $selectedView) {
