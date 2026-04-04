@@ -4,19 +4,24 @@ namespace LibreNMS\Polling\Modules;
 
 use App\Models\Sensor;
 use App\Models\SensorToStateIndex;
-use App\Models\StateIndex;
 use App\Models\StateTranslation;
-use Illuminate\Support\Collection;
+use LibreNMS\Enum\Severity;
+use LibreNMS\RRD\RrdDefinition;
 
 /**
- * BtrfsSensorSync handles CRUD operations for btrfs synthetic sensors.
+ * BtrfsSensorSync handles sensor creation, update, and deletion for btrfs sensors.
  *
  * Sensor types:
- * - state: IO/Scrub/Balance status sensors (linked to state_indexes)
- * - count: IO error count sensors with warn/error thresholds
+ * - state: IO/Scrub/Balance status sensors — poller_type='agent', sensor_type = unique btrfs state name
+ * - count: IO error count sensors — poller_type='agent', sensor_type = COUNT_SENSOR_IO_ERRORS
  *
- * All operations are idempotent and keyed by (device_id, sensor_class,
- * poller_type, sensor_type, sensor_index).
+ * Discovery uses the app('sensor-discovery') pipeline:
+ *   discoverStateSensor() / discoverCountSensor() → buffer sensors
+ *   syncDiscoveredSensors()                       → creates new, updates existing, deletes removed
+ *
+ * Polling updates values directly:
+ *   writeStateSensorRrd()    — updates sensor_current in DB + writes RRD (every poll)
+ *   updateCountSensorValue() — updates sensor_current in DB + writes RRD (every poll)
  */
 class BtrfsSensorSync
 {
@@ -31,288 +36,165 @@ class BtrfsSensorSync
     public const COUNT_SENSOR_WARN_LEVEL = 5;
     public const COUNT_SENSOR_ERROR_LEVEL = 10;
 
-    private BtrfsStatusMapper $statusMapper;
-    private array $stateSensorTypes;
-    private array $countSensorTypes;
+    private const STATE_SENSOR_TYPES = [
+        self::STATE_SENSOR_IO,
+        self::STATE_SENSOR_SCRUB,
+        self::STATE_SENSOR_SCRUB_OPS,
+        self::STATE_SENSOR_BALANCE,
+    ];
 
-    public function __construct(BtrfsStatusMapper $statusMapper)
+    private const COUNT_SENSOR_TYPES = [
+        self::COUNT_SENSOR_IO_ERRORS,
+        self::LEGACY_COUNT_SENSOR_IO_ERRORS,
+    ];
+
+    // ==========================================================================
+    // Discovery — buffer sensors and sync to DB
+    // ==========================================================================
+
+    /**
+     * Reset the sensor-discovery singleton so sensors from other modules
+     * do not bleed into this app's sync() calls.
+     * Call once before any discoverStateSensor() / discoverCountSensor() calls.
+     */
+    public function resetDiscoveryBuffer(): void
     {
-        $this->statusMapper = $statusMapper;
-        $this->stateSensorTypes = [
-            self::STATE_SENSOR_IO,
-            self::STATE_SENSOR_SCRUB,
-            self::STATE_SENSOR_SCRUB_OPS,
-            self::STATE_SENSOR_BALANCE,
-        ];
-        $this->countSensorTypes = [
-            self::COUNT_SENSOR_IO_ERRORS,
-            self::LEGACY_COUNT_SENSOR_IO_ERRORS,
-        ];
-    }
-
-    public function ensureStateIndexes(): array
-    {
-        $indexes = [];
-
-        foreach ($this->stateSensorTypes as $sensor_type) {
-            $states = $sensor_type === self::STATE_SENSOR_SCRUB_OPS
-                ? $this->statusMapper->getScrubOpsStates()
-                : $this->statusMapper->getStatusStates();
-            $indexes[$sensor_type] = $this->ensureStateIndex($sensor_type, $states);
-        }
-
-        return $indexes;
-    }
-
-    private function ensureStateIndex(string $state_name, array $states): ?int
-    {
-        /** @var ?StateIndex $stateIndex */
-        $stateIndex = StateIndex::firstOrCreate(['state_name' => $state_name]);
-        $state_index_id = $stateIndex->state_index_id;
-        $created_index = $stateIndex->wasRecentlyCreated;
-
-        if ($state_index_id === null || $state_index_id === 0) {
-            return null;
-        }
-
-        $existing_translations = $stateIndex->translations()->get()->keyBy('state_value');
-
-        $created = 0;
-        $updated = 0;
-
-        foreach ($states as $state) {
-            $state_value = (int) $state['value'];
-            /** @var ?StateTranslation $existing */
-            $existing = $existing_translations->get($state_value);
-            $translation_data = [
-                'state_descr' => $state['descr'],
-                'state_draw_graph' => $state['graph'],
-                'state_value' => $state_value,
-                'state_generic_value' => $state['generic'],
-            ];
-
-            if ($existing) {
-                $needs_update = $existing->state_descr !== $translation_data['state_descr']
-                    || $existing->state_draw_graph !== $translation_data['state_draw_graph']
-                    || $existing->state_generic_value !== $translation_data['state_generic_value'];
-
-                if ($needs_update) {
-                    $existing->update($translation_data);
-                    $updated++;
-                }
-            } else {
-                $stateIndex->translations()->create([
-                    'state_descr' => $state['descr'],
-                    'state_draw_graph' => $state['graph'],
-                    'state_value' => $state_value,
-                    'state_generic_value' => $state['generic'],
-                ]);
-                $created++;
-            }
-        }
-
-        if ($created_index || $created > 0 || $updated > 0) {
-            echo ' btrfs-state: ' . $state_name
-                . ' index=' . (int) $state_index_id
-                . ' created_index=' . ($created_index ? 'yes' : 'no')
-                . ' created=' . $created
-                . ' updated=' . $updated . PHP_EOL;
-        }
-
-        return (int) $state_index_id;
-    }
-
-    public function upsertStateSensor(
-        array $device,
-        string $sensor_index,
-        string $sensor_type,
-        string $sensor_descr,
-        int $sensor_current,
-        ?int $state_index_id,
-        string $sensor_group
-    ): void {
-        $sensor = $this->findOrCreateStateSensor($device, $sensor_index, $sensor_type, $sensor_descr, $sensor_current, $sensor_group);
-
-        if (! $state_index_id) {
-            return;
-        }
-
-        $this->syncSensorStateIndex($sensor, $state_index_id);
+        app()->forgetInstance('sensor-discovery');
     }
 
     /**
-     * Write the RRD value for a state sensor. Called every poll regardless of
-     * structure changes, so the sensor graph always reflects the current status.
+     * Buffer a state sensor in the discovery singleton.
+     * Call syncDiscoveredSensors() after all sensors are buffered.
      */
-    public function writeStateSensorRrd(array $device, string $sensor_index, string $sensor_type, string $sensor_descr, int $sensor_current): void
-    {
-        $this->writeSensorRrd($device, 'state', $sensor_type, $sensor_index, $sensor_descr, (float) $sensor_current);
-    }
-
-    private function findOrCreateStateSensor(
+    public function discoverStateSensor(
         array $device,
-        string $sensor_index,
-        string $sensor_type,
-        string $sensor_descr,
-        int $sensor_current,
-        string $sensor_group
-    ): Sensor {
-        return Sensor::withoutGlobalScopes()->updateOrCreate(
-            [
-                'device_id' => $device['device_id'],
-                'sensor_class' => 'state',
-                'poller_type' => 'agent',
-                'sensor_type' => $sensor_type,
-                'sensor_index' => $sensor_index,
-            ],
-            [
-                'sensor_oid' => 'app:btrfs:' . $sensor_index,
-                'sensor_descr' => $sensor_descr,
-                'sensor_divisor' => 1,
-                'sensor_multiplier' => 1,
-                'sensor_current' => $sensor_current,
-                'group' => $sensor_group,
-                'rrd_type' => 'GAUGE',
-            ]
-        );
+        string $sensorIndex,
+        string $sensorType,
+        string $sensorDescr,
+        int $sensorCurrent,
+        string $sensorGroup
+    ): void {
+        $translations = $sensorType === self::STATE_SENSOR_SCRUB_OPS
+            ? $this->getScrubOpsTranslations()
+            : $this->getStatusTranslations();
+
+        app('sensor-discovery')
+            ->discover(new Sensor([
+                'device_id'          => $device['device_id'],
+                'sensor_class'       => 'state',
+                'poller_type'        => 'agent',
+                'sensor_type'        => $sensorType,
+                'sensor_index'       => $sensorIndex,
+                'sensor_oid'         => 'app:btrfs:' . $sensorIndex,
+                'sensor_descr'       => $sensorDescr,
+                'sensor_current'     => $sensorCurrent,
+                'sensor_divisor'     => 1,
+                'sensor_multiplier'  => 1,
+                'group'              => $sensorGroup,
+            ]))
+            ->withStateTranslations($sensorType, $translations);
     }
 
-    private function syncSensorStateIndex(Sensor $sensor, int $state_index_id): void
-    {
-        /** @var ?SensorToStateIndex $link */
-        $link = SensorToStateIndex::where('sensor_id', $sensor->sensor_id)->first();
+    /**
+     * Buffer a count sensor in the discovery singleton.
+     * Call syncDiscoveredSensors() after all sensors are buffered.
+     */
+    public function discoverCountSensor(
+        array $device,
+        string $sensorIndex,
+        string $sensorDescr,
+        float $sensorCurrent,
+        string $sensorGroup
+    ): void {
+        app('sensor-discovery')->discover(new Sensor([
+            'device_id'          => $device['device_id'],
+            'sensor_class'       => 'count',
+            'poller_type'        => 'agent',
+            'sensor_type'        => self::COUNT_SENSOR_IO_ERRORS,
+            'sensor_index'       => $sensorIndex,
+            'sensor_oid'         => 'app:btrfs:' . $sensorIndex,
+            'sensor_descr'       => $sensorDescr,
+            'sensor_current'     => $sensorCurrent,
+            'sensor_limit_warn'  => self::COUNT_SENSOR_WARN_LEVEL,
+            'sensor_limit'       => self::COUNT_SENSOR_ERROR_LEVEL,
+            'sensor_divisor'     => 1,
+            'sensor_multiplier'  => 1,
+            'group'              => $sensorGroup,
+        ]));
+    }
 
-        if ($link) {
-            $link->update(['state_index_id' => $state_index_id]);
-        } else {
-            SensorToStateIndex::create([
-                'sensor_id' => $sensor->sensor_id,
-                'state_index_id' => $state_index_id,
-            ]);
+    /**
+     * Sync all buffered sensors to the DB: creates new sensors, updates existing
+     * ones, and deletes sensors whose indexes are no longer in the buffer.
+     * One sync() call per sensor_type scopes the delete to that type only.
+     * Must be called after all discoverStateSensor() / discoverCountSensor() calls.
+     */
+    public function syncDiscoveredSensors(): void
+    {
+        foreach (self::STATE_SENSOR_TYPES as $sensorType) {
+            app('sensor-discovery')->sync(sensor_type: $sensorType);
         }
+        app('sensor-discovery')->sync(sensor_type: self::COUNT_SENSOR_IO_ERRORS);
     }
 
-    public function deleteStateSensor(array $device, string $sensor_index, string $sensor_type): void
-    {
-        $this->findStateSensor($device, $sensor_index, $sensor_type)?->delete();
-    }
+    // ==========================================================================
+    // Polling — update values every poll
+    // ==========================================================================
 
-    private function findStateSensor(array $device, string $sensor_index, string $sensor_type): ?Sensor
+    /**
+     * Update sensor_current in the DB and write the RRD for a state sensor.
+     * Called every poll so graphs and alert evaluations stay current.
+     * sensor_current is stored directly; the RRD writer receives the same value.
+     */
+    public function writeStateSensorRrd(array $device, string $sensorIndex, string $sensorType, string $sensorDescr, int $sensorCurrent): void
     {
-        return Sensor::withoutGlobalScopes()
+        Sensor::withoutGlobalScopes()
             ->where('device_id', $device['device_id'])
             ->where('sensor_class', 'state')
             ->where('poller_type', 'agent')
-            ->where('sensor_type', $sensor_type)
-            ->where('sensor_index', $sensor_index)
-            ->first();
+            ->where('sensor_type', $sensorType)
+            ->where('sensor_index', $sensorIndex)
+            ->update(['sensor_current' => $sensorCurrent]);
+
+        $this->writeSensorRrd($device, 'state', $sensorType, $sensorIndex, $sensorDescr, (float) $sensorCurrent);
     }
 
-    public function upsertCountSensor(
+    /**
+     * Update sensor_current in the DB and write the RRD for a count sensor.
+     * Called every poll to keep the error count current.
+     */
+    public function updateCountSensorValue(
         array $device,
-        string $sensor_index,
-        string $sensor_type,
-        string $sensor_descr,
-        float $sensor_current,
-        string $sensor_group
+        string $sensorIndex,
+        string $sensorDescr,
+        float $sensorCurrent
     ): void {
-        $this->findOrCreateCountSensor($device, $sensor_index, $sensor_type, $sensor_descr, $sensor_current, $sensor_group);
-
-        $this->writeSensorRrd($device, 'count', $sensor_type, $sensor_index, $sensor_descr, $sensor_current);
-    }
-
-    private function findOrCreateCountSensor(
-        array $device,
-        string $sensor_index,
-        string $sensor_type,
-        string $sensor_descr,
-        float $sensor_current,
-        string $sensor_group
-    ): Sensor {
-        return Sensor::withoutGlobalScopes()->updateOrCreate(
-            [
-                'device_id' => $device['device_id'],
-                'sensor_class' => 'count',
-                'poller_type' => 'agent',
-                'sensor_type' => $sensor_type,
-                'sensor_index' => $sensor_index,
-            ],
-            [
-                'sensor_oid' => 'app:btrfs:' . $sensor_index,
-                'sensor_descr' => $sensor_descr,
-                'sensor_divisor' => 1,
-                'sensor_multiplier' => 1,
-                'sensor_current' => $sensor_current,
-                'sensor_limit_warn' => self::COUNT_SENSOR_WARN_LEVEL,
-                'sensor_limit' => self::COUNT_SENSOR_ERROR_LEVEL,
-                'group' => $sensor_group,
-                'rrd_type' => 'GAUGE',
-            ]
-        );
-    }
-
-    private function writeSensorRrd(array $device, string $sensor_class, string $sensor_type, string $sensor_index, string $sensor_descr, float $sensor_current): void
-    {
-        $sensor_rrd_def = \LibreNMS\RRD\RrdDefinition::make()->addDataset('sensor', 'GAUGE');
-
-        app('Datastore')->put($device, 'sensor', [
-            'sensor_class' => $sensor_class,
-            'sensor_type' => $sensor_type,
-            'sensor_index' => $sensor_index,
-            'sensor_descr' => $sensor_descr,
-            'rrd_def' => $sensor_rrd_def,
-            'rrd_name' => ['sensor', $sensor_class, $sensor_type, $sensor_index],
-        ], ['sensor' => $sensor_current]);
-    }
-
-    public function cleanupObsoleteCountSensors(array $device, array $expected_sensor_indexes): void
-    {
-        $this->findObsoleteCountSensors($device, $expected_sensor_indexes)
-            ->each(fn (Sensor $sensor) => $sensor->delete());
-    }
-
-    private function findObsoleteCountSensors(array $device, array $expected_sensor_indexes): Collection
-    {
-        return Sensor::withoutGlobalScopes()
+        Sensor::withoutGlobalScopes()
             ->where('device_id', $device['device_id'])
             ->where('sensor_class', 'count')
             ->where('poller_type', 'agent')
-            ->whereIn('sensor_type', $this->countSensorTypes)
-            ->get()
-            ->filter(function (Sensor $sensor) use ($expected_sensor_indexes) {
-                return ! isset($expected_sensor_indexes[$sensor->sensor_type][$sensor->sensor_index]);
-            });
+            ->where('sensor_type', self::COUNT_SENSOR_IO_ERRORS)
+            ->where('sensor_index', $sensorIndex)
+            ->update(['sensor_current' => $sensorCurrent]);
+
+        $this->writeSensorRrd($device, 'count', self::COUNT_SENSOR_IO_ERRORS, $sensorIndex, $sensorDescr, $sensorCurrent);
     }
 
-    public function cleanupObsoleteStateSensors(array $device, array $expected_sensor_indexes): void
-    {
-        $this->findObsoleteStateSensors($device, $expected_sensor_indexes)
-            ->each(function (Sensor $sensor) {
-                SensorToStateIndex::where('sensor_id', $sensor->sensor_id)->delete();
-                $sensor->delete();
-            });
-    }
+    // ==========================================================================
+    // Cleanup
+    // ==========================================================================
 
-    private function findObsoleteStateSensors(array $device, array $expected_sensor_indexes): Collection
-    {
-        return Sensor::withoutGlobalScopes()
-            ->where('device_id', $device['device_id'])
-            ->where('sensor_class', 'state')
-            ->where('poller_type', 'agent')
-            ->whereIn('sensor_type', $this->stateSensorTypes)
-            ->get()
-            ->filter(function (Sensor $sensor) use ($expected_sensor_indexes) {
-                return ! isset($expected_sensor_indexes[$sensor->sensor_type][$sensor->sensor_index]);
-            });
-    }
-
+    /**
+     * Delete all btrfs state and count sensors for a device.
+     * Called when the agent payload version is unsupported or invalid.
+     */
     public function deleteAllStateAndCountSensors(array $device): void
     {
         $stateSensors = Sensor::withoutGlobalScopes()
             ->where('device_id', $device['device_id'])
             ->where('sensor_class', 'state')
             ->where('poller_type', 'agent')
-            ->whereIn('sensor_type', $this->stateSensorTypes)
+            ->whereIn('sensor_type', self::STATE_SENSOR_TYPES)
             ->get();
 
         $stateSensorIds = $stateSensors->pluck('sensor_id');
@@ -326,17 +208,60 @@ class BtrfsSensorSync
             ->where('device_id', $device['device_id'])
             ->where('sensor_class', 'count')
             ->where('poller_type', 'agent')
-            ->whereIn('sensor_type', $this->countSensorTypes)
+            ->whereIn('sensor_type', self::COUNT_SENSOR_TYPES)
             ->delete();
     }
 
-    public function getStateSensorTypes(): array
+    // ==========================================================================
+    // Internals
+    // ==========================================================================
+
+    private function writeSensorRrd(array $device, string $sensorClass, string $sensorType, string $sensorIndex, string $sensorDescr, float $sensorCurrent): void
     {
-        return $this->stateSensorTypes;
+        app('Datastore')->put($device, 'sensor', [
+            'sensor_class' => $sensorClass,
+            'sensor_type'  => $sensorType,
+            'sensor_index' => $sensorIndex,
+            'sensor_descr' => $sensorDescr,
+            'rrd_def'      => RrdDefinition::make()->addDataset('sensor', 'GAUGE'),
+            'rrd_name'     => ['sensor', $sensorClass, $sensorType, $sensorIndex],
+        ], ['sensor' => $sensorCurrent]);
     }
 
-    public function getCountSensorTypes(): array
+    /**
+     * State translations for IO, Scrub, and Balance status sensors.
+     *
+     * Maps BtrfsStatusMapper status codes to LibreNMS severity levels:
+     *   STATUS_UNKNOWN (-1) / STATUS_NA (2) → Unknown
+     *   STATUS_OK      (0)                  → Ok
+     *   STATUS_RUNNING (1)                  → Warning
+     *   STATUS_ERROR   (3)                  → Error
+     *   STATUS_MISSING (4)                  → Error
+     *
+     * @return StateTranslation[]
+     */
+    private function getStatusTranslations(): array
     {
-        return $this->countSensorTypes;
+        return [
+            StateTranslation::define('N/A', BtrfsStatusMapper::STATUS_UNKNOWN, Severity::Unknown),
+            StateTranslation::define('OK', BtrfsStatusMapper::STATUS_OK, Severity::Ok),
+            StateTranslation::define('Running', BtrfsStatusMapper::STATUS_RUNNING, Severity::Warning),
+            StateTranslation::define('N/A', BtrfsStatusMapper::STATUS_NA, Severity::Unknown),
+            StateTranslation::define('Error', BtrfsStatusMapper::STATUS_ERROR, Severity::Error),
+            StateTranslation::define('Missing', BtrfsStatusMapper::STATUS_MISSING, Severity::Error),
+        ];
+    }
+
+    /**
+     * State translations for the Scrub Ops sensor.
+     *
+     * @return StateTranslation[]
+     */
+    private function getScrubOpsTranslations(): array
+    {
+        return [
+            StateTranslation::define('Idle', 0, Severity::Ok),
+            StateTranslation::define('Running', 1, Severity::Warning),
+        ];
     }
 }

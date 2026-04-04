@@ -62,10 +62,13 @@ class BtrfsDiscovery
         // Snapshot the current filesystem+device structure for change detection
         $currentFilesystems = $this->buildFilesystemState($currentFsByMountpoint, $tables, $fsList);
 
-        // Detect and log add/remove events, then clean up stale DB entries
+        // Reset the discovery buffer so sensors from other modules do not bleed into sync().
+        $this->sensorSync->resetDiscoveryBuffer();
+
+        // Detect and log add/remove events, then sync sensors for the current topology.
         $this->discoverFilesystems($device, array_keys($previousFilesystems), array_keys($currentFilesystems));
         $this->discoverDevices($device, $previousFilesystems, $currentFilesystems);
-        $this->cleanupObsoleteSensors($device, $currentFilesystems);
+        $this->discoverExpectedSensors($device, $currentFilesystems);
 
         $discovery['last_run'] = time();
         $discovery['counters'] = $currentCounters;
@@ -372,53 +375,52 @@ class BtrfsDiscovery
     }
 
     /**
-     * Clean up obsolete sensors.
+     * Discover all sensors expected for the current filesystem/device topology.
+     *
+     * Buffers every sensor into the app('sensor-discovery') singleton using placeholder
+     * values; the polling loop overwrites sensor_current with the real value each poll.
+     * After all sensors are buffered, syncDiscoveredSensors() creates new sensors,
+     * updates existing ones, and deletes any whose indexes are no longer present.
      */
-    private function cleanupObsoleteSensors(array $device, array $currentFilesystems): void
+    private function discoverExpectedSensors(array $device, array $currentFilesystems): void
     {
-        App_log::section('Discovery: CLEANUP');
+        App_log::section('Discovery: SENSORS');
 
-        // Build the set of sensor indexes that should exist for the current topology.
-        // SensorSync will delete any DB rows whose index is NOT in these sets.
-        $expectedStateIndexes = [
-            BtrfsSensorSync::STATE_SENSOR_IO => [],
-            BtrfsSensorSync::STATE_SENSOR_SCRUB => [],
-            BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS => [],
-            BtrfsSensorSync::STATE_SENSOR_BALANCE => [],
-        ];
-        $expectedCountIndexes = [
-            BtrfsSensorSync::COUNT_SENSOR_IO_ERRORS => [],
-        ];
+        $sensorCount = 0;
 
-        foreach ($currentFilesystems as $fsName => $fsData) {
+        foreach ($currentFilesystems as $fsData) {
             $rrdId = $fsData['rrd_key'];
             if ($rrdId === '') {
                 continue;
             }
 
-            // Filesystem-level sensors
-            $expectedStateIndexes[BtrfsSensorSync::STATE_SENSOR_IO]["$rrdId.io"] = true;
-            $expectedStateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB]["$rrdId.scrub"] = true;
-            $expectedStateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS]["$rrdId.scrub_ops"] = true;
-            $expectedStateIndexes[BtrfsSensorSync::STATE_SENSOR_BALANCE]["$rrdId.balance"] = true;
-            $expectedCountIndexes[BtrfsSensorSync::COUNT_SENSOR_IO_ERRORS][$rrdId] = true;
+            $label = $fsData['label'] ?? '';
+            $mountpoint = $fsData['mountpoint'] ?? '';
+            $displayName = $label !== '' ? $label : ($mountpoint === '/' ? 'root' : $mountpoint);
 
-            // Per-device sensors (IO and scrub state, IO error count)
+            // Filesystem-level state sensors (placeholder value -1; polling overwrites each poll).
+            $this->sensorSync->discoverStateSensor($device, "$rrdId.io", BtrfsSensorSync::STATE_SENSOR_IO, "$displayName IO", BtrfsStatusMapper::STATUS_NA, 'btrfs filesystems');
+            $this->sensorSync->discoverStateSensor($device, "$rrdId.scrub", BtrfsSensorSync::STATE_SENSOR_SCRUB, "$displayName Scrub", BtrfsStatusMapper::STATUS_NA, 'btrfs filesystems');
+            $this->sensorSync->discoverStateSensor($device, "$rrdId.scrub_ops", BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS, "$displayName Scrub Ops", BtrfsStatusMapper::STATUS_NA, 'btrfs filesystems');
+            $this->sensorSync->discoverStateSensor($device, "$rrdId.balance", BtrfsSensorSync::STATE_SENSOR_BALANCE, "$displayName Balance", BtrfsStatusMapper::STATUS_NA, 'btrfs filesystems');
+
+            // Filesystem-level IO error count sensor.
+            $this->sensorSync->discoverCountSensor($device, $rrdId, "$displayName IO Errors", 0, 'btrfs filesystem errors');
+            $sensorCount += 5;
+
+            // Per-device sensors.
             foreach ($fsData['devices'] as $devId => $devPath) {
-                $expectedStateIndexes[BtrfsSensorSync::STATE_SENSOR_IO]["$rrdId.dev.$devId.io"] = true;
-                $expectedStateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB]["$rrdId.dev.$devId.scrub"] = true;
-                $expectedCountIndexes[BtrfsSensorSync::COUNT_SENSOR_IO_ERRORS]["$rrdId.dev.$devId"] = true;
+                $this->sensorSync->discoverStateSensor($device, "$rrdId.dev.$devId.io", BtrfsSensorSync::STATE_SENSOR_IO, "$displayName $devPath IO", BtrfsStatusMapper::STATUS_NA, 'btrfs devices');
+                $this->sensorSync->discoverStateSensor($device, "$rrdId.dev.$devId.scrub", BtrfsSensorSync::STATE_SENSOR_SCRUB, "$displayName $devPath Scrub", BtrfsStatusMapper::STATUS_NA, 'btrfs devices');
+                $this->sensorSync->discoverCountSensor($device, "$rrdId.dev.$devId", "$displayName $devPath IO Errors", 0, 'btrfs device errors');
+                $sensorCount += 3;
             }
         }
 
-        App_log::warning('Expected sensors built', [
-            'state_count' => count($expectedStateIndexes[BtrfsSensorSync::STATE_SENSOR_IO]),
-            'count_count' => count($expectedCountIndexes[BtrfsSensorSync::COUNT_SENSOR_IO_ERRORS]),
-        ]);
+        App_log::info('Sensors discovered', ['count' => $sensorCount]);
 
-        // Remove any sensors whose index no longer appears in the expected sets
-        $this->sensorSync->cleanupObsoleteStateSensors($device, $expectedStateIndexes);
-        $this->sensorSync->cleanupObsoleteCountSensors($device, $expectedCountIndexes);
+        // Sync: creates new sensors, updates existing, deletes sensors not in the buffer.
+        $this->sensorSync->syncDiscoveredSensors();
     }
 }
 
@@ -457,10 +459,6 @@ class BtrfsPoller
 
     // Parsed JSON payload from the btrfs agent; set in fetchPayload().
     private array $appPayload = [];
-
-    // True when filesystem/device counts match the cached discovery snapshot and no
-    // per-filesystem structural changes were detected; used to skip sensor upserts.
-    private bool $structureUnchanged = false;
 
     // Accumulator: the app->data structure being built for this poll. Persisted to
     // the DB at the end of polling via $this->app->data = $this->newData.
@@ -505,6 +503,10 @@ class BtrfsPoller
 
         // Attempt to fetch and parse the JSON payload from the btrfs agent.
         // Returns the btrfs agent protocol version on success, or false on any failure.
+        // Initialise reference parameters before the call — PHP requires the caller's variable
+        // to already be an array when passed by reference.
+        $agentOutput = [];
+        $oldData = [];
         $fetchResult = $this->fetchPayload($agentOutput, $oldData);
         if ($fetchResult === false) {
             return;
@@ -517,12 +519,8 @@ class BtrfsPoller
             'filesystems' => [],
         ];
 
-        // Run discovery if due, or skip it and check whether the filesystem/device topology
-        // matches the cached snapshot. Sets $this->structureUnchanged accordingly.
-        $this->structureUnchanged = $this->runDiscovery();
-
-        // Ensure state sensor index IDs are loaded from the DB (or created and cached).
-        $this->loadStateIndexes();
+        // Run discovery if due (detects topology changes and syncs sensor rows to DB).
+        $this->runDiscovery();
 
         // Reset per-poll accumulators and iterate over every filesystem discovered.
         $this->working = ['acc' => ['metrics' => []]];
@@ -542,7 +540,7 @@ class BtrfsPoller
     {
         $this->parser = new BtrfsPayloadParser();
         $this->mapper = new BtrfsStatusMapper();
-        $this->sensorSync = new BtrfsSensorSync($this->mapper);
+        $this->sensorSync = new BtrfsSensorSync();
         $this->rrdWriter = new BtrfsRrdWriter();
         $this->agg = new BtrfsStatusAggregator();
         $this->discovery = new BtrfsDiscovery($this->parser, $this->sensorSync);
@@ -560,10 +558,20 @@ class BtrfsPoller
      */
     private function fetchPayload(array &$agentOutput, array &$oldData): int|false
     {
+        // Initialise output parameters so they are always defined on failure paths.
+        $agentOutput = [];
+        $oldData = [];
+
         // Attempt to retrieve and parse the JSON payload from the btrfs agent.
         try {
             $this->appPayload = json_app_get($this->device, 'btrfs', 1);
-            $agentOutput = $this->appPayload['data'];
+
+            // json_app_get() returns null when no data is available (no exception thrown).
+            if ($this->appPayload === null) {
+                throw new JsonAppException('No data received from agent', -1);
+            }
+
+            $agentOutput = $this->appPayload['data'] ?? [];
             $oldData = $this->app->data ?? [];
         } catch (JsonAppException $e) {
             // Agent returned no data or the payload was malformed; mark app as unavailable.
@@ -596,20 +604,17 @@ class BtrfsPoller
     }
 
     /**
-     * Decide whether discovery is due, run it if so, then compute the structure-unchanged flag.
+     * Decide whether discovery is due and run it if so.
      *
      * Discovery runs when:
      * - This is the first poll (no cached discovery state)
      * - The filesystem or device count in the payload has increased
      * - The periodic interval (DISCOVERY_INTERVAL polls) has elapsed
      *
-     * Returns true if the filesystem/device topology is unchanged from the last discovery.
-     * When true, sensor upserts are skipped for filesystems whose device map also matches
-     * the cached structure (see filesystemMatchesCache()).
-     *
-     * @return bool  True = topology unchanged, skip sensor upserts where safe; false = upserts required.
+     * Discovery syncs sensor rows to the DB (creates new, updates existing, deletes removed).
+     * The polling loop then updates sensor_current and writes RRDs every poll regardless.
      */
-    private function runDiscovery(): bool
+    private function runDiscovery(): void
     {
         $tables = $this->appPayload['data']['tables'] ?? [];
         $fsList = $tables['filesystems'] ?? [];
@@ -644,61 +649,9 @@ class BtrfsPoller
         // Carry the discovery block into the new app->data (preserved even when discovery was skipped).
         $this->newData['discovery'] = $this->app->data['discovery'] ?? $discovery;
 
-        // If discovery ran this poll, force all sensor upserts regardless of counter equality.
         if ($this->discovery->wasRun()) {
-            App_log::info('Discovery ran - forcing sensor upserts');
-
-            return false;
+            App_log::info('Discovery ran this poll');
         }
-
-        // Compare live counters to the cached snapshot to decide if sensor upserts can be skipped.
-        // Note: per-filesystem structural changes (e.g. device path change) are checked in
-        // filesystemMatchesCache() within processFilesystem().
-        $cachedCounters = $this->discovery->getCurrentCounters($this->app);
-        $structureUnchanged = ($currentCounters === $cachedCounters);
-
-        App_log::info('Structure check', [
-            'current' => $currentCounters,
-            'cached' => $cachedCounters,
-            'unchanged' => $structureUnchanged,
-        ]);
-
-        return $structureUnchanged;
-    }
-
-    /**
-     * Load (or create) the sensor state index IDs used for IO, scrub, scrub ops, and balance sensors.
-     * Stores the indexes in app->data['state_indexes'] for use by processDevices().
-     */
-    private function loadStateIndexes(): void
-    {
-        $stateIndexes = $this->app->data['state_indexes'] ?? null;
-
-        // Check if all expected state types are present in cache
-        $expectedTypes = [
-            BtrfsSensorSync::STATE_SENSOR_IO,
-            BtrfsSensorSync::STATE_SENSOR_SCRUB,
-            BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS,
-            BtrfsSensorSync::STATE_SENSOR_BALANCE,
-        ];
-        $cacheValid = $stateIndexes !== null;
-        foreach ($expectedTypes as $type) {
-            if (! isset($stateIndexes[$type])) {
-                $cacheValid = false;
-                break;
-            }
-        }
-
-        if (! $cacheValid) {
-            $stateIndexes = $this->sensorSync->ensureStateIndexes();
-            App_log::info('State indexes created and cached', ['indexes' => $stateIndexes]);
-        } else {
-            App_log::debug('State indexes loaded from cache', ['indexes' => $stateIndexes]);
-        }
-
-        $data = $this->app->data;
-        $data['state_indexes'] = $stateIndexes;
-        $this->app->data = $data;
     }
 
     /**
@@ -734,7 +687,6 @@ class BtrfsPoller
             'uuid' => $fsUuid,
             'rrd_id' => $cachedFs['rrd_key'] ?? '',
             'name' => $cachedFs['mountpoint'] ?? '',
-            'cached_devices' => $cachedFs['devices'] ?? [],
         ];
 
         // Derive the human-readable display name (label, or mountpoint, or 'root' for '/').
@@ -792,8 +744,6 @@ class BtrfsPoller
         // Extract and normalise the balance status for this filesystem.
         $fsBalanceStatus = $this->parser->extractBalanceStatus($tables, $fsUuid);
         $balanceStatusCode = $this->mapper->getBalanceStatusCodeFromFlat($fsBalanceStatus);
-        // Only publish the balance state sensor while a balance operation is actually running.
-        $publishBalanceState = ! empty($fsBalanceStatus['is_running']);
 
         // Detect whether any device is currently missing from the filesystem.
         $this->working['fs']['has_missing'] = $this->parser->filesystemHasMissingDevice($tables, $fsUuid);
@@ -844,42 +794,13 @@ class BtrfsPoller
         $this->agg->addScrubStatus($scrubStatusCode);
         $this->agg->addBalanceStatus($balanceStatusCode);
 
-        // Load cached state sensor index IDs (created once per poll in loadStateIndexes()).
-        $stateIndexes = $this->app->data['state_indexes'] ?? [];
-        $ioStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_IO] ?? 0;
-        $scrubStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB] ?? 0;
-        $scrubOpsStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS] ?? 0;
-        $balanceStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_BALANCE] ?? 0;
-
-        // Upsert filesystem-level state sensors unless the topology is unchanged and no per-FS
-        // structural changes were detected (filesystemMatchesCache). Sensor upserts are always
-        // performed when discovery ran this poll ($this->structureUnchanged is false in that case).
-        $cachedFilesystems = $this->app->data['discovery']['filesystems'] ?? [];
-        if (! $this->structureUnchanged || ! $this->discovery->filesystemMatchesCache($fsUuid, $this->working['fs']['rrd_id'], $devices, $cachedFilesystems)) {
-            $this->upsertFsSensors(
-                $this->working['fs']['rrd_id'],
-                $this->working['fs']['display_name'],
-                $ioStatusCode,
-                $scrubStatusCode,
-                $scrubOperation,
-                $balanceStatusCode,
-                $publishBalanceState,
-                $ioStateIndexId,
-                $scrubStateIndexId,
-                $scrubOpsStateIndexId,
-                $balanceStateIndexId
-            );
-        } else {
-            App_log::debug('Skipping fs sensor upsert (structure unchanged)', ['fs_uuid' => $fsUuid]);
-        }
-
-        // Write state sensor RRDs every poll so graphs always reflect the current status.
+        // Update sensor_current in the DB and write RRDs for all filesystem-level state sensors.
+        // Discovery (run periodically) already created/synced the sensor rows; here we just
+        // refresh the values every poll so graphs and alert evaluations stay current.
         $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.io', BtrfsSensorSync::STATE_SENSOR_IO, $this->working['fs']['display_name'] . ' IO', $ioStatusCode);
         $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.scrub', BtrfsSensorSync::STATE_SENSOR_SCRUB, $this->working['fs']['display_name'] . ' Scrub', $scrubStatusCode);
         $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.scrub_ops', BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS, $this->working['fs']['display_name'] . ' Scrub Ops', $scrubOperation);
-        if ($publishBalanceState) {
-            $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.balance', BtrfsSensorSync::STATE_SENSOR_BALANCE, $this->working['fs']['display_name'] . ' Balance', $balanceStatusCode);
-        }
+        $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.balance', BtrfsSensorSync::STATE_SENSOR_BALANCE, $this->working['fs']['display_name'] . ' Balance', $balanceStatusCode);
 
         // Write the consolidated filesystem-level RRD (all space/status fields in one file).
         $this->rrdWriter->writeFsRrd($this->device, 'btrfs', $this->app->app_id, $this->working['fs']['rrd_id'], $fields);
@@ -924,55 +845,13 @@ class BtrfsPoller
             ],
         ];
 
-        // Upsert the filesystem-level IO error count sensor.
-        $this->sensorSync->upsertCountSensor(
+        // Update the filesystem-level IO error count sensor.
+        $this->sensorSync->updateCountSensorValue(
             $this->device,
             $this->working['fs']['rrd_id'],
-            BtrfsSensorSync::COUNT_SENSOR_IO_ERRORS,
             $this->working['fs']['display_name'] . ' IO Errors',
-            $devResult['fs_io_errors_sum'],
-            'btrfs filesystem errors'
+            $devResult['fs_io_errors_sum']
         );
-    }
-
-    /**
-     * Create or update the IO, scrub, scrub ops, and balance state sensors for a filesystem.
-     * The balance sensor is only published while a balance operation is running.
-     */
-    private function upsertFsSensors(
-        string $fsRrdId,
-        string $fsDisplayName,
-        int $ioStatusCode,
-        int $scrubStatusCode,
-        int $scrubOperation,
-        int $balanceStatusCode,
-        bool $publishBalanceState,
-        int $ioStateIndexId,
-        int $scrubStateIndexId,
-        int $scrubOpsStateIndexId,
-        int $balanceStateIndexId,
-    ): void {
-        $this->sensorSync->upsertStateSensor(
-            $this->device, $fsRrdId . '.io', BtrfsSensorSync::STATE_SENSOR_IO,
-            $fsDisplayName . ' IO', $ioStatusCode, $ioStateIndexId, 'btrfs filesystems'
-        );
-        $this->sensorSync->upsertStateSensor(
-            $this->device, $fsRrdId . '.scrub', BtrfsSensorSync::STATE_SENSOR_SCRUB,
-            $fsDisplayName . ' Scrub', $scrubStatusCode, $scrubStateIndexId, 'btrfs filesystems'
-        );
-        $this->sensorSync->upsertStateSensor(
-            $this->device, $fsRrdId . '.scrub_ops', BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS,
-            $fsDisplayName . ' Scrub Ops', $scrubOperation, $scrubOpsStateIndexId, 'btrfs filesystems'
-        );
-
-        if ($publishBalanceState) {
-            $this->sensorSync->upsertStateSensor(
-                $this->device, $fsRrdId . '.balance', BtrfsSensorSync::STATE_SENSOR_BALANCE,
-                $fsDisplayName . ' Balance', $balanceStatusCode, $balanceStateIndexId, 'btrfs filesystems'
-            );
-        } else {
-            $this->sensorSync->deleteStateSensor($this->device, $fsRrdId . '.balance', BtrfsSensorSync::STATE_SENSOR_BALANCE);
-        }
     }
 
     /**
@@ -984,7 +863,7 @@ class BtrfsPoller
      * - Builds the device table row used by the UI
      * - Accumulates IO error counts for the filesystem
      * - Logs new errors to the eventlog
-     * - Upserts IO and scrub state sensors for newly discovered devices
+     * - Updates IO and scrub state sensor values (sensor rows created during discovery)
      * - Derives filesystem-level IO and scrub status codes
      *
      * @return array  Aggregated results: device_tables, per-device metrics, fs error sum, and status codes.
@@ -993,11 +872,6 @@ class BtrfsPoller
     {
         $fsUuid = $this->working['fs']['uuid'];
         $tables = $this->appPayload['data']['tables'] ?? [];
-
-        // Load cached state sensor index IDs (created once per poll in loadStateIndexes()).
-        $stateIndexes = $this->app->data['state_indexes'] ?? [];
-        $ioStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_IO] ?? 0;
-        $scrubStateIndexId = $stateIndexes[BtrfsSensorSync::STATE_SENSOR_SCRUB] ?? 0;
 
         // Extract all per-device data blocks from the payload tables.
         $devices = $this->parser->extractDeviceStats($tables, $fsUuid);
@@ -1107,18 +981,13 @@ class BtrfsPoller
             }
             $fsIoErrorsSum += (float) $ioErrs;
 
-            // Upsert per-device IO error count sensor only for newly discovered devices.
-            $deviceInCache = isset($this->working['fs']['cached_devices'][$devId]);
-            if (! $deviceInCache) {
-                $this->sensorSync->upsertCountSensor(
-                    $this->device,
-                    $this->working['fs']['rrd_id'] . '.dev.' . $devId,
-                    BtrfsSensorSync::COUNT_SENSOR_IO_ERRORS,
-                    $this->working['fs']['display_name'] . ' ' . $devPath . ' IO Errors',
-                    (float) $ioErrs,
-                    'btrfs device errors'
-                );
-            }
+            // Update the per-device IO error count sensor (row created during discovery).
+            $this->sensorSync->updateCountSensorValue(
+                $this->device,
+                $this->working['fs']['rrd_id'] . '.dev.' . $devId,
+                $this->working['fs']['display_name'] . ' ' . $devPath . ' IO Errors',
+                (float) $ioErrs
+            );
 
             // Publish device RRD field values into the per-filesystem metrics map.
             $devMetricPrefix = 'device_' . $devId . '_';
@@ -1140,23 +1009,7 @@ class BtrfsPoller
             $deviceTables[$devId]['io_status_code'] = $devIoStatusCode;
             $deviceTables[$devId]['scrub_status_code'] = $devScrubStatusCode;
 
-            // Upsert per-device state sensors only for newly discovered devices.
-            if (! $deviceInCache) {
-                $this->sensorSync->upsertStateSensor(
-                    $this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.io',
-                    BtrfsSensorSync::STATE_SENSOR_IO,
-                    $this->working['fs']['display_name'] . ' ' . $devPath . ' IO',
-                    $devIoStatusCode, $ioStateIndexId, 'btrfs devices'
-                );
-                $this->sensorSync->upsertStateSensor(
-                    $this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.scrub',
-                    BtrfsSensorSync::STATE_SENSOR_SCRUB,
-                    $this->working['fs']['display_name'] . ' ' . $devPath . ' Scrub',
-                    $devScrubStatusCode, $scrubStateIndexId, 'btrfs devices'
-                );
-            }
-
-            // Write per-device state sensor RRDs every poll so graphs reflect current status.
+            // Update per-device state sensor values and write RRDs (rows created during discovery).
             $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.io', BtrfsSensorSync::STATE_SENSOR_IO, $this->working['fs']['display_name'] . ' ' . $devPath . ' IO', $devIoStatusCode);
             $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.scrub', BtrfsSensorSync::STATE_SENSOR_SCRUB, $this->working['fs']['display_name'] . ' ' . $devPath . ' Scrub', $devScrubStatusCode);
         }
