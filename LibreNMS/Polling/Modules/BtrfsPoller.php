@@ -133,7 +133,7 @@ class BtrfsStatusMapper
     public function getBalanceStatusCodeFromFlat(array $balance_status): int
     {
         if (empty($balance_status)) {
-            return self::STATUS_NA;
+            return self::STATUS_OK;   // no data = not running = idle
         }
 
         if (! empty($balance_status['is_running'])) {
@@ -145,7 +145,7 @@ class BtrfsStatusMapper
             return self::STATUS_ERROR;
         }
 
-        return self::STATUS_NA;
+        return self::STATUS_OK;   // "no balance found" = idle
     }
 }
 
