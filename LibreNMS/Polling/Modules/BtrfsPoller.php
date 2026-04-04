@@ -885,7 +885,10 @@ class BtrfsRrdWriter extends AppRrdWriter
  */
 class BtrfsSensorSync
 {
-    public const STATE_SENSOR_IO = 'btrfsIoStatusState';
+    public const LEGACY_STATE_SENSOR_HEALTH = 'btrfsIoStatusState';
+
+    public const STATE_SENSOR_HEALTH_FS = 'btrfsFsHealthState';
+    public const STATE_SENSOR_HEALTH_DEVICE = 'btrfsDeviceHealthState';
     public const STATE_SENSOR_SCRUB = 'btrfsScrubStatusState';
     public const STATE_SENSOR_SCRUB_OPS = 'btrfsScrubOpsState';
     public const STATE_SENSOR_BALANCE = 'btrfsBalanceStatusState';
@@ -897,7 +900,8 @@ class BtrfsSensorSync
     public const COUNT_SENSOR_ERROR_LEVEL = 10;
 
     private const STATE_SENSOR_TYPES = [
-        self::STATE_SENSOR_IO,
+        self::STATE_SENSOR_HEALTH_FS,
+        self::STATE_SENSOR_HEALTH_DEVICE,
         self::STATE_SENSOR_SCRUB,
         self::STATE_SENSOR_SCRUB_OPS,
         self::STATE_SENSOR_BALANCE,
@@ -934,9 +938,7 @@ class BtrfsSensorSync
         int $sensorCurrent,
         string $sensorGroup
     ): void {
-        $translations = $sensorType === self::STATE_SENSOR_SCRUB_OPS
-            ? $this->getScrubOpsTranslations()
-            : $this->getStatusTranslations();
+        $translations = $this->getStateTranslationsForType($sensorType);
 
         app('sensor-discovery')
             ->discover(new Sensor([
@@ -1072,6 +1074,27 @@ class BtrfsSensorSync
             ->delete();
     }
 
+    /**
+     * Delete legacy btrfs state sensors replaced by newer sensor types.
+     */
+    public function cleanupLegacyStateSensors(array $device): void
+    {
+        $legacySensors = Sensor::withoutGlobalScopes()
+            ->where('device_id', $device['device_id'])
+            ->where('sensor_class', 'state')
+            ->where('poller_type', 'agent')
+            ->where('sensor_type', self::LEGACY_STATE_SENSOR_HEALTH)
+            ->get();
+
+        if ($legacySensors->isEmpty()) {
+            return;
+        }
+
+        $legacySensorIds = $legacySensors->pluck('sensor_id');
+        SensorToStateIndex::whereIn('sensor_id', $legacySensorIds)->delete();
+        Sensor::withoutGlobalScopes()->whereIn('sensor_id', $legacySensorIds)->delete();
+    }
+
     // ==========================================================================
     // Internals
     // ==========================================================================
@@ -1086,6 +1109,38 @@ class BtrfsSensorSync
             'rrd_def'      => RrdDefinition::make()->addDataset('sensor', 'GAUGE'),
             'rrd_name'     => ['sensor', $sensorClass, $sensorType, $sensorIndex],
         ], ['sensor' => $sensorCurrent]);
+    }
+
+    /**
+     * Resolve state translations for a given btrfs state sensor type.
+     *
+     * @return StateTranslation[]
+     */
+    private function getStateTranslationsForType(string $sensorType): array
+    {
+        if ($sensorType === self::STATE_SENSOR_HEALTH_FS || $sensorType === self::STATE_SENSOR_HEALTH_DEVICE) {
+            return $this->getHealthTranslations();
+        }
+
+        if ($sensorType === self::STATE_SENSOR_SCRUB_OPS || $sensorType === self::STATE_SENSOR_BALANCE) {
+            return $this->getScrubOpsTranslations();
+        }
+
+        return $this->getStatusTranslations();
+    }
+
+    /**
+     * State translations for filesystem/device health sensors.
+     *
+     * @return StateTranslation[]
+     */
+    private function getHealthTranslations(): array
+    {
+        return [
+            StateTranslation::define('OK', 0, Severity::Ok),
+            StateTranslation::define('IO Error', 1, Severity::Warning),
+            StateTranslation::define('Missing', 2, Severity::Error),
+        ];
     }
 
     /**
@@ -1154,6 +1209,7 @@ class BtrfsDiscovery
     private const SCHEMA_VERSION = 1;
 
     private bool $discoveryRan = false;
+    private array $working = [];
 
     public function __construct(
         private readonly BtrfsPayloadParser $parser,
@@ -1176,21 +1232,33 @@ class BtrfsDiscovery
         // Snapshot the current filesystem+device structure for change detection
         $currentFilesystems = $this->buildFilesystemState($currentFsByMountpoint, $tables, $fsList);
 
+        $this->working = [
+            'device' => $device,
+            'app' => $app,
+            'discovery' => $discovery,
+            'current_counters' => $currentCounters,
+            'previous_filesystems' => $previousFilesystems,
+            'current_filesystems' => $currentFilesystems,
+        ];
+
         // Reset the discovery buffer so sensors from other modules do not bleed into sync().
         $this->sensorSync->resetDiscoveryBuffer();
 
-        // Detect and log add/remove events, then sync sensors for the current topology.
-        $this->discoverFilesystems($device, array_keys($previousFilesystems), array_keys($currentFilesystems));
-        $this->discoverDevices($device, $previousFilesystems, $currentFilesystems);
-        $this->discoverExpectedSensors($device, $currentFilesystems);
+        // Remove legacy sensor types superseded by current btrfs state sensors.
+        $this->sensorSync->cleanupLegacyStateSensors($this->working['device']);
 
-        $discovery['last_run'] = time();
-        $discovery['counters'] = $currentCounters;
-        $discovery['filesystems'] = $currentFilesystems;
-        $this->saveDiscoveryData($app, $discovery);
+        // Detect and log add/remove events, then sync sensors for the current topology.
+        $this->discoverFilesystems();
+        $this->discoverDevices();
+        $this->discoverExpectedSensors();
+
+        $this->working['discovery']['last_run'] = time();
+        $this->working['discovery']['counters'] = $this->working['current_counters'];
+        $this->working['discovery']['filesystems'] = $this->working['current_filesystems'];
+        $this->saveDiscoveryData($this->working['app'], $this->working['discovery']);
 
         $this->discoveryRan = true;
-        App_log::info('Discovery completed', ['fs_count' => count($currentFilesystems)]);
+        App_log::info('Discovery completed', ['fs_count' => count($this->working['current_filesystems'])]);
     }
 
     /**
@@ -1391,21 +1459,23 @@ class BtrfsDiscovery
     /**
      * Detect and log filesystem add/remove events.
      */
-    private function discoverFilesystems(array $device, array $previousFsUuids, array $currentFsUuids): void
+    private function discoverFilesystems(): void
     {
         App_log::section('discovery FS');
         // Set-difference gives us the added and removed UUIDs in one pass each
+        $previousFsUuids = array_keys($this->working['previous_filesystems']);
+        $currentFsUuids = array_keys($this->working['current_filesystems']);
         $added = array_diff($currentFsUuids, $previousFsUuids);
         $removed = array_diff($previousFsUuids, $currentFsUuids);
 
         foreach ($added as $fsUuid) {
             App_log::info('Filesystem discovered', ['fs_uuid' => $fsUuid]);
-            Eventlog::log('BTRFS Filesystem added: ' . addslashes($fsUuid), $device['device_id'], 'application');
+            Eventlog::log('BTRFS Filesystem added: ' . addslashes($fsUuid), $this->working['device']['device_id'], 'application');
         }
 
         foreach ($removed as $fsUuid) {
             App_log::info('Filesystem removed', ['fs_uuid' => $fsUuid]);
-            Eventlog::log('BTRFS Filesystem removed: ' . addslashes($fsUuid), $device['device_id'], 'application');
+            Eventlog::log('BTRFS Filesystem removed: ' . addslashes($fsUuid), $this->working['device']['device_id'], 'application');
         }
 
         if (empty($added) && empty($removed)) {
@@ -1416,9 +1486,12 @@ class BtrfsDiscovery
     /**
      * Detect and log device add/remove events per filesystem.
      */
-    private function discoverDevices(array $device, array $previousFilesystems, array $currentFilesystems): void
+    private function discoverDevices(): void
     {
         App_log::section('discovery devices');
+        $previousFilesystems = $this->working['previous_filesystems'];
+        $currentFilesystems = $this->working['current_filesystems'];
+
         foreach ($currentFilesystems as $fsUuid => $currentData) {
             // Fall back to empty device list for new filesystems not in previous state
             $previousData = $previousFilesystems[$fsUuid] ?? ['devices' => []];
@@ -1432,13 +1505,13 @@ class BtrfsDiscovery
             foreach ($addedDevs as $devId) {
                 $devPath = $currentDevices[$devId] ?? 'unknown';
                 App_log::info('Device discovered', ['fs_uuid' => $fsUuid, 'dev_id' => $devId, 'path' => $devPath]);
-                Eventlog::log('BTRFS Device added: ' . addslashes($devPath) . ' on ' . addslashes($fsUuid), $device['device_id'], 'application');
+                Eventlog::log('BTRFS Device added: ' . addslashes($devPath) . ' on ' . addslashes($fsUuid), $this->working['device']['device_id'], 'application');
             }
 
             foreach ($removedDevs as $devId) {
                 $devPath = $previousDevices[$devId] ?? 'unknown';
                 App_log::info('Device removed', ['fs_uuid' => $fsUuid, 'dev_id' => $devId, 'path' => $devPath]);
-                Eventlog::log('BTRFS Device removed: ' . addslashes($devPath) . ' on ' . addslashes($fsUuid), $device['device_id'], 'application');
+                Eventlog::log('BTRFS Device removed: ' . addslashes($devPath) . ' on ' . addslashes($fsUuid), $this->working['device']['device_id'], 'application');
             }
         }
     }
@@ -1451,11 +1524,13 @@ class BtrfsDiscovery
      * After all sensors are buffered, syncDiscoveredSensors() creates new sensors,
      * updates existing ones, and deletes any whose indexes are no longer present.
      */
-    private function discoverExpectedSensors(array $device, array $currentFilesystems): void
+    private function discoverExpectedSensors(): void
     {
         App_log::section('Discovery: SENSORS');
 
         $sensorCount = 0;
+        $device = $this->working['device'];
+        $currentFilesystems = $this->working['current_filesystems'];
 
         foreach ($currentFilesystems as $fsData) {
             $rrdId = $fsData['rrd_key'];
@@ -1467,21 +1542,62 @@ class BtrfsDiscovery
             $mountpoint = $fsData['mountpoint'] ?? '';
             $displayName = $label !== '' ? $label : ($mountpoint === '/' ? 'root' : $mountpoint);
 
-            // Filesystem-level state sensors (placeholder value -1; polling overwrites each poll).
-            $this->sensorSync->discoverStateSensor($device, "$rrdId.io", BtrfsSensorSync::STATE_SENSOR_IO, "$displayName IO", BtrfsStatusMapper::STATUS_NA, 'btrfs filesystems');
-            $this->sensorSync->discoverStateSensor($device, "$rrdId.scrub", BtrfsSensorSync::STATE_SENSOR_SCRUB, "$displayName Scrub", BtrfsStatusMapper::STATUS_NA, 'btrfs filesystems');
-            $this->sensorSync->discoverStateSensor($device, "$rrdId.scrub_ops", BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS, "$displayName Scrub Ops", BtrfsStatusMapper::STATUS_NA, 'btrfs filesystems');
-            $this->sensorSync->discoverStateSensor($device, "$rrdId.balance", BtrfsSensorSync::STATE_SENSOR_BALANCE, "$displayName Balance", BtrfsStatusMapper::STATUS_NA, 'btrfs filesystems');
+            // Filesystem-level state sensors.
+            // group = "btrfs::$displayName" — the "btrfs" top level identifies the source
+            // application on the overview page; $displayName is the filesystem label (e.g.
+            // "volum1").  sensor_descr includes $displayName as a prefix so it is
+            // self-contained on the health page and in alerts; the overview strips
+            // $displayName when rendering under its heading (e.g. "volum1 IO" → "IO").
+            $fsGroup = "BtrFS $displayName";
+            $this->sensorSync->discoverStateSensor($device, "$rrdId.health",
+                BtrfsSensorSync::STATE_SENSOR_HEALTH_FS,
+                "$fsGroup Health",
+                0,
+                $fsGroup);
+            $this->sensorSync->discoverStateSensor($device, "$rrdId.scrub",
+                BtrfsSensorSync::STATE_SENSOR_SCRUB,
+                "$fsGroup Scrub",
+                BtrfsStatusMapper::STATUS_NA,
+                $fsGroup);
+            $this->sensorSync->discoverStateSensor($device, "$rrdId.scrub_ops",
+                BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS,
+                "$fsGroup Scrub Ops",
+                0,
+                $fsGroup);
+            $this->sensorSync->discoverStateSensor($device, "$rrdId.balance",
+                BtrfsSensorSync::STATE_SENSOR_BALANCE,
+                "$fsGroup Balance Ops",
+                0,
+                $fsGroup);
 
-            // Filesystem-level IO error count sensor.
-            $this->sensorSync->discoverCountSensor($device, $rrdId, "$displayName IO Errors", 0, 'btrfs filesystem errors');
+            // Filesystem-level IO error count sensor (different sensor class; same group).
+            $this->sensorSync->discoverCountSensor($device, $rrdId,
+                "$fsGroup IO Errors",
+                0,
+                $fsGroup);
             $sensorCount += 5;
 
             // Per-device sensors.
+            // group = "BtrFS $displayName::Devices" nests all block devices under the
+            // filesystem heading on the overview page.  sensor_descr is fully self-contained
+            // (e.g. "BtrFS volum1 /dev/sdc IO") so it is unambiguous on the health page and
+            // in alerts without any group context.
             foreach ($fsData['devices'] as $devId => $devPath) {
-                $this->sensorSync->discoverStateSensor($device, "$rrdId.dev.$devId.io", BtrfsSensorSync::STATE_SENSOR_IO, "$displayName $devPath IO", BtrfsStatusMapper::STATUS_NA, 'btrfs devices');
-                $this->sensorSync->discoverStateSensor($device, "$rrdId.dev.$devId.scrub", BtrfsSensorSync::STATE_SENSOR_SCRUB, "$displayName $devPath Scrub", BtrfsStatusMapper::STATUS_NA, 'btrfs devices');
-                $this->sensorSync->discoverCountSensor($device, "$rrdId.dev.$devId", "$displayName $devPath IO Errors", 0, 'btrfs device errors');
+                $devGroup = "BtrFS $displayName::Devices";
+                $this->sensorSync->discoverStateSensor($device, "$rrdId.dev.$devId.health",
+                    BtrfsSensorSync::STATE_SENSOR_HEALTH_DEVICE,
+                    "BtrFS $displayName $devPath Health",
+                    0,
+                    $devGroup);
+                $this->sensorSync->discoverStateSensor($device, "$rrdId.dev.$devId.scrub",
+                    BtrfsSensorSync::STATE_SENSOR_SCRUB,
+                    "BtrFS $displayName $devPath Scrub",
+                    BtrfsStatusMapper::STATUS_NA,
+                    $devGroup);
+                $this->sensorSync->discoverCountSensor($device, "$rrdId.dev.$devId",
+                    "BtrFS $displayName $devPath IO Errors",
+                    0,
+                    $devGroup);
                 $sensorCount += 3;
             }
         }
@@ -1825,7 +1941,9 @@ class BtrfsPoller
         // Unpack aggregated results from processDevices().
         $ioStatusCode = $devResult['io_status_code'];
         $scrubStatusCode = $devResult['scrub_status_code'];
-        $scrubOperation = (int) ($this->working['fs']['scrub_status']['ops_status'] ?? -1);
+        $scrubOperation = ! empty($this->working['fs']['scrub_status']['ops_status']) ? 1 : 0;
+        $balanceOperation = ! empty($fsBalanceStatus['is_running']) ? 1 : 0;
+        $fsHealthCode = $this->working['fs']['has_missing'] ? 2 : ($ioStatusCode === BtrfsStatusMapper::STATUS_ERROR ? 1 : 0);
         $fsScrubHealth = $devResult['fs_scrub_health'];
 
         // Sum device-level usage into filesystem totals and add to the RRD fields and metrics.
@@ -1866,10 +1984,10 @@ class BtrfsPoller
         // Update sensor_current in the DB and write RRDs for all filesystem-level state sensors.
         // Discovery (run periodically) already created/synced the sensor rows; here we just
         // refresh the values every poll so graphs and alert evaluations stay current.
-        $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.io', BtrfsSensorSync::STATE_SENSOR_IO, $this->working['fs']['display_name'] . ' IO', $ioStatusCode);
+        $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.io', BtrfsSensorSync::STATE_SENSOR_HEALTH_FS, $this->working['fs']['display_name'] . ' Health', $fsHealthCode);
         $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.scrub', BtrfsSensorSync::STATE_SENSOR_SCRUB, $this->working['fs']['display_name'] . ' Scrub', $scrubStatusCode);
         $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.scrub_ops', BtrfsSensorSync::STATE_SENSOR_SCRUB_OPS, $this->working['fs']['display_name'] . ' Scrub Ops', $scrubOperation);
-        $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.balance', BtrfsSensorSync::STATE_SENSOR_BALANCE, $this->working['fs']['display_name'] . ' Balance', $balanceStatusCode);
+        $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.balance', BtrfsSensorSync::STATE_SENSOR_BALANCE, $this->working['fs']['display_name'] . ' Balance Ops', $balanceOperation);
 
         // Write the consolidated filesystem-level RRD (all space/status fields in one file).
         $this->rrdWriter->writeFsRrd($this->device, 'btrfs', $this->app->app_id, $this->working['fs']['rrd_id'], $fields);
@@ -2072,7 +2190,8 @@ class BtrfsPoller
             $deviceTables[$devId]['scrub_status_code'] = $devScrubStatusCode;
 
             // Update per-device state sensor values and write RRDs (rows created during discovery).
-            $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.io', BtrfsSensorSync::STATE_SENSOR_IO, $this->working['fs']['display_name'] . ' ' . $devPath . ' IO', $devIoStatusCode);
+            $devHealthCode = ! empty($devStats['missing']) ? 2 : ($devIoStatusCode === BtrfsStatusMapper::STATUS_ERROR ? 1 : 0);
+            $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.io', BtrfsSensorSync::STATE_SENSOR_HEALTH_DEVICE, $this->working['fs']['display_name'] . ' ' . $devPath . ' Health', $devHealthCode);
             $this->sensorSync->writeStateSensorRrd($this->device, $this->working['fs']['rrd_id'] . '.dev.' . $devId . '.scrub', BtrfsSensorSync::STATE_SENSOR_SCRUB, $this->working['fs']['display_name'] . ' ' . $devPath . ' Scrub', $devScrubStatusCode);
         }
 
