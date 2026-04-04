@@ -29,14 +29,6 @@ function btrfs_get_discovery_by_uuid(\App\Models\Application $app, ?string $uuid
     return $app->data['discovery']['filesystems'][$uuid] ?? null;
 }
 
-/**
- * @deprecated Use btrfs_get_discovery_by_uuid() — $vars['fs'] is now a UUID.
- */
-function btrfs_get_discovery_by_mountpoint(\App\Models\Application $app, ?string $uuid): ?array
-{
-    return btrfs_get_discovery_by_uuid($app, $uuid);
-}
-
 // =============================================================================
 // Status Badge Rendering
 // Renders Bootstrap label badges for known status states.
@@ -476,8 +468,6 @@ function format_display_name(string $key): string
 
     $pretty = [
         'usage data' => 'Data',
-        'usage.metadata' => 'Data',
-        'usage_metadata' => 'Data',
         'usage metadata' => 'Metadata',
         'usage.metadata' => 'Metadata',
         'usage_metadata' => 'Metadata',
@@ -928,7 +918,6 @@ function extract_filesystem_data(array $filesystem_entries, array $discovery_fil
     $scrub_operation_fs = [];
     $scrub_health_fs = [];
     $balance_is_running_fs = [];
-    $filesystem_uuid = [];
     $fs_rrd_key = [];
 
     foreach ($filesystem_entries as $fs_uuid => $entry) {
@@ -962,7 +951,6 @@ function extract_filesystem_data(array $filesystem_entries, array $discovery_fil
         $balance_status_fs[$fs_uuid] = is_array($balance_block['status'] ?? null) ? $balance_block['status'] : [];
         $balance_is_running_fs[$fs_uuid] = (int) ($balance_status_fs[$fs_uuid]['ops_status'] ?? 0) === 1;
 
-        $filesystem_uuid[$fs_uuid] = $fs_uuid;
         $fs_rrd_key[$fs_uuid] = $discovery['rrd_key'] ?? substr($fs_uuid, 0, 8);
     }
 
@@ -990,7 +978,6 @@ function extract_filesystem_data(array $filesystem_entries, array $discovery_fil
         'scrub_operation_fs' => $scrub_operation_fs,
         'scrub_health_fs' => $scrub_health_fs,
         'balance_is_running_fs' => $balance_is_running_fs,
-        'filesystem_uuid' => $filesystem_uuid,
         'fs_rrd_key' => $fs_rrd_key,
     ];
 }
@@ -1054,7 +1041,6 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
             'scrub_health_fs' => [],
             'balance_status_fs' => [],
             'balance_is_running_fs' => [],
-            'filesystem_uuid' => [],
             'fs_rrd_key' => [],
         ];
     }
@@ -1075,7 +1061,6 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
     $scrub_health_fs = $extracted['scrub_health_fs'];
     $balance_status_fs = $extracted['balance_status_fs'];
     $balance_is_running_fs = $extracted['balance_is_running_fs'];
-    $filesystem_uuid = $extracted['filesystem_uuid'];
     $fs_rrd_key = $extracted['fs_rrd_key'];
 
     if (is_string($selected_fs) && $selected_fs !== '') {
@@ -1086,10 +1071,6 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
             $selected_fs = null;
         }
     } else {
-        $selected_fs = null;
-    }
-
-    if ($selected_fs !== null && ! in_array($selected_fs, $filesystems, true)) {
         $selected_fs = null;
     }
 
@@ -1137,7 +1118,6 @@ function initialize_data(\App\Models\Application $app, array $device, array $var
         'scrub_health_fs' => $scrub_health_fs,
         'balance_status_fs' => $balance_status_fs,
         'balance_is_running_fs' => $balance_is_running_fs,
-        'filesystem_uuid' => $filesystem_uuid,
         'fs_rrd_key' => $fs_rrd_key,
     ];
 }

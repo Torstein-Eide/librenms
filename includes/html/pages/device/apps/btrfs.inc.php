@@ -15,30 +15,6 @@
 
 use Illuminate\Support\Facades\Log;
 
-// DEBUG: Print full app->data
-if (isset($_GET['debug_btrfs'])) {
-    echo '<pre style="background:#f5f5f5;border:1px solid #ccc;padding:10px;margin:10px;overflow:auto;">';
-    echo '<h3>app->data (full)</h3>';
-    echo htmlspecialchars(print_r($app->data, true));
-    echo '</pre>';
-}
-
-// DEBUG: Print discovery data specifically
-if (isset($_GET['debug_btrfs_discovery'])) {
-    echo '<pre style="background:#e8f5e9;border:1px solid #4caf50;padding:10px;margin:10px;overflow:auto;">';
-    echo '<h3>app->data[\'discovery\']</h3>';
-    echo htmlspecialchars(print_r($app->data['discovery'] ?? [], true));
-    echo '</pre>';
-}
-
-// DEBUG: Print filesystem entries specifically
-if (isset($_GET['debug_btrfs_fs'])) {
-    echo '<pre style="background:#e3f2fd;border:1px solid #2196f3;padding:10px;margin:10px;overflow:auto;">';
-    echo '<h3>app->data[\'filesystems\']</h3>';
-    echo htmlspecialchars(print_r($app->data['filesystems'] ?? [], true));
-    echo '</pre>';
-}
-
 // =============================================================================
 // Namespace Imports
 // Import shared helper functions from the common btrfs module.
@@ -478,13 +454,9 @@ function btrfs_renderOverviewPageGraphs(App\Models\Application $app, array $devi
         $display_name = $fs_label !== '' ? $fs_label . ' (' . $mountpoint . ')' : (string) $mountpoint;
 
         // Calculate used space percentage for header.
-        $used_value = (float) ($fs_data['used'] ?? 0);
-        $size_value = (float) ($fs_data['device_size'] ?? 0);
         $used_text = format_metric_value($fs_data['used'] ?? null, 'used');
         $total_text = format_metric_value($fs_data['device_size'] ?? null, 'device_size');
-        $used_percent_text = $size_value > 0
-            ? rtrim(rtrim(number_format(($used_value / $size_value) * 100, 2, '.', ''), '0'), '.') . '%'
-            : 'N/A';
+        $used_percent_text = used_percent_text($fs_data['used'] ?? null, $fs_data['device_size'] ?? null);
 
         // Calculate combined status for badge.
         $fs_rrd_id = $fs_rrd_key[$fs_uuid] ?? $fs_uuid;
@@ -566,7 +538,6 @@ function btrfs_renderDevView(
     $scrub_status_devices = $data['scrub_status_devices'] ?? [];
     $scrub_operation_fs = $data['scrub_operation_fs'] ?? [];
     $scrub_health_fs = $data['scrub_health_fs'] ?? [];
-    $filesystem_uuid = $data['filesystem_uuid'] ?? [];
     $fs_rrd_key = $data['fs_rrd_key'] ?? [];
     $fs_mountpoint = $data['fs_mountpoint'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
@@ -576,7 +547,7 @@ function btrfs_renderDevView(
     $selected_fs_rrd_id = $fs_rrd_key[$selected_fs] ?? $selected_fs;
 
     // Resolve filesystem UUID and device data.
-    $fs_uuid = $filesystem_uuid[$selected_fs] ?? '';
+    $fs_uuid = $selected_fs;
     $dev_data = $device_tables[$selected_fs][$selected_dev] ?? [];
     $dev_path = $dev_data['path'] ?? '';
     $dev_meta = $device_metadata[$selected_fs][$selected_dev] ?? [];
@@ -842,8 +813,7 @@ function btrfs_renderFsView(
         $scrub_health_badge_html,
         $scrub_ops_badge,
         $data,
-        $balance_status_fs,
-        $scrub_is_running_fs
+        $balance_status_fs
     );
 
     // Render row 2: Device Usage and Device Stats panels.
@@ -1031,7 +1001,6 @@ HTML;
  * @param  string                    $scrub_ops_badge     Pre-rendered scrub ops badge.
  * @param  array                    $data                Initialized data array.
  * @param  array                    $balance_status_fs   Balance status per filesystem.
- * @param  array                    $scrub_is_running_fs Scrub running state per filesystem.
  * @return void
  */
 function btrfs_renderFsPanelsRow1(
@@ -1043,12 +1012,10 @@ function btrfs_renderFsPanelsRow1(
     string $scrub_badge,
     string $scrub_ops_badge,
     array $data,
-    array $balance_status_fs,
-    array $scrub_is_running_fs
+    array $balance_status_fs
 ): void {
     $filesystem_meta = $data['filesystem_meta'] ?? [];
     $filesystem_tables = $data['filesystem_tables'] ?? [];
-    $filesystem_uuid = $data['filesystem_uuid'] ?? [];
 
     Log::debug('Btrfs renderFsPanelsRow1: rendering', [
         'selected_fs' => $selected_fs,
@@ -1059,7 +1026,7 @@ function btrfs_renderFsPanelsRow1(
     $fs_label = $filesystem_meta[$selected_fs]['label'] ?? null;
     $mountpoint = $data['fs_mountpoint'][$selected_fs] ?? $selected_fs;
     $fs_title = ! empty($fs_label) ? $fs_label . ' (' . $mountpoint . ')' : $mountpoint;
-    $fs_uuid = $filesystem_uuid[$selected_fs] ?? '';
+    $fs_uuid = $selected_fs;
 
     echo '<div class="btrfs-panels">';
 
@@ -1144,7 +1111,6 @@ function btrfs_renderFsPanelsRow2(
     $device_map = $data['device_map'] ?? [];
     $device_tables = $data['device_tables'] ?? [];
     $filesystem_profiles = $data['filesystem_profiles'] ?? [];
-    $filesystem_uuid = $data['filesystem_uuid'] ?? [];
     $state_sensor_values = $data['state_sensor_values'] ?? [];
     $device_metadata = $data['device_metadata'] ?? [];
 
@@ -1155,7 +1121,7 @@ function btrfs_renderFsPanelsRow2(
         'selected_fs_rrd_id' => $selected_fs_rrd_id,
     ]);
 
-    $fs_uuid = $filesystem_uuid[$selected_fs] ?? '';
+    $fs_uuid = $selected_fs;
 
     $all_devices = [];
     $all_raid_profiles = [];
