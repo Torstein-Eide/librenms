@@ -38,14 +38,14 @@ measurement type (Input, Output, Bypass) is sufficient.
 are listed without group context. It must be meaningful on its own — never rely on the group
 heading to supply missing context.
 
-On the device overview page, prefix stripping removes the redundant group name from the display
-when the group heading is already visible. This means the correct pattern is:
+On the device overview and `/health/metric=*` pages, grouped rendering can strip redundant
+prefix text when the group heading is already visible. This means the correct pattern is:
 
 - `sensor_descr` — full self-contained name, e.g. `Output L1`
 - `group` — the category the sensor belongs to, e.g. `Output`
 
-The overview strips `Output` from `Output L1` and shows `L1` under the `Output` heading.
-All other pages show the full `Output L1`.
+Grouped pages can strip `Output` from `Output L1` and show `L1` under the `Output` heading.
+Alerts/eventlog still rely on the full stored `sensor_descr`.
 
 ```yaml
 sensors:
@@ -171,21 +171,26 @@ Voltage
       L3    230 V
 ```
 
-On the `/health/metric=voltage` page the full unmodified `sensor_descr` is always shown together
-with the device hostname:
+On `/health/metric=voltage`, grouped headings are shown and panel titles may be prefix-stripped
+when the root heading is visible. The sensor value and graph behavior are unchanged:
 
 ```
-Device              Sensor                              Current
-nut-host.example    UPS Eaton 3S 700 Output             230 V
-nut-host.example    UPS Eaton 9135 6000 Bypass L1       236 V
-nut-host.example    UPS Eaton 9135 6000 Bypass L2       236 V
-nut-host.example    UPS Eaton 9135 6000 Bypass L3       236 V
-nut-host.example    UPS Eaton 9135 6000 Input L1        230 V
-nut-host.example    UPS Eaton 9135 6000 Input L2        230 V
-nut-host.example    UPS Eaton 9135 6000 Input L3        230 V
-nut-host.example    UPS Eaton 9135 6000 Output L1       230 V
-nut-host.example    UPS Eaton 9135 6000 Output L2       230 V
-nut-host.example    UPS Eaton 9135 6000 Output L3       230 V
+Voltage
+  UPS Eaton 3S 700
+    Output
+  UPS Eaton 9135 6000
+    Bypass
+      L1
+      L2
+      L3
+    Input
+      L1
+      L2
+      L3
+    Output
+      L1
+      L2
+      L3
 ```
 
 ### Btrfs / Storage Example
@@ -286,27 +291,36 @@ btrfs-host.example  /dev/sdg Scrub      OK
 
 ---
 
-## Prefix Stripping on the Overview Page
+## Prefix Stripping on Grouped Pages
 
-When a sensor is rendered inside a group heading on the device overview page, any leading
-portion of `sensor_descr` that matches the **last `::` segment** of the `group` value
-(case-insensitive, with trailing whitespace and common separators ignored) is stripped. This
-keeps the display compact without losing information.
+When a sensor is rendered inside a visible group heading, redundant leading text in
+`sensor_descr` can be stripped to keep rows compact without losing context.
 
-| `group` | Last segment | `sensor_descr` | Displayed as |
+On the overview page, prefix candidates are tried in this order:
+
+1. full `group` path normalized with spaces (`A::B` -> `A B`)
+2. first `::` segment
+3. last `::` segment
+
+The first case-insensitive prefix match is stripped (with separators trimmed: space, tab,
+`-`, `_`, `:`). If stripping would produce an empty string, the original description is kept.
+
+On the health metric page, root heading stripping is applied for grouped panels: if the first
+group segment is a prefix of `sensor_descr`, it is stripped with the same separator trimming.
+
+| `group` | Candidate used | `sensor_descr` | Displayed as |
 |---|---|---|---|
-| `UPS Eaton 9135 6000::Output` | `Output` | `UPS Eaton 9135 6000 Output L1` | `UPS Eaton 9135 6000 Output L1` ← no match |
+| `UPS Eaton 9135 6000::Output` | `UPS Eaton 9135 6000` | `UPS Eaton 9135 6000 Output L1` | `Output L1` |
 | `UPS Eaton 9135 6000::Output` | `Output` | `Output L1` | `L1` |
 | `UPS Eaton 9135 6000::Output` | `Output` | `output L2` | `L2` (case-insensitive) |
 | `UPS Eaton 9135 6000::Output` | `Output` | `Output-L3` | `L3` |
 | `UPS Eaton 9135 6000::Output` | `Output` | `Output: Phase 1` | `Phase 1` |
-| `UPS Eaton 9135 6000::Output` | `Output` | `Output` | `Output` ← result empty, not stripped |
+| `UPS Eaton 9135 6000::Output` | `Output` | `Output` | `Output` (empty result is rejected) |
 
 Separators trimmed between the prefix and the remainder: space, tab, `-`, `_`, `:`.
 
-Prefix stripping only applies when **more than one sensor** shares the same group path. When a
-group contains exactly one sensor, the full `sensor_descr` is shown and no group heading is
-rendered for that group — the sensor label already carries enough context on its own.
+Prefix stripping only applies when a heading is visible. When a group path is suppressed
+(single sensor with no child paths), full `sensor_descr` is shown.
 
 ---
 

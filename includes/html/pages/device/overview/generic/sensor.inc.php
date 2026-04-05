@@ -79,7 +79,8 @@ if ($sensors->isNotEmpty()) {
                     if (! $isGroupSuppressed($pathToHere)) {
                         // Indent by depth: 4 px base + 16 px per additional level.
                         $padding = ($d * 16) + 4;
-                        echo "<tr><td colspan='3' style='padding-left:{$padding}px'><strong>{$parts[$d]}</strong></td></tr>";
+                        $headingLabel = htmlspecialchars($parts[$d], ENT_QUOTES, 'UTF-8');
+                        echo "<tr><td colspan='3' style='padding-left:{$padding}px'><strong>{$headingLabel}</strong></td></tr>";
                     }
                     $currentPath[$d] = $parts[$d];
                 }
@@ -110,25 +111,44 @@ if ($sensors->isNotEmpty()) {
             $sensor->sensor_descr = substr((string) $sensor->sensor_descr, 0, 48);
         }
 
-        // When the group heading is visible the last '::' segment of the group path is
-        // stripped as a case-insensitive prefix from sensor_descr.  This removes the
-        // repeated group name that discovery modules include so that sensor_descr is
-        // self-contained on the health page and in alerts.
+        // When the group heading is visible, strip repeated group text from sensor_descr.
+        // Prefix strip candidates are tried in order:
+        //   1) full group path normalized as spaces, e.g. 'A::B' -> 'A B'
+        //   2) first group segment
+        //   3) last group segment
         //
-        // Example: group 'volum1::/dev/sdc', sensor_descr '/dev/sdc IO'
-        //   last segment  = '/dev/sdc'
-        //   strip prefix  → 'IO'   (displayed under the /dev/sdc heading)
+        // This supports both nested leaf naming and patterns like:
+        //   group: 'BtrFS pool1::devices'
+        //   desc:  'BtrFS pool1 /dev/sda IO'
+        // where stripping the first segment yields '/dev/sda IO'.
         //
-        // The strip is skipped when it would leave an empty string, preserving the
-        // original value.  Suppressed groups are not stripped because no heading is
-        // shown — the full name is needed to identify the sensor in context.
+        // Stripping is skipped when it would leave an empty string. Suppressed groups
+        // are not stripped because no heading is shown.
         $displayDescr = $sensor->sensor_descr;
         if ($groupStr !== '' && ! $isGroupSuppressed($groupStr)) {
-            $lastSegment = $parts[count($parts) - 1];
-            if (stripos($displayDescr, $lastSegment) === 0) {
-                $stripped = ltrim(substr($displayDescr, strlen($lastSegment)), " \t-_:");
-                if ($stripped !== '') {
-                    $displayDescr = $stripped;
+            $candidates = [];
+            $normalizedGroup = trim(str_replace('::', ' ', $groupStr));
+            if ($normalizedGroup !== '') {
+                $candidates[] = $normalizedGroup;
+            }
+
+            $firstSegment = $parts[0] ?? '';
+            if ($firstSegment !== '') {
+                $candidates[] = $firstSegment;
+            }
+
+            $lastSegment = $parts[count($parts) - 1] ?? '';
+            if ($lastSegment !== '') {
+                $candidates[] = $lastSegment;
+            }
+
+            foreach (array_values(array_unique($candidates)) as $candidate) {
+                if (stripos($displayDescr, $candidate) === 0) {
+                    $stripped = ltrim(substr($displayDescr, strlen($candidate)), " \t-_:");
+                    if ($stripped !== '') {
+                        $displayDescr = $stripped;
+                        break;
+                    }
                 }
             }
         }
@@ -150,14 +170,19 @@ if ($sensors->isNotEmpty()) {
 
         $sensor_current = Html::severityToLabel($sensor->currentStatus(), $sensor->formatValue());
 
-        // Group path column: full '::'-separated path rendered as 'A › B › C' in muted
-        // text.  Useful for suppressed single-sensor groups where no heading is shown,
-        // and gives a quick breadcrumb for any sensor row.
-        $groupLabel = $groupStr !== '' ? '<small class="text-muted">' . htmlspecialchars(str_replace('::', ' › ', $groupStr)) . '</small>' : '';
+        // Indent sensor rows to match visible heading depth: same base (4 px)
+        // + 16 px per shown group level. Suppressed groups do not add indentation.
+        $visibleDepth = 0;
+        for ($d = 0; $d < count($parts); $d++) {
+            $pathToHere = implode('::', array_slice($parts, 0, $d + 1));
+            if (! $isGroupSuppressed($pathToHere)) {
+                $visibleDepth++;
+            }
+        }
+        $sensorPadding = ($visibleDepth * 16) + 4;
 
-        echo '<tr><td><div style="display: grid; grid-gap: 10px; grid-template-columns: 3fr 2fr 1fr 1fr;">
-            <div>' . LibreNMS\Util\Url::overlibLink($link, LibreNMS\Util\Rewrite::shortenIfName($displayDescr), $overlib_content, $sensor_class->value) . '</div>
-            <div>' . $groupLabel . '</div>
+        echo "<tr><td style='padding-left:{$sensorPadding}px'><div style=\"display: grid; grid-gap: 10px; grid-template-columns: 3fr 1fr 1fr;\">
+            <div>" . LibreNMS\Util\Url::overlibLink($link, LibreNMS\Util\Rewrite::shortenIfName($displayDescr), $overlib_content, $sensor_class->value) . '</div>
             <div>' . LibreNMS\Util\Url::overlibLink($link, $sensor_minigraph, $overlib_content, $sensor_class->value) . '</div>
             <div>' . LibreNMS\Util\Url::overlibLink($link, $sensor_current, $overlib_content, $sensor_class->value) . '</div>
             </div></td></tr>';

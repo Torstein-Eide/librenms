@@ -64,8 +64,24 @@ foreach ($sensors as $sensor) {
             break;
         }
     }
-    // Note: sensor_descr is NOT stripped on this page.  The full name is always shown
-    // because panels here appear without persistent group heading context.
+    // Strip the root (first) group segment from sensor_descr when its heading is
+    // visible.  The heading already provides that context, so repeating it in every
+    // panel title is redundant.  The full sensor_descr is preserved in alerts and
+    // eventlog because those pages do not call this file.
+    //
+    // Example: group "BtrFS volum1::Devices", root segment "BtrFS volum1"
+    //   "BtrFS volum1 /dev/sdc IO" -> "/dev/sdc IO"
+    //   "BtrFS volum1 IO"          -> "IO"
+    $displayDescr = $sensor['sensor_descr'];
+    if (! empty($parts) && ! $isGroupSuppressed($parts[0])) {
+        $rootSegment = $parts[0];
+        if (stripos($displayDescr, $rootSegment) === 0) {
+            $stripped = ltrim(substr($displayDescr, strlen($rootSegment)), ' 	-_:');
+            if ($stripped !== '') {
+                $displayDescr = $stripped;
+            }
+        }
+    }
 
     if (! is_int($row++ / 2)) {
         $row_colour = App\Facades\LibrenmsConfig::get('list_colour.even');
@@ -74,9 +90,9 @@ foreach ($sensors as $sensor) {
     }
 
     if ($sensor['poller_type'] == 'ipmi') {
-        $sensor_descr = ipmiSensorName($device['hardware'], $sensor['sensor_descr']);
+        $sensor_descr = ipmiSensorName($device['hardware'], $displayDescr);
     } else {
-        $sensor_descr = $sensor['sensor_descr'];
+        $sensor_descr = $displayDescr;
     }
 
     $sensor_current = Html::severityToLabel($sensor->currentStatus(), $sensor->formatValue());
