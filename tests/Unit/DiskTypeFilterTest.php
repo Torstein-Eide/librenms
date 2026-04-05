@@ -121,10 +121,18 @@ class DiskTypeFilterTest extends TestCase
             DiskTypeFilter::classify('ccd0', 'netbsd')
         );
 
-        // Linux md devices exist on BSD via compatibility layers
+        // BSD memory disks (md*)
         $this->assertEquals(
-            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            ['view' => 'physical', 'subtype' => 'memory'],
             DiskTypeFilter::classify('md0', 'freebsd')
+        );
+        $this->assertEquals(
+            ['view' => 'physical', 'subtype' => 'memory'],
+            DiskTypeFilter::classify('md0', 'openbsd')
+        );
+        $this->assertEquals(
+            ['view' => 'physical', 'subtype' => 'memory'],
+            DiskTypeFilter::classify('md0', 'netbsd')
         );
     }
 

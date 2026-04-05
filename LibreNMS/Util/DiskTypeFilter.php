@@ -51,19 +51,17 @@ final class DiskTypeFilter
             return ['view' => 'logical', 'subtype' => 'loop'];
         }
 
-        // Memory-backed devices: ram*, zram* (Linux)
+        // Memory-backed devices: ram*, zram* (Linux), md* (BSD)
         if (preg_match('/^(ram|zram)\d+$/i', $diskName)) {
             return ['view' => 'physical', 'subtype' => 'memory'];
         }
-
-        // BSD memory disks (md*) - handled in sw_raid below
         if ($os !== null && in_array($os, self::BSD_FAMILY, true)) {
-            if (preg_match('/^(md)\d+$/i', $diskName)) {
+            if (preg_match('/^md\d+$/i', $diskName)) {
                 return ['view' => 'physical', 'subtype' => 'memory'];
             }
         }
 
-        // Software RAID - OS-aware: ccd*, vnd* (BSD), md* (Linux)
+        // Software RAID: ccd*, vnd* (BSD), md* (Linux)
         if (preg_match('/^(ccd|vnd|md)\d+$/i', $diskName)) {
             return ['view' => 'logical', 'subtype' => 'sw_raid'];
         }
