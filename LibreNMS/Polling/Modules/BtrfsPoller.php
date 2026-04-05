@@ -149,14 +149,15 @@ class BtrfsStatusMapper
 /**
  * BtrfsPayloadParser extracts data from btrfs unix-agent payloads.
  *
- * Operates directly on the normalized flat-table payload format:
- * - data.tables.filesystems
- * - data.tables.filesystem_capacity
- * - data.tables.filesystem_profiles
- * - data.tables.filesystem_devices
- * - data.tables.scrub_status_filesystems
- * - data.tables.scrub_status_devices
- * - data.tables.balance_status_filesystems
+ * Operates directly on the grouped payload format:
+ * - data.tables.FS.<uuid>.filesystem
+ * - data.tables.FS.<uuid>.filesystem_capacity
+ * - data.tables.FS.<uuid>.usage_ratio
+ * - data.tables.FS.<uuid>.filesystem_profiles
+ * - data.tables.FS.<uuid>.filesystem_devices
+ * - data.tables.FS.<uuid>.scrub_status
+ * - data.tables.FS.<uuid>.scrub_status_devices
+ * - data.tables.FS.<uuid>.balance_status
  */
 class BtrfsPayloadParser
 {
@@ -169,7 +170,9 @@ class BtrfsPayloadParser
 
     public function normalizeOverall(array $tables, string $fs_uuid): array
     {
-        $c = $tables['filesystem_capacity'][$fs_uuid] ?? [];
+        $group = $tables['FS'][$fs_uuid] ?? [];
+        $c = $group['filesystem_capacity'] ?? [];
+        $ratios = $group['usage_ratio'] ?? [];
 
         return [
             'device_size_bytes' => $c['device_size'] ?? null,
@@ -183,14 +186,14 @@ class BtrfsPayloadParser
             'global_reserve_used_bytes' => $c['global_reserve_used'] ?? null,
             'device_missing_bytes' => $c['device_missing'] ?? 0,
             'device_slack_bytes' => $c['device_slack'] ?? 0,
-            'data_ratio' => $c['data_ratio'] ?? null,
-            'metadata_ratio' => $c['metadata_ratio'] ?? null,
+            'data_ratio' => $ratios['data_ratio'] ?? null,
+            'metadata_ratio' => $ratios['metadata_ratio'] ?? null,
         ];
     }
 
     public function getFsInfo(array $tables, string $fs_uuid): array
     {
-        $fs = $tables['filesystems'][$fs_uuid] ?? [];
+        $fs = $tables['FS'][$fs_uuid]['filesystem'] ?? [];
 
         return [
             'mountpoint' => $fs['mountpoint'] ?? $fs['primary_mountpoint'] ?? '',
@@ -202,13 +205,13 @@ class BtrfsPayloadParser
 
     public function extractBalanceStatus(array $tables, string $fs_uuid): array
     {
-        return $tables['balance_status_filesystems'][$fs_uuid] ?? [];
+        return $tables['FS'][$fs_uuid]['balance_status'] ?? [];
     }
 
     public function extractUsageTypeTotals(array $tables, string $fs_uuid): array
     {
         $totals = [];
-        foreach ($tables['filesystem_profiles'][$fs_uuid] ?? [] as $profile) {
+        foreach ($tables['FS'][$fs_uuid]['filesystem_profiles'] ?? [] as $profile) {
             if (! is_array($profile)) {
                 continue;
             }
@@ -225,12 +228,12 @@ class BtrfsPayloadParser
 
     public function extractScrubStatus(array $tables, string $fs_uuid): array
     {
-        return $tables['scrub_status_filesystems'][$fs_uuid] ?? [];
+        return $tables['FS'][$fs_uuid]['scrub_status'] ?? [];
     }
 
     public function extractScrubDevices(array $tables, string $fs_uuid): array
     {
-        return $tables['scrub_status_devices'][$fs_uuid] ?? [];
+        return $tables['FS'][$fs_uuid]['scrub_status_devices'] ?? [];
     }
 
     public function processSingleDeviceScrub(array $deviceScrubData, ?float $previousProgress): array
@@ -253,7 +256,7 @@ class BtrfsPayloadParser
             'health' => $health,
             'progress' => is_numeric($progress) ? (float) $progress : null,
             'bytes_scrubbed' => is_numeric($bytesScrubbed) ? (float) $bytesScrubbed : null,
-            'scrub_started' => is_string($scrubStarted) ? $scrubStarted : null,
+            'scrub_started' => is_numeric($scrubStarted) ? (int) $scrubStarted : null,
             'data' => $data,
         ];
     }
@@ -303,7 +306,8 @@ class BtrfsPayloadParser
     public function getFilesystemsByMountpoint(array $tables): array
     {
         $result = [];
-        foreach ($tables['filesystems'] ?? [] as $fs_uuid => $fs) {
+        foreach ($tables['FS'] ?? [] as $fs_uuid => $group) {
+            $fs = is_array($group) ? ($group['filesystem'] ?? []) : [];
             if (! is_array($fs)) {
                 continue;
             }
@@ -1160,10 +1164,25 @@ class BtrfsDiscovery
      */
     public function extractCounters(array $agentOutput, array $tables, array $fsList): array
     {
+        $fsGroups = $tables['FS'] ?? [];
+        $fsCount = 0;
+        $deviceCount = 0;
+        $backingCount = 0;
+
+        foreach ($fsGroups as $group) {
+            if (! is_array($group) || ! is_array($group['filesystem'] ?? null)) {
+                continue;
+            }
+
+            $fsCount++;
+            $deviceCount += count($group['filesystem_devices'] ?? []);
+            $backingCount += count($group['backing_devices'] ?? []);
+        }
+
         return [
-            'filesystems' => (int) ($agentOutput['counters']['filesystems'] ?? 0),
-            'devices' => (int) ($agentOutput['counters']['devices'] ?? 0),
-            'backing_devices' => (int) ($agentOutput['counters']['backing_devices'] ?? 0),
+            'filesystems' => (int) ($agentOutput['counters']['filesystems'] ?? $fsCount),
+            'devices' => (int) ($agentOutput['counters']['devices'] ?? $deviceCount),
+            'backing_devices' => (int) ($agentOutput['counters']['backing_devices'] ?? $backingCount),
         ];
     }
 
@@ -1178,7 +1197,8 @@ class BtrfsDiscovery
         $state = [];
         App_log::section('Discovery: FS state');
         foreach ($fsByMountpoint as $fsMountpoint => $fsUuid) {
-            $fsRow = $fsList[$fsUuid] ?? [];
+            $fsGroup = $tables['FS'][$fsUuid] ?? [];
+            $fsRow = $fsGroup['filesystem'] ?? [];
             if (! is_array($fsRow)) {
                 continue;
             }
@@ -1195,13 +1215,13 @@ class BtrfsDiscovery
 
             // Build a devid→path map so the polling loop can detect device changes
             $fsInfo = $this->parser->getFsInfo($tables, $fsUuid);
-            $rawFsDevices = $tables['filesystem_devices'][$fsUuid] ?? [];
+            $rawFsDevices = $fsGroup['filesystem_devices'] ?? [];
             $deviceMap = [];
             $deviceMetadata = [];
             $deviceCount = 0;
 
             $devPathToBacking = [];
-            foreach ($tables['backing_devices'] ?? [] as $backingPath => $backingInfo) {
+            foreach ($fsGroup['backing_devices'] ?? [] as $backingPath => $backingInfo) {
                 if (is_array($backingInfo)) {
                     $devPathToBacking[$backingPath] = $backingInfo;
                 }
@@ -1225,7 +1245,7 @@ class BtrfsDiscovery
                 $deviceCount++;
 
                 $backingPath = is_array($rawDevice) ? ($rawDevice['backing_device_path'] ?? null) : null;
-                $sysBlock = $tables['devices'][$devPath] ?? null;
+                $sysBlock = $fsGroup['devices'][$devPath] ?? null;
                 $deviceMetadata[(string) $devId] = [
                     'backing' => $backingPath !== null ? ($devPathToBacking[$backingPath] ?? null) : null,
                     'backing_path' => $backingPath,
@@ -1581,7 +1601,7 @@ class BtrfsPoller
 
         // Determine the btrfs agent protocol version from the payload.
         $tables = $agentOutput['tables'] ?? [];
-        $fsList = $tables['filesystems'] ?? [];
+        $fsList = $tables['FS'] ?? [];
         $btrfsDevVersion = (int) ($agentOutput['version'] ?? $this->appPayload['version'] ?? 0);
 
         // Treat a version-0 payload with filesystem rows as a valid protocol v1 agent.
@@ -1615,7 +1635,7 @@ class BtrfsPoller
     private function runDiscovery(): void
     {
         $tables = $this->appPayload['data']['tables'] ?? [];
-        $fsList = $tables['filesystems'] ?? [];
+        $fsList = $tables['FS'] ?? [];
 
         // Load or seed the discovery state and bump the poll-count (polls since last discovery).
         $discovery = $this->discovery->initDiscoveryState($this->app);
@@ -1672,7 +1692,7 @@ class BtrfsPoller
         // Load tables from the agent payload.
         $tables = $this->appPayload['data']['tables'] ?? [];
         $this->working['FSdata'] = $tables;
-        $fsList = $tables['filesystems'] ?? [];
+        $fsList = $tables['FS'] ?? [];
         if (! isset($fsList[$fsUuid])) {
             return;
         }
@@ -1761,13 +1781,10 @@ class BtrfsPoller
         // Unpack aggregated results from processDevices().
         $ioStatusCode = $devResult['io_status_code'];
         $scrubStatusCode = $devResult['scrub_status_code'];
-        $scrubOperation = ! empty($this->working['fs']['scrub_status']['ops_status']) ? 1 : 0;
-        $balanceOperation = ! empty($fsBalanceStatus['is_running']) ? 1 : 0;
-        $fsHealthCode = $this->working['fs']['has_missing'] ? 2 : ($ioStatusCode === BtrfsSensorSync::STATUS_ERROR ? 1 : 0);
         $fsScrubHealth = $devResult['fs_scrub_health'];
 
-        // Sum device-level usage into filesystem totals and add to the RRD fields and metrics.
-        $usageTotals = $this->rrdWriter->sumUsageTotals($this->working['fs']['input']['usage_devices']);
+        // Copy accumulated per-device usage totals into filesystem fields and metrics.
+        $usageTotals = $this->working['fs']['acc']['usage_totals'];
         foreach ($usageTotals as $k => $v) {
             $fields[$k] = $v;
             $this->working['acc']['metrics'][$fsMetricPrefix . $k] = $v;
@@ -1784,17 +1801,20 @@ class BtrfsPoller
             $this->working['acc']['metrics'][$fsMetricPrefix . 'type_' . $typeId] = $typeValue;
         }
 
-        // Append IO/scrub/balance status codes to the RRD fields and metrics accumulator.
-        $fields[BtrfsRrdWriter::DS_IO_STATUS] = $ioStatusCode;
-        $fields[BtrfsRrdWriter::DS_SCRUB_STATUS] = $scrubStatusCode;
-        $fields[BtrfsRrdWriter::DS_SCRUB_OPERATION] = $scrubOperation;
-        $fields[BtrfsRrdWriter::DS_SCRUB_HEALTH] = $fsScrubHealth;
-        $fields[BtrfsRrdWriter::DS_BALANCE_STATUS] = $balanceStatusCode;
-        $this->working['acc']['metrics'][$fsMetricPrefix . BtrfsRrdWriter::DS_IO_STATUS] = $ioStatusCode;
-        $this->working['acc']['metrics'][$fsMetricPrefix . BtrfsRrdWriter::DS_SCRUB_STATUS] = $scrubStatusCode;
-        $this->working['acc']['metrics'][$fsMetricPrefix . BtrfsRrdWriter::DS_SCRUB_OPERATION] = $scrubOperation;
-        $this->working['acc']['metrics'][$fsMetricPrefix . BtrfsRrdWriter::DS_SCRUB_HEALTH] = $fsScrubHealth;
-        $this->working['acc']['metrics'][$fsMetricPrefix . BtrfsRrdWriter::DS_BALANCE_STATUS] = $balanceStatusCode;
+        $balanceOperation = ! empty($fsBalanceStatus['is_running']) ? 1 : 0;
+        $scrubOperation = ! empty($this->working['fs']['scrub_status']['ops_status']) ? 1 : 0;
+        $fsHealthCode = $this->working['fs']['has_missing'] ? 2 : ($ioStatusCode === BtrfsSensorSync::STATUS_ERROR ? 1 : 0);
+
+        // Append IO/scrub/balance status codes to filesystem RRD fields.
+        foreach ([
+            BtrfsRrdWriter::DS_IO_STATUS => $ioStatusCode,
+            BtrfsRrdWriter::DS_SCRUB_STATUS => $scrubStatusCode,
+            BtrfsRrdWriter::DS_SCRUB_OPERATION => $scrubOperation,
+            BtrfsRrdWriter::DS_SCRUB_HEALTH => $fsScrubHealth,
+            BtrfsRrdWriter::DS_BALANCE_STATUS => $balanceStatusCode,
+        ] as $dataset => $value) {
+            $fields[$dataset] = $value;
+        }
 
         // Feed the aggregator so persistAppData() can derive the overall application status.
         $this->agg->addIoStatus($ioStatusCode);
@@ -1829,19 +1849,6 @@ class BtrfsPoller
             $this->working['acc']['metrics'][$fsMetricPrefix . $k] = $v;
         }
 
-        // Build the per-device scrub data block for persistence in app->data.
-        $scrubDevicesData = [];
-        foreach ($this->working['fs']['input']['raw_scrub_devices'] ?? [] as $devId => $devScrubData) {
-            if (! is_array($devScrubData)) {
-                continue;
-            }
-            $processed = $this->parser->processSingleDeviceScrub($devScrubData, $fsPreviousProgress);
-            $scrubDevicesData[$devId] = array_merge($devScrubData, [
-                'ops_status' => $processed['ops'],
-                'health' => $processed['health'],
-            ]);
-        }
-
         // Assemble and persist the complete per-filesystem poll data block.
         $this->newData['filesystems'][$fsUuid] = [
             'fs_bytes_used' => $fsInfo['fs_bytes_used'],
@@ -1852,7 +1859,7 @@ class BtrfsPoller
             'scrub' => [
                 'status' => $scrubStatusSnapshot,
                 'state' => $this->working['fs']['scrub_status'],
-                'devices' => $scrubDevicesData,
+                'devices' => $this->working['fs']['acc']['scrub_devices_data'],
                 'operation' => $scrubOperation,
                 'health' => $fsScrubHealth,
             ],
@@ -1879,10 +1886,10 @@ class BtrfsPoller
     private function processDevices(): void
     {
         $fsUuid = $this->working['fs']['uuid'];
- 
-        $this->working['fs']['has_missing'] = false;
 
-        $rawFsDevices = $this->working['FSdata']['filesystem_devices'][$fsUuid] ?? [];
+        $this->working['fs']['has_missing'] = ! empty($this->working['FSdata']['FS'][$fsUuid]['filesystem']['missing']);
+
+        $rawFsDevices = $this->working['FSdata']['FS'][$fsUuid]['filesystem_devices'] ?? [];
         $devicePathById = $this->app->data['discovery']['filesystems'][$fsUuid]['devices'] ?? [];
 
         // Output accumulators shared across helpers via working fs state.
@@ -1890,6 +1897,14 @@ class BtrfsPoller
         $this->working['fs']['acc']['device_metrics'] = [];
         $this->working['fs']['acc']['total_io_errors'] = 0.0;
         $this->working['fs']['acc']['device_sensor_values'] = [];
+        $this->working['fs']['acc']['scrub_devices_data'] = [];
+        $this->working['fs']['acc']['usage_totals'] = [
+            'usage_device_size' => 0.0,
+            'usage_unallocated' => 0.0,
+            'usage_data' => 0.0,
+            'usage_metadata' => 0.0,
+            'usage_system' => 0.0,
+        ];
 
         // Track scrub state across all devices to derive the filesystem-level scrub status.
         $this->working['fs']['acc']['has_scrub_data'] = false;
@@ -1897,6 +1912,7 @@ class BtrfsPoller
         $this->working['fs']['acc']['scrub_is_running'] = (int) ($this->working['fs']['scrub_status']['ops_status'] ?? -1) === 1;
         $this->working['fs']['acc']['fs_scrub_health'] = 0;
         $this->working['fs']['acc']['io_has_error'] = false;
+        $this->working['fs']['input']['usage_devices'] = [];
 
         $this->working['fs']['input']['device_path_by_id'] = [];
         foreach ($devicePathById as $devId => $devPath) {
@@ -1906,35 +1922,6 @@ class BtrfsPoller
             }
 
             $this->working['fs']['input']['device_path_by_id'][$devId] = (string) $devPath;
-        }
-
-        foreach ($this->working['fs']['input']['device_path_by_id'] as $devId => $devPath) {
-            $rawDevice = $rawFsDevices[$devId] ?? [];
-            if (! is_array($rawDevice)) {
-                $rawDevice = [];
-            }
-
-            $usageRow = [
-                'device_size' => $rawDevice['size'] ?? null,
-                'device_slack' => $rawDevice['slack'] ?? 0,
-                'unallocated' => $rawDevice['unallocated'] ?? null,
-                'data_bytes' => (float) ($rawDevice['data'] ?? 0),
-                'metadata_bytes' => (float) ($rawDevice['metadata'] ?? 0),
-                'system_bytes' => (float) ($rawDevice['system'] ?? 0),
-                'backing_device_path' => $rawDevice['backing_device_path'] ?? null,
-                'type_values' => [],
-            ];
-
-            $devProfiles = $rawDevice['profiles'] ?? $rawDevice['raid_profiles'] ?? null;
-            if (is_array($devProfiles)) {
-                foreach ($devProfiles as $profileEntry) {
-                    if (is_array($profileEntry) && is_string($profileEntry['profile'] ?? null) && is_numeric($profileEntry['bytes'] ?? null)) {
-                        $usageRow['type_values'][$profileEntry['profile']] = $profileEntry['bytes'];
-                    }
-                }
-            }
-
-            $this->working['fs']['input']['usage_devices'][$devPath] = $usageRow;
         }
 
         // -------------------------------------------------------------------------
@@ -1964,17 +1951,73 @@ class BtrfsPoller
         if (! is_string($devPath) || $devPath === '') {
             return;
         }
-
-        $rawMissing = $this->working['FSdata']['filesystem_devices'][$fsUuid][$devId]['missing'] ?? null;
-        $rawDeviceMissing = $this->working['FSdata']['filesystem_devices'][$fsUuid][$devId]['device_missing'] ?? null;
-        if ($rawMissing || $rawDeviceMissing) {
+ 
+        if ($this->working['FSdata']['FS'][$fsUuid]['filesystem_devices'][$devId]['missing'] ?? null) {
+            $previousUsage = $this->app->data['filesystems'][$fsUuid]['device_tables'][$devId]['usage'] ?? [];
+            $usageStats = [
+                'device_size' => $previousUsage['size'] ?? null,
+                'device_slack' => $previousUsage['slack'] ?? null,
+                'unallocated' => $previousUsage['unallocated'] ?? null,
+                'data_bytes' => (float) ($previousUsage['data'] ?? 0),
+                'metadata_bytes' => (float) ($previousUsage['metadata'] ?? 0),
+                'system_bytes' => (float) ($previousUsage['system'] ?? 0),
+                'device_missing' => $this->working['FSdata']['FS'][$fsUuid]['filesystem_devices'][$devId]['device_missing'] ?? null,
+                'backing_device_path' => null,
+                'type_values' => is_array($this->app->data['filesystems'][$fsUuid]['device_tables'][$devId]['raid_profiles'] ?? null)
+                    ? $this->app->data['filesystems'][$fsUuid]['device_tables'][$devId]['raid_profiles']
+                    : [],
+            ];
+            $this->working['fs']['input']['usage_devices'][$devPath] = $usageStats;
             $this->working['fs']['has_missing'] = true;
+
+            $rawDevice = $this->working['FSdata']['FS'][$fsUuid]['filesystem_devices'][$devId] ?? [];
+            if (! is_array($rawDevice)) {
+                $rawDevice = [];
+            }
+            $devStats = [
+                'devid' => (int) $devId,
+                'missing' => true,
+                'corruption_errs' => $rawDevice['corruption_errs'] ?? null,
+                'flush_io_errs' => $rawDevice['flush_io_errs'] ?? null,
+                'generation_errs' => $rawDevice['generation_errs'] ?? null,
+                'read_io_errs' => $rawDevice['read_io_errs'] ?? null,
+                'write_io_errs' => $rawDevice['write_io_errs'] ?? null,
+            ];
+            $deviceNumericId = $devStats['devid'] ?? $devId;
+
+            $this->working['fs']['acc']['usage_totals']['usage_device_size'] += (float) ($usageStats['device_size'] ?? 0);
+            $this->working['fs']['acc']['usage_totals']['usage_unallocated'] += (float) ($usageStats['unallocated'] ?? 0);
+            $this->working['fs']['acc']['usage_totals']['usage_data'] += (float) ($usageStats['data_bytes'] ?? 0);
+            $this->working['fs']['acc']['usage_totals']['usage_metadata'] += (float) ($usageStats['metadata_bytes'] ?? 0);
+            $this->working['fs']['acc']['usage_totals']['usage_system'] += (float) ($usageStats['system_bytes'] ?? 0);
+
+            $hasDeviceError = $this->rrdWriter->hasDeviceError($devStats);
+            $devIoStatusCode = $this->mapper->getDevIoStatusCode(count($devStats) > 0, $hasDeviceError, true);
+            if ($hasDeviceError) {
+                $this->working['fs']['acc']['io_has_error'] = true;
+            }
+
+            $this->working['fs']['acc']['device_tables'][$devId] = $this->rrdWriter->buildDeviceTableRow($devPath, $deviceNumericId, $devStats, $usageStats);
+            $this->working['fs']['acc']['device_tables'][$devId]['io_status_code'] = $devIoStatusCode;
+            $this->working['fs']['acc']['device_tables'][$devId]['scrub_status_code'] = BtrfsSensorSync::STATUS_NA;
+
+            $ioErrs = (float) $this->rrdWriter->sumDeviceErrors($devStats);
+            $this->working['fs']['acc']['device_sensor_values'][$devId] = [
+                'status' => [
+                    'health' => 2,
+                    'scrub' => BtrfsSensorSync::STATUS_NA,
+                ],
+                'counts' => [
+                    'io_errors' => $ioErrs,
+                ],
+            ];
+            $this->working['fs']['acc']['total_io_errors'] += $ioErrs;
+
+            return;
         }
 
-        $rawScrubDevices = $this->working['fs']['input']['raw_scrub_devices'] ?? [];
-        $rawFsDevices = $this->working['FSdata']['filesystem_devices'][$fsUuid] ?? [];
-        $rawDevice = $rawFsDevices[$devId] ?? [];
-
+        $rawScrubDevices =  $this->working['fs']['input']['raw_scrub_devices'] ?? []; 
+        $rawDevice = $this->working['FSdata']['FS'][$fsUuid]['filesystem_devices'][$devId] ?? [];
         if (! is_array($rawDevice)) {
             $rawDevice = [];
         }
@@ -1989,10 +2032,47 @@ class BtrfsPoller
             'write_io_errs' => $rawDevice['write_io_errs'] ?? null,
         ];
  
-        $usageStats = $this->working['fs']['input']['usage_devices'][$devPath] ?? [];
+        $usageStats = [
+            'device_size' => $rawDevice['size'] ?? null,
+            'device_slack' => $rawDevice['slack'] ?? 0,
+            'unallocated' => $rawDevice['unallocated'] ?? null,
+            'data_bytes' => (float) ($rawDevice['data'] ?? 0),
+            'metadata_bytes' => (float) ($rawDevice['metadata'] ?? 0),
+            'system_bytes' => (float) ($rawDevice['system'] ?? 0),
+            'device_missing' => $rawDevice['device_missing'] ?? null,
+            'backing_device_path' => $rawDevice['backing_device_path'] ?? null,
+            'type_values' => [],
+        ];
+        if (is_array($rawDevice['profiles'] ?? null)) {
+            foreach ($rawDevice['profiles'] as $profileEntry) {
+                if (is_array($profileEntry) && is_string($profileEntry['profile'] ?? null) && is_numeric($profileEntry['bytes'] ?? null)) {
+                    $usageStats['type_values'][$profileEntry['profile']] = $profileEntry['bytes'];
+                }
+            }
+        } elseif (is_array($rawDevice['raid_profiles'] ?? null)) {
+            foreach ($rawDevice['raid_profiles'] as $profileEntry) {
+                if (is_array($profileEntry) && is_string($profileEntry['profile'] ?? null) && is_numeric($profileEntry['bytes'] ?? null)) {
+                    $usageStats['type_values'][$profileEntry['profile']] = $profileEntry['bytes'];
+                }
+            }
+        }
+        $this->working['fs']['input']['usage_devices'][$devPath] = $usageStats;
+        $this->working['fs']['acc']['usage_totals']['usage_device_size'] += (float) ($usageStats['device_size'] ?? 0);
+        $this->working['fs']['acc']['usage_totals']['usage_unallocated'] += (float) ($usageStats['unallocated'] ?? 0);
+        $this->working['fs']['acc']['usage_totals']['usage_data'] += (float) ($usageStats['data_bytes'] ?? 0);
+        $this->working['fs']['acc']['usage_totals']['usage_metadata'] += (float) ($usageStats['metadata_bytes'] ?? 0);
+        $this->working['fs']['acc']['usage_totals']['usage_system'] += (float) ($usageStats['system_bytes'] ?? 0);
         $devStats['missing'] = (bool) ($devStats['missing'] ?? false);
         $deviceNumericId = $devStats['devid'] ?? $devId;
         $scrubData = $rawScrubDevices[$devId] ?? null;
+
+        if (is_array($scrubData)) {
+            $processedScrubData = $this->parser->processSingleDeviceScrub($scrubData, $this->working['fs']['previous_progress']);
+            $this->working['fs']['acc']['scrub_devices_data'][$devId] = array_merge($scrubData, [
+                'ops_status' => $processedScrubData['ops'],
+                'health' => $processedScrubData['health'],
+            ]);
+        }
 
         // No scrub data for this device: write the table row with no scrub status and continue.
         if ($scrubData === null || ! is_array($scrubData)) {
@@ -2286,8 +2366,8 @@ class BtrfsPoller
         }
 
         $scrubStartedRaw = $rawStatus['scrub_started'] ?? null;
-        if (is_string($scrubStartedRaw) && trim($scrubStartedRaw) !== '') {
-            $scrubStarted = trim($scrubStartedRaw);
+        if (is_numeric($scrubStartedRaw)) {
+            $scrubStarted = (int) $scrubStartedRaw;
         }
 
         // Get current progress
@@ -2319,11 +2399,11 @@ class BtrfsPoller
      *   restarted from a lower value
      *
      * @param  float|null $bytes    Current bytes_scrubbed from the agent payload.
-     * @param  string|null $started  Current scrub_started timestamp from the agent payload.
+     * @param  int|null   $started  Current scrub_started timestamp from the agent payload.
      * @param  array      $oldState Previous scrub status block persisted in app->data.
      * @return float|null           Safe value for the RRD, or null if a reset was detected.
      */
-    private function bytesForRrd(?float $bytes, ?string $started, array $oldState): ?float
+    private function bytesForRrd(?float $bytes, ?int $started, array $oldState): ?float
     {
         $bytesForRrd = $bytes;
 
@@ -2331,12 +2411,9 @@ class BtrfsPoller
         $previousBytes = is_numeric($oldState['bytes'] ?? null)
             ? (float) $oldState['bytes']
             : null;
-        $previousStarted = is_string($oldState['scrub_started'] ?? null)
-            ? trim((string) $oldState['scrub_started'])
+        $previousStarted = is_numeric($oldState['scrub_started'] ?? null)
+            ? (int) $oldState['scrub_started']
             : null;
-        if ($previousStarted === '') {
-            $previousStarted = null;
-        }
 
         if ($bytesForRrd !== null && $previousBytes !== null) {
             // Counter reset: bytes went backwards within the same scrub session.
