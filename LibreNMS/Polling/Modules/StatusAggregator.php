@@ -2,6 +2,16 @@
 
 namespace LibreNMS\Polling\Modules;
 
+/**
+ * Aggregates per-category counts for integer status codes during polling.
+ *
+ * Usage:
+ *   $aggregator = new StatusAggregator();
+ *   $aggregator->add('sensors', 0);
+ *   $aggregator->add('sensors', 1);
+ *   $aggregator->count('sensors', 1); // count for code 1
+ *   $aggregator->total('sensors');    // total entries in category
+ */
 class StatusAggregator
 {
     private array $counts = [];
