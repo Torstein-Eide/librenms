@@ -38,10 +38,14 @@ class DiskTypeFilterTest extends TestCase
             ['view' => 'logical', 'subtype' => 'dm'],
             DiskTypeFilter::classify('dm-0')
         );
+
+        // Software RAID
         $this->assertEquals(
-            ['view' => 'logical', 'subtype' => 'md'],
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
             DiskTypeFilter::classify('md0')
         );
+
+        // Image/Mem devices
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'loop'],
             DiskTypeFilter::classify('loop0')
@@ -50,7 +54,7 @@ class DiskTypeFilterTest extends TestCase
 
     public function testClassifyUnixBsdDisks()
     {
-        // Physical drives (other category)
+        // Physical drives
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'sd_family'],
             DiskTypeFilter::classify('da0')
@@ -79,6 +83,64 @@ class DiskTypeFilterTest extends TestCase
         );
     }
 
+    public function testClassifyBsdSoftwareRaid()
+    {
+        // FreeBSD software RAID (ccd)
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('ccd0', 'freebsd')
+        );
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('ccd1', 'freebsd')
+        );
+
+        // BSD VND (vnode disk)
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('vnd0', 'freebsd')
+        );
+
+        // OpenBSD/NetBSD software RAID
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('ccd0', 'openbsd')
+        );
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('ccd0', 'netbsd')
+        );
+
+        // Linux md devices exist on BSD via compatibility layers
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('md0', 'freebsd')
+        );
+    }
+
+    public function testClassifyLinuxMd()
+    {
+        // Linux md devices should be software RAID
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('md0', 'linux')
+        );
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('md1', 'linux')
+        );
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('md127', 'linux')
+        );
+
+        // Without OS specified, md should still be software RAID
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::classify('md0')
+        );
+    }
+
     public function testClassifyUnknownDisks()
     {
         $this->assertEquals(
@@ -91,11 +153,15 @@ class DiskTypeFilterTest extends TestCase
     {
         $physicalDisk = ['view' => 'physical', 'subtype' => 'sd_family'];
         $logicalDisk = ['view' => 'logical', 'subtype' => 'partitions'];
+        $swRaidDisk = ['view' => 'logical', 'subtype' => 'sw_raid'];
+        $loopDisk = ['view' => 'logical', 'subtype' => 'loop'];
         $otherDisk = ['view' => 'physical', 'subtype' => 'other'];
 
         // Test all view
         $this->assertTrue(DiskTypeFilter::matches($physicalDisk, 'all', 'all'));
         $this->assertTrue(DiskTypeFilter::matches($logicalDisk, 'all', 'all'));
+        $this->assertTrue(DiskTypeFilter::matches($swRaidDisk, 'all', 'all'));
+        $this->assertTrue(DiskTypeFilter::matches($loopDisk, 'all', 'all'));
         $this->assertTrue(DiskTypeFilter::matches($otherDisk, 'all', 'all'));
 
         // Test physical view
@@ -105,11 +171,18 @@ class DiskTypeFilterTest extends TestCase
         $this->assertTrue(DiskTypeFilter::matches($otherDisk, 'physical', 'all'));
         $this->assertTrue(DiskTypeFilter::matches($otherDisk, 'physical', 'other'));
         $this->assertFalse(DiskTypeFilter::matches($logicalDisk, 'physical', 'all'));
+        $this->assertFalse(DiskTypeFilter::matches($swRaidDisk, 'physical', 'all'));
+        $this->assertFalse(DiskTypeFilter::matches($loopDisk, 'physical', 'all'));
 
         // Test logical view
         $this->assertTrue(DiskTypeFilter::matches($logicalDisk, 'logical', 'all'));
         $this->assertTrue(DiskTypeFilter::matches($logicalDisk, 'logical', 'partitions'));
         $this->assertFalse(DiskTypeFilter::matches($logicalDisk, 'logical', 'dm'));
+        $this->assertTrue(DiskTypeFilter::matches($swRaidDisk, 'logical', 'all'));
+        $this->assertTrue(DiskTypeFilter::matches($swRaidDisk, 'logical', 'sw_raid'));
+        $this->assertFalse(DiskTypeFilter::matches($swRaidDisk, 'logical', 'loop'));
+        $this->assertTrue(DiskTypeFilter::matches($loopDisk, 'logical', 'all'));
+        $this->assertTrue(DiskTypeFilter::matches($loopDisk, 'logical', 'loop'));
         $this->assertFalse(DiskTypeFilter::matches($physicalDisk, 'logical', 'all'));
     }
 
@@ -123,6 +196,14 @@ class DiskTypeFilterTest extends TestCase
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'partitions'],
             DiskTypeFilter::normalizeSelection('logical', 'partitions')
+        );
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'sw_raid'],
+            DiskTypeFilter::normalizeSelection('logical', 'sw_raid')
+        );
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'loop'],
+            DiskTypeFilter::normalizeSelection('logical', 'loop')
         );
         $this->assertEquals(
             ['view' => 'all', 'subtype' => 'all'],
@@ -147,7 +228,7 @@ class DiskTypeFilterTest extends TestCase
             DiskTypeFilter::subtypesFor('physical')
         );
         $this->assertEquals(
-            ['all', 'partitions', 'dm', 'md', 'loop', 'other'],
+            ['all', 'partitions', 'dm', 'sw_raid', 'loop', 'other'],
             DiskTypeFilter::subtypesFor('logical')
         );
         $this->assertEquals(

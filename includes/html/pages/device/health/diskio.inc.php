@@ -1,24 +1,7 @@
 <?php
 
-/*
- * Disk I/O Health Page - LibreNMS Extension
- *
- * This page displays device disk I/O monitoring data with categorized views for physical and logical drives.
- *
- * Important Notes:
- * 1. Disk I/O filters are only applied for known disks
- * 2. For non-classifed disk, will be defined as ['view' => 'physical', 'subtype' => 'other']
- * 3. This approach ensures cross-platform compatibility and proper display of disk I/O data
- * 4. Filter error handling: Drive is silently skipped if classification matching fails
- */
-/**
- * LibreNMS
- *
- *   This file is part of LibreNMS.
- *
- * @copyright  (C) LibreNMS
- * @copyright  (C) 2026 LibreNMS Contributors
- */
+use App\Models\DiskIo;
+
 $diskioViews = [
     'physical' => 'Physical Drives',
     'logical' => 'Logical Drives',
@@ -31,19 +14,19 @@ $selectedDiskioSubtype = $selection['subtype'];
 
 $diskioSubtypes = [
     'physical' => [
-        'all' => 'All Physical',
+        'all' => 'All',
         'sd_family' => 'SATA/SCSI/Virtual',
         'nvme' => 'NVMe Drives',
         'mmcblk' => 'MMC/SD Drives',
-        'other' => 'Other Physical',
+        'other' => 'Other',
     ],
     'logical' => [
-        'all' => 'All Logical',
+        'all' => 'All',
         'partitions' => 'Partitions',
         'dm' => 'Device Mapper',
-        'md' => 'Software RAID',
-        'loop' => 'Loop Devices',
-        'other' => 'Other Logical',
+        'sw_raid' => 'Software RAID',
+        'loop' => 'Image',
+        'other' => 'Other',
     ],
 ];
 
@@ -53,6 +36,34 @@ $diskioLinkArray = [
     'tab' => 'health',
     'metric' => 'diskio',
 ];
+
+// Pre-classify all drives to determine which subtypes have matching devices
+$drives = DiskIo::query()->where('device_id', $device['device_id'])->orderBy('diskio_descr')->get();
+$activeSubtypes = [
+    'physical' => ['all' => true],
+    'logical' => ['all' => true],
+];
+
+foreach ($drives as $drive) {
+    $driveType = LibreNMS\Util\DiskTypeFilter::classify($drive['diskio_descr'], $device['os'] ?? null);
+    $view = $driveType['view'];
+    $subtype = $driveType['subtype'];
+
+    if (isset($activeSubtypes[$view])) {
+        $activeSubtypes[$view][$subtype] = true;
+    }
+}
+
+// Filter subtypes to only show those with matching drives (keep 'all' always visible)
+foreach (['physical', 'logical'] as $view) {
+    $filteredSubtypes = [];
+    foreach ($diskioSubtypes[$view] as $subtype => $label) {
+        if ($subtype === 'all' || $subtype === 'other' || isset($activeSubtypes[$view][$subtype])) {
+            $filteredSubtypes[$subtype] = $label;
+        }
+    }
+    $diskioSubtypes[$view] = $filteredSubtypes;
+}
 
 print_optionbar_start();
 echo "<span style='font-weight: bold;'>Drives</span> &#187; ";
@@ -71,7 +82,7 @@ foreach ($diskioViews as $diskioView => $text) {
     $sep = ' | ';
 }
 
-if (in_array($selectedDiskioView, ['physical', 'logical'], true)) {
+if (in_array($selectedDiskioView, ['physical', 'logical'], true) && count($diskioSubtypes[$selectedDiskioView]) > 1) {
     echo '<br><span style="padding-left: 22px;"><strong>Type</strong> &#187; ';
     $sep = '';
     foreach ($diskioSubtypes[$selectedDiskioView] as $diskioSubtype => $text) {
@@ -93,7 +104,7 @@ if (in_array($selectedDiskioView, ['physical', 'logical'], true)) {
 print_optionbar_end();
 
 $viewDescriptions = [
-    'physical' => 'Physical drives are whole block devices (for example sda, nvme0n1, mmcblk0).',
+    'physical' => 'Physical drives are whole block devices (for example sda, nvme0n1, mmcblk0, da0, ad0).',
     'logical' => 'Logical drives are partitions and virtual devices (for example sda1, nvme0n1p1, dm-0, md0, loop0).',
     'all' => 'All drives shows both physical and logical disk I/O entries.',
 ];
@@ -101,7 +112,7 @@ $viewDescriptions = [
 $subtypeDescriptions = [
     'physical' => [
         'all' => 'All physical device families.',
-        'sd_family' => 'Classic Linux disk families: sd*, hd*, vd*, and xvd*.',
+        'sd_family' => 'Classic disk families: sd*, hd*, vd*, xvd*, da*, ad*.',
         'nvme' => 'NVMe namespaces such as nvme0n1.',
         'mmcblk' => 'MMC and SD block devices such as mmcblk0.',
         'other' => 'Physical drives that do not match a known family.',
@@ -110,8 +121,8 @@ $subtypeDescriptions = [
         'all' => 'All logical device types.',
         'partitions' => 'Disk partitions such as sda1, nvme0n1p1, and mmcblk0p1.',
         'dm' => 'Device mapper volumes named dm-*.',
-        'md' => 'Linux software RAID devices named md*.',
-        'loop' => 'Loopback devices named loop*.',
+        'sw_raid' => 'Software RAID devices (for example md0 on Linux, ccd* on BSD).',
+        'loop' => 'Image-backed loop devices such as loop0.',
         'other' => 'Logical drives that do not match a known type.',
     ],
 ];
@@ -125,8 +136,8 @@ echo '</div>';
 
 $row = 1;
 
-foreach (dbFetchRows('SELECT * FROM `ucd_diskio` WHERE device_id = ? ORDER BY diskio_descr', [$device['device_id']]) as $drive) {
-    $driveType = LibreNMS\Util\DiskTypeFilter::classify($drive['diskio_descr']);
+foreach ($drives as $drive) {
+    $driveType = LibreNMS\Util\DiskTypeFilter::classify($drive['diskio_descr'], $device['os'] ?? null);
     if (! LibreNMS\Util\DiskTypeFilter::matches($driveType, $selectedDiskioView, $selectedDiskioSubtype)) {
         continue;
     }
@@ -145,8 +156,14 @@ foreach (dbFetchRows('SELECT * FROM `ucd_diskio` WHERE device_id = ? ORDER BY di
         }
     }
 
-    $graph_array_zoom['from'] = App\Facades\LibrenmsConfig::get('time.twoday');
-    $graph_array_zoom['to'] = App\Facades\LibrenmsConfig::get('time.now');
+    $graph_array_zoom = [
+        'id' => $drive['diskio_id'],
+        'type' => 'diskio_ops',
+        'width' => 400,
+        'height' => 125,
+        'from' => App\Facades\LibrenmsConfig::get('time.twoday'),
+        'to' => App\Facades\LibrenmsConfig::get('time.now'),
+    ];
 
     $overlib_link = LibreNMS\Util\Url::overlibLink($fs_url, $drive['diskio_descr'], LibreNMS\Util\Url::graphTag($graph_array_zoom));
 
@@ -175,4 +192,24 @@ foreach (dbFetchRows('SELECT * FROM `ucd_diskio` WHERE device_id = ? ORDER BY di
     }
 
     $row++;
+}
+
+if (isset($vars['debug']) && $vars['debug'] == 1) {
+    echo '<h4>Debug Info</h4>';
+    echo '<pre>';
+    echo 'Device variables:' . PHP_EOL;
+    print_r($device);
+    echo PHP_EOL . 'URL vars:' . PHP_EOL;
+    print_r($vars);
+    echo PHP_EOL . 'Selection:' . PHP_EOL;
+    print_r($selection);
+    echo PHP_EOL . 'diskioSubtypes (filtered):' . PHP_EOL;
+    print_r($diskioSubtypes);
+    echo PHP_EOL . 'viewDescriptions:' . PHP_EOL;
+    print_r($viewDescriptions);
+    echo PHP_EOL . 'subtypeDescriptions:' . PHP_EOL;
+    print_r($subtypeDescriptions);
+    echo PHP_EOL . 'activeSubtypes:' . PHP_EOL;
+    print_r($activeSubtypes);
+    echo '</pre>';
 }
