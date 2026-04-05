@@ -39,6 +39,16 @@ class DiskTypeFilterTest extends TestCase
             DiskTypeFilter::classify('dm-0')
         );
 
+        // Memory-backed devices
+        $this->assertEquals(
+            ['view' => 'physical', 'subtype' => 'memory'],
+            DiskTypeFilter::classify('ram0')
+        );
+        $this->assertEquals(
+            ['view' => 'physical', 'subtype' => 'memory'],
+            DiskTypeFilter::classify('zram0')
+        );
+
         // Software RAID
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
@@ -224,7 +234,7 @@ class DiskTypeFilterTest extends TestCase
     public function testSubtypesFor()
     {
         $this->assertEquals(
-            ['all', 'sd_family', 'nvme', 'mmcblk', 'other'],
+            ['all', 'sd_family', 'nvme', 'mmcblk', 'memory', 'other'],
             DiskTypeFilter::subtypesFor('physical')
         );
         $this->assertEquals(

@@ -33,7 +33,7 @@ final class DiskTypeFilter
     public static function subtypesFor(string $view): array
     {
         return match ($view) {
-            'physical' => ['all', 'sd_family', 'nvme', 'mmcblk', 'other'],
+            'physical' => ['all', 'sd_family', 'nvme', 'mmcblk', 'memory', 'other'],
             'logical' => ['all', 'partitions', 'dm', 'sw_raid', 'loop', 'other'],
             default => ['all'],
         };
@@ -51,13 +51,20 @@ final class DiskTypeFilter
             return ['view' => 'logical', 'subtype' => 'loop'];
         }
 
-        // Software RAID - OS-aware: ccd*, vnd* (BSD), md* (Linux)
+        // Memory-backed devices: ram*, zram* (Linux)
+        if (preg_match('/^(ram|zram)\d+$/i', $diskName)) {
+            return ['view' => 'physical', 'subtype' => 'memory'];
+        }
+
+        // BSD memory disks (md*) - handled in sw_raid below
         if ($os !== null && in_array($os, self::BSD_FAMILY, true)) {
-            if (preg_match('/^(ccd|vnd)\d+$/i', $diskName)) {
-                return ['view' => 'logical', 'subtype' => 'sw_raid'];
+            if (preg_match('/^(md)\d+$/i', $diskName)) {
+                return ['view' => 'physical', 'subtype' => 'memory'];
             }
         }
-        if (preg_match('/^md\d+$/i', $diskName)) {
+
+        // Software RAID - OS-aware: ccd*, vnd* (BSD), md* (Linux)
+        if (preg_match('/^(ccd|vnd|md)\d+$/i', $diskName)) {
             return ['view' => 'logical', 'subtype' => 'sw_raid'];
         }
 
