@@ -293,6 +293,7 @@ nav:
       - Mem/CPU Information: Developing/os/Mem-CPU-Information.md
       - Test Units: Developing/os/Test-Units.md
       - Health Information: Developing/os/Health-Information.md
+      - Disk Type Filtering: Developing/os/Disk-Type-Filtering.md
       - Wireless Sensors: Developing/os/Wireless-Sensors.md
       - Custom Graphs: Developing/os/Custom-Graphs.md
       - Settings: Developing/os/Settings.md
