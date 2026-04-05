@@ -195,23 +195,3 @@ foreach ($drives as $drive) {
 
     $row++;
 }
-
-if (isset($vars['debug']) && $vars['debug'] == 1) {
-    echo '<h4>Debug Info</h4>';
-    echo '<pre>';
-    echo 'Device variables:' . PHP_EOL;
-    print_r($device);
-    echo PHP_EOL . 'URL vars:' . PHP_EOL;
-    print_r($vars);
-    echo PHP_EOL . 'Selection:' . PHP_EOL;
-    print_r($selection);
-    echo PHP_EOL . 'diskioSubtypes (filtered):' . PHP_EOL;
-    print_r($diskioSubtypes);
-    echo PHP_EOL . 'viewDescriptions:' . PHP_EOL;
-    print_r($viewDescriptions);
-    echo PHP_EOL . 'subtypeDescriptions:' . PHP_EOL;
-    print_r($subtypeDescriptions);
-    echo PHP_EOL . 'activeSubtypes:' . PHP_EOL;
-    print_r($activeSubtypes);
-    echo '</pre>';
-}
