@@ -18,6 +18,7 @@ $diskioSubtypes = [
         'sd_family' => 'SATA/SCSI/Virtual',
         'nvme' => 'NVMe Drives',
         'mmcblk' => 'MMC/SD Drives',
+        'memory' => 'Memory',
         'other' => 'Other',
     ],
     'logical' => [
@@ -115,6 +116,7 @@ $subtypeDescriptions = [
         'sd_family' => 'Classic disk families: sd*, hd*, vd*, xvd*, da*, ad*.',
         'nvme' => 'NVMe namespaces such as nvme0n1.',
         'mmcblk' => 'MMC and SD block devices such as mmcblk0.',
+        'memory' => 'Memory-backed block devices such as ram0, zram0.',
         'other' => 'Physical drives that do not match a known family.',
     ],
     'logical' => [

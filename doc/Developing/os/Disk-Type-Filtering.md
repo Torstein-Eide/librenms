@@ -24,6 +24,7 @@ The disk I/O health page (`includes/html/pages/device/health/diskio.inc.php`) pr
 | `sd_family` | SATA/SCSI/Virtual | sd*, hd*, vd*, xvd*, da*, ad* |
 | `nvme` | NVMe Drives | nvme0n1, nvme1n1 |
 | `mmcblk` | MMC/SD Drives | mmcblk0, mmcblk1 |
+| `memory` | Memory | ram0, zram0 |
 | `other` | Other | Anything not matching above patterns |
 
 ### Logical Subtypes
@@ -47,7 +48,7 @@ Update `subtypesFor()` to include the new subtype key:
 public static function subtypesFor(string $view): array
 {
     return match ($view) {
-        'physical' => ['all', 'sd_family', 'nvme', 'mmcblk', 'other'],
+        'physical' => ['all', 'sd_family', 'nvme', 'mmcblk', 'memory', 'other'],
         'logical' => ['all', 'partitions', 'dm', 'sw_raid', 'loop', 'other'],
         default => ['all'],
     };
@@ -170,6 +171,7 @@ public function testSubtypesFor()
 | `sd*`, `hd*`, `vd*`, `xvd*` | Physical disk | physical | sd_family |
 | `nvme*n*` | NVMe device | physical | nvme |
 | `mmcblk*` | MMC/SD card | physical | mmcblk |
+| `ram*`, `zram*` | Memory-backed | physical | memory |
 | `sda1`, `nvme0n1p1` | Partition | logical | partitions |
 | `dm-*` | Device mapper | logical | dm |
 | `md*` | Software RAID | logical | sw_raid |
