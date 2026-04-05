@@ -186,7 +186,7 @@ public function testSubtypesFor()
 | `da0p1`, `ad0s1c` | Partition | logical | partitions |
 | `ccd*` | Configurable disk (RAID) | logical | sw_raid |
 | `vnd*` | Vnode disk | logical | sw_raid |
-| `md*` (via compat) | Software RAID | logical | sw_raid |
+| `md*` | Memory disk | physical | memory |
 
 ## Running Tests
 
