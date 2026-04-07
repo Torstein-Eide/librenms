@@ -1034,7 +1034,7 @@ function btrfs_renderFsPanelsRow1(
 
     $overview_rows = [];
     foreach ($fs_table as $key => $value) {
-        if (in_array($key, ['profiles', 'lines', 'io_status_code', 'scrub_status_code', 'scrub_operation', 'scrub_health', 'balance_status_code', 'scrub_bytes_scrubbe'], true)) {
+        if (in_array($key, ['profiles', 'lines', 'io_status_code', 'scrub_status_code', 'scrub_operation', 'scrub_health', 'balance_status_code', 'scrub_bytes_done'], true)) {
             continue;
         }
         $overview_rows = array_merge($overview_rows, flatten_assoc_rows([$key => $value]));

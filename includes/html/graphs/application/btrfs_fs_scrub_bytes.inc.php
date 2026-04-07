@@ -24,8 +24,7 @@ $rrd_list = [
     [
         'filename' => $rrd_filename,
         'descr' => 'Scrub Rate',
-        // ds name is to long for rrdtool, so we use "scrub_bytes_scrubbe" instead of "scrub_bytes_scrubbed"
-        'ds' => 'scrub_bytes_scrubbe',
+        'ds' => 'scrub_bytes_done',
     ],
 ];
 
