@@ -11,29 +11,8 @@ $graph_type ??= 'sensor_' . $class->value;
 // sensor_descr within each group.  The original sort was sensor_descr only.
 $sensors = App\Models\Sensor::where('sensor_class', $class)->where('device_id', $device['device_id'])->orderBy('group')->orderBy('sensor_descr')->get();
 
-// Build lookup tables for group heading suppression logic.
-// See sensor.inc.php (overview) for the full explanation; same rules apply here.
-$groupCounts = [];      // exact group string → sensor count
-$groupHasChildren = []; // group string → true when a deeper sub-path exists
-
-foreach ($sensors as $sensor) {
-    $g = $sensor->group ?? '';
-    $groupCounts[$g] = ($groupCounts[$g] ?? 0) + 1;
-    $parts = $g !== '' ? explode('::', $g) : [];
-    for ($i = 0; $i < count($parts) - 1; $i++) {
-        $ancestor = implode('::', array_slice($parts, 0, $i + 1));
-        $groupHasChildren[$ancestor] = true;
-    }
-}
-
-// Suppress a heading when the group has exactly one sensor and no child groups.
-$isGroupSuppressed = function (string $groupPath) use ($groupCounts, $groupHasChildren): bool {
-    if ($groupPath === '') {
-        return true;
-    }
-
-    return ($groupCounts[$groupPath] ?? 0) === 1 && empty($groupHasChildren[$groupPath]);
-};
+include_once 'includes/html/pages/device/sensor-group-helpers.inc.php';
+[$groupCounts, $groupHasChildren] = buildSensorGroupData($sensors);
 
 // Tracks which heading levels have already been rendered for the current position
 // in the sorted list.  Reset at each depth where the path changes.
@@ -52,7 +31,7 @@ foreach ($sensors as $sensor) {
             $currentPath = array_slice($currentPath, 0, $depth);
             for ($d = $depth; $d < count($parts); $d++) {
                 $pathToHere = implode('::', array_slice($parts, 0, $d + 1));
-                if (! $isGroupSuppressed($pathToHere)) {
+                if (! isSensorGroupSuppressed($pathToHere, $groupCounts, $groupHasChildren)) {
                     $marginLeft = $d * 16;
                     $headingSize = $d === 0 ? 'h4' : 'h5';
                     echo "<div style='margin-left:{$marginLeft}px; margin-top: 8px; margin-bottom: 4px;'>"
@@ -64,24 +43,11 @@ foreach ($sensors as $sensor) {
             break;
         }
     }
-    // Strip the root (first) group segment from sensor_descr when its heading is
-    // visible.  The heading already provides that context, so repeating it in every
-    // panel title is redundant.  The full sensor_descr is preserved in alerts and
-    // eventlog because those pages do not call this file.
-    //
-    // Example: group "BtrFS volum1::Devices", root segment "BtrFS volum1"
-    //   "BtrFS volum1 /dev/sdc IO" -> "/dev/sdc IO"
-    //   "BtrFS volum1 IO"          -> "IO"
-    $displayDescr = $sensor['sensor_descr'];
-    if (! empty($parts) && ! $isGroupSuppressed($parts[0])) {
-        $rootSegment = $parts[0];
-        if (stripos($displayDescr, $rootSegment) === 0) {
-            $stripped = ltrim(substr($displayDescr, strlen($rootSegment)), ' 	-_:');
-            if ($stripped !== '') {
-                $displayDescr = $stripped;
-            }
-        }
-    }
+
+    // Strip the root group segment from sensor_descr when its heading is visible.
+    // The heading already provides that context so repeating it in every panel title
+    // is redundant.  The full sensor_descr is preserved in alerts and eventlog.
+    $displayDescr = stripSensorDescrGroupPrefix($sensor['sensor_descr'], $groupStr, $parts, $groupCounts, $groupHasChildren);
 
     if (! is_int($row++ / 2)) {
         $row_colour = App\Facades\LibrenmsConfig::get('list_colour.even');

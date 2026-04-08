@@ -19,43 +19,9 @@ if ($sensors->isNotEmpty()) {
     echo '      </div>
         <table class="table table-hover table-condensed table-striped">';
 
-    // Build two lookup tables used to decide whether to render or suppress a group heading.
-    //
-    // $groupCounts  — number of sensors whose group field matches a given path exactly.
-    //                 Used to detect single-sensor groups.
-    // $groupHasChildren — set of group paths that have at least one sensor in a deeper
-    //                     sub-path (e.g. 'volum1' is marked when 'volum1::/dev/sdc' exists).
-    //                     A parent heading must always be shown even when it has only one
-    //                     directly-associated sensor, so the child headings have an anchor.
-    //
-    // Group paths use '::' as a level separator, e.g. 'volum1::/dev/sdc'.
-    // See doc/Developing/os/Sensor-Groups.md for the full design.
-    $groupCounts = [];      // exact group string → sensor count
-    $groupHasChildren = []; // group string → true when a deeper path starts with it
-
-    foreach ($sensors as $sensor) {
-        $g = $sensor->group ?? '';
-        $groupCounts[$g] = ($groupCounts[$g] ?? 0) + 1;
-        $parts = $g !== '' ? explode('::', $g) : [];
-        for ($i = 0; $i < count($parts) - 1; $i++) {
-            $ancestor = implode('::', array_slice($parts, 0, $i + 1));
-            $groupHasChildren[$ancestor] = true;
-        }
-    }
-
-    // A group heading is suppressed (not rendered) when all of these hold:
-    //   - the group path is not empty
-    //   - exactly one sensor carries this exact group path
-    //   - no sensor sits in a sub-group of it (no children)
-    // Suppressed groups show the sensor at the parent indentation level with
-    // the full sensor_descr so the name stays self-contained.
-    $isGroupSuppressed = function (string $groupPath) use ($groupCounts, $groupHasChildren): bool {
-        if ($groupPath === '') {
-            return true;
-        }
-
-        return ($groupCounts[$groupPath] ?? 0) === 1 && empty($groupHasChildren[$groupPath]);
-    };
+    include_once 'includes/html/pages/device/sensor-group-helpers.inc.php';
+    [$groupCounts, $groupHasChildren] = buildSensorGroupData($sensors);
+    $visibleDepthCache = [];
 
     // $currentPath tracks which group heading levels have already been emitted for the
     // current position in the sorted sensor list.  When the group of the next sensor
@@ -76,7 +42,7 @@ if ($sensors->isNotEmpty()) {
                 $currentPath = array_slice($currentPath, 0, $depth);
                 for ($d = $depth; $d < count($parts); $d++) {
                     $pathToHere = implode('::', array_slice($parts, 0, $d + 1));
-                    if (! $isGroupSuppressed($pathToHere)) {
+                    if (! isSensorGroupSuppressed($pathToHere, $groupCounts, $groupHasChildren)) {
                         // Indent by depth: 4 px base + 16 px per additional level.
                         $padding = ($d * 16) + 4;
                         $headingLabel = htmlspecialchars($parts[$d], ENT_QUOTES, 'UTF-8');
@@ -111,47 +77,7 @@ if ($sensors->isNotEmpty()) {
             $sensor->sensor_descr = substr((string) $sensor->sensor_descr, 0, 48);
         }
 
-        // When the group heading is visible, strip repeated group text from sensor_descr.
-        // Prefix strip candidates are tried in order:
-        //   1) full group path normalized as spaces, e.g. 'A::B' -> 'A B'
-        //   2) first group segment
-        //   3) last group segment
-        //
-        // This supports both nested leaf naming and patterns like:
-        //   group: 'BtrFS pool1::devices'
-        //   desc:  'BtrFS pool1 /dev/sda IO'
-        // where stripping the first segment yields '/dev/sda IO'.
-        //
-        // Stripping is skipped when it would leave an empty string. Suppressed groups
-        // are not stripped because no heading is shown.
-        $displayDescr = $sensor->sensor_descr;
-        if ($groupStr !== '' && ! $isGroupSuppressed($groupStr)) {
-            $candidates = [];
-            $normalizedGroup = trim(str_replace('::', ' ', $groupStr));
-            if ($normalizedGroup !== '') {
-                $candidates[] = $normalizedGroup;
-            }
-
-            $firstSegment = $parts[0] ?? '';
-            if ($firstSegment !== '') {
-                $candidates[] = $firstSegment;
-            }
-
-            $lastSegment = $parts[count($parts) - 1] ?? '';
-            if ($lastSegment !== '') {
-                $candidates[] = $lastSegment;
-            }
-
-            foreach (array_values(array_unique($candidates)) as $candidate) {
-                if (stripos($displayDescr, $candidate) === 0) {
-                    $stripped = ltrim(substr($displayDescr, strlen($candidate)), " \t-_:");
-                    if ($stripped !== '') {
-                        $displayDescr = $stripped;
-                        break;
-                    }
-                }
-            }
-        }
+        $displayDescr = stripSensorDescrGroupPrefix($sensor->sensor_descr, $groupStr, $parts, $groupCounts, $groupHasChildren);
 
         $overlib_content = '<div class=overlib><span class=overlib-text>' . $device['hostname'] . ' - ' . $sensor->sensor_descr . '</span><br />';
         foreach (['day', 'week', 'month', 'year'] as $period) {
@@ -170,16 +96,10 @@ if ($sensors->isNotEmpty()) {
 
         $sensor_current = Html::severityToLabel($sensor->currentStatus(), $sensor->formatValue());
 
-        // Indent sensor rows to match visible heading depth: same base (4 px)
-        // + 16 px per shown group level. Suppressed groups do not add indentation.
-        $visibleDepth = 0;
-        for ($d = 0; $d < count($parts); $d++) {
-            $pathToHere = implode('::', array_slice($parts, 0, $d + 1));
-            if (! $isGroupSuppressed($pathToHere)) {
-                $visibleDepth++;
-            }
+        if (! isset($visibleDepthCache[$groupStr])) {
+            $visibleDepthCache[$groupStr] = sensorGroupVisibleDepth($parts, $groupCounts, $groupHasChildren);
         }
-        $sensorPadding = ($visibleDepth * 16) + 4;
+        $sensorPadding = ($visibleDepthCache[$groupStr] * 16) + 4;
 
         echo "<tr><td style='padding-left:{$sensorPadding}px'><div style=\"display: grid; grid-gap: 10px; grid-template-columns: 3fr 1fr 1fr;\">
             <div>" . LibreNMS\Util\Url::overlibLink($link, LibreNMS\Util\Rewrite::shortenIfName($displayDescr), $overlib_content, $sensor_class->value) . '</div>
