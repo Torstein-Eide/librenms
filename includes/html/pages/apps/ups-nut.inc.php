@@ -16,6 +16,8 @@ use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 use LibreNMS\Util\Url;
 
+require_once 'includes/html/graphs/application/ups-nut-common.inc.php';
+
 $user = Auth::user();
 if (! $user instanceof User) {
     return;
@@ -176,6 +178,10 @@ foreach ($apps as $app) {
         continue;
     }
 
+    $deviceSensors = Sensor::where('device_id', $device->device_id)
+        ->where('sensor_oid', 'like', 'app:nut:%')
+        ->get();
+
     $device_hostname = strtolower((string) ($device->hostname ?? ''));
     $device_display = strtolower(trim((string) ($device->displayName() ?? '')));
     $device_search_text = trim($device_hostname . ' ' . $device_display);
@@ -190,11 +196,16 @@ foreach ($apps as $app) {
     foreach ($upsList as $upsName => $upsData) {
         $ups_name_lower = strtolower((string) $upsName);
 
-        $model = $upsData['device']['model'] ?? $upsData['ups']['model'] ?? 'Unknown';
-        $mfr = $upsData['device']['mfr'] ?? $upsData['ups']['mfr'] ?? '';
-        $deviceName = $mfr ? "$mfr $model" : $model;
-
+        $modelRaw = $upsData['device']['model'] ?? $upsData['ups']['model'] ?? null;
+        $model = is_string($modelRaw) ? $modelRaw : 'Unknown';
+        $mfrRaw = $upsData['device']['mfr'] ?? $upsData['ups']['mfr'] ?? null;
+        $mfr = is_string($mfrRaw) ? $mfrRaw : '';
         $configName = $upsData['configname'] ?? '-';
+        // Don't duplicate manufacturer in model name (case-insensitive contains check)
+        $deviceName = $model;
+        if ($mfr !== '' && $model !== 'Unknown' && stripos($model, $mfr) === false) {
+            $deviceName = "$mfr $model";
+        }
 
         $serial = $upsData['device']['serial'] ?? $upsData['ups']['serial'] ?? '';
         if ($serial === '' || preg_match('/^0+$/', $serial)) {
@@ -421,12 +432,22 @@ foreach ($apps as $app) {
                 'type' => 'sensor_' . $sensor_class,
                 'legend' => 'no',
             ];
+            $graph_link = Url::generate([
+                'page' => 'graphs',
+                'type' => $graph_array['type'],
+                'id' => $graph_array['id'],
+                'from' => $graph_array['from'],
+                'to' => $graph_array['to'],
+            ]);
 
             $graphs_html .= '<div class="pull-left" style="margin-right: 8px;">';
             $graphs_html .= '<div class="text-muted" style="font-size: 11px; margin-bottom: 4px;">' . htmlspecialchars($graph_title) . '</div>';
-            $graphs_html .= '<a href="' . $header_link . '">' . Url::lazyGraphTag($graph_array) . '</a>';
+            $graphs_html .= '<a href="' . $graph_link . '">' . Url::lazyGraphTag($graph_array) . '</a>';
             $graphs_html .= '</div>';
         }
+
+        $upsSensorsByClass = upsNutGetUpsSensorsByClass($deviceSensors, (string) $upsName);
+        $graphs_html .= upsNutBuildAggregateMiniGraphsHtml($upsSensorsByClass, $header_link);
 
         echo <<<HTML
 <div class="panel panel-default" style="margin-bottom: 10px;">

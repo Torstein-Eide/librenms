@@ -69,6 +69,36 @@ $rrd_options[] = sprintf('COMMENT:%' . $col_w . 's', 'Maximum');
 $rrd_options[] = sprintf('COMMENT:%' . $col_w . 's', 'Average');
 $rrd_options[] = 'COMMENT:\l';
 
+$limitSensor = $sensors[0];
+if ($limitSensorRrd = get_sensor_rrd(device_by_id_cache($limitSensor->device_id), $limitSensor)) {
+    if (Rrd::checkRrdExists($limitSensorRrd)) {
+        $varianceColor = session('applied_site_style') == 'dark' ? '#3e444c' : '#c5c5c5';
+        $backgroundColor = session('applied_site_style') == 'dark' ? '#272b30' : '#ffffff';
+        $rrd_options[] = 'DEF:first_sensor_max=' . $limitSensorRrd . ':sensor:MAX';
+        $rrd_options[] = 'DEF:first_sensor_min=' . $limitSensorRrd . ':sensor:MIN';
+        $rrd_options[] = 'AREA:first_sensor_max' . $varianceColor;
+        $rrd_options[] = 'AREA:first_sensor_min' . $backgroundColor;
+    }
+}
+
+if ($limitSensor->hasThresholds()) {
+    $rrd_options[] = 'COMMENT:Alert thresholds\:';
+    if ($limitSensor->sensor_limit_low !== null) {
+        $rrd_options[] = 'LINE1.5:' . $limitSensor->sensor_limit_low . '#00008b:low = ' . $limitSensor->formatValue('sensor_limit_low') . ':dashes';
+    }
+    if ($limitSensor->sensor_limit_low_warn !== null) {
+        $rrd_options[] = 'LINE1.5:' . $limitSensor->sensor_limit_low_warn . '#005bdf:low_warn = ' . $limitSensor->formatValue('sensor_limit_low_warn') . ':dashes';
+    }
+    if ($limitSensor->sensor_limit_warn !== null) {
+        $rrd_options[] = 'LINE1.5:' . $limitSensor->sensor_limit_warn . '#ffa420:high_warn = ' . $limitSensor->formatValue('sensor_limit_warn') . ':dashes';
+    }
+    if ($limitSensor->sensor_limit !== null) {
+        $rrd_options[] = 'LINE1.5:' . $limitSensor->sensor_limit . '#ff0000:high = ' . $limitSensor->formatValue('sensor_limit') . ':dashes';
+    }
+
+    $rrd_options[] = 'COMMENT:\n';
+}
+
 // Color palette - more colors for multi-sensor graphs
 $colours = [
     'CC0000', // Red

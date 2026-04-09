@@ -18,20 +18,35 @@ class NutRrdWriter extends AppRrdWriter
         ];
     }
 
+    private static function extractValue(mixed $data): ?float
+    {
+        if ($data === null) {
+            return null;
+        }
+
+        if (is_numeric($data)) {
+            return (float) $data;
+        }
+
+        if (is_array($data) && isset($data['value'])) {
+            return is_numeric($data['value']) ? (float) $data['value'] : null;
+        }
+
+        return null;
+    }
+
     public function buildFields(array $data): array
     {
         $fields = [
-            'charge' => $data['battery']['charge'] ?? null,
+            'charge' => self::extractValue($data['battery']['charge'] ?? null),
             'runtime' => isset($data['battery']['runtime']) ? (int) $data['battery']['runtime'] / 60 : null,
-            'load' => $data['ups']['load'] ?? null,
-            'realpower' => $data['ups']['realpower'] ?? null,
-            'out_voltage' => $data['output']['voltage'] ?? null,
-            'out_frequency' => $data['output']['frequency'] ?? null,
-            'in_voltage' => $data['input']['voltage'] ?? null,
-            'battery_voltage' => $data['battery']['voltage'] ?? null,
+            'load' => self::extractValue($data['ups']['load'] ?? null),
+            'realpower' => self::extractValue($data['ups']['realpower'] ?? null),
+            'out_voltage' => self::extractValue($data['output']['voltage'] ?? null),
+            'out_frequency' => self::extractValue($data['output']['frequency'] ?? null),
+            'in_voltage' => self::extractValue($data['input']['voltage'] ?? null),
+            'battery_voltage' => self::extractValue($data['battery']['voltage'] ?? null),
         ];
-
-        echo "<!-- NutRrdWriter: buildFields fields=" . json_encode($fields) . " -->\n";
 
         return $fields;
     }

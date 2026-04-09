@@ -23,7 +23,10 @@
 
 use LibreNMS\RRD\RrdDefinition;
 
-
+// $appSensors = App\Models\Sensor::where('device_id', $device['device_id'])
+//     ->where('sensor_oid', 'like', '%ups %')
+//     ->get()->toArray();
+// print_r($appSensors);
 // $oidPattern: SQL LIKE pattern for sensor_oid, defaults to all NUT sensors.
 //   Pass e.g. 'app:nut:eaton_3s_%' to restrict deletion to one UPS.
 function nut_clean_db(int $device_id, App\Models\Application $app, string $oidPattern = 'app:nut:%'): void
@@ -68,11 +71,8 @@ try {
         LibreNMS\Agent\Module\NutPoller::poll($app, $device);
 
         return;
-    }
-} catch (Exception $e) {
-
-}
-echo ("ups-nut: json_app_get did not return valid data for device_id={$device['device_id']}, falling back to legacy SNMP polling");
+    }else{
+        echo ("ups-nut: json_app_get did not return valid data for device_id={$device['device_id']}, falling back to legacy SNMP polling");
 
 // (2016-11-25, R.Morris) ups-nut, try "extend" -> if not, fall back to "exec" support.
 // -> Similar to approach used by Distro, but skip "legacy UCD-MIB shell support"
@@ -170,3 +170,9 @@ $tags = [
 ];
 app('Datastore')->put($device, 'app', $tags, $fields);
 update_application($app, $ups_nut, $fields);
+
+    }
+
+} catch (Exception $e) {
+
+}
