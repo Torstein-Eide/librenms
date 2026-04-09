@@ -644,8 +644,10 @@ class BtrfsSensorSync
     ];
 
     private const COUNT_SENSOR_TYPES = [
-        self::COUNT_SENSOR_IO_ERRORS, 
+        self::COUNT_SENSOR_IO_ERRORS,
     ];
+
+    private ?RrdDefinition $sensorRrdDef = null;
 
     // ==========================================================================
     // Discovery — buffer sensors and sync to DB
@@ -844,7 +846,7 @@ class BtrfsSensorSync
             'sensor_type'  => $sensorType,
             'sensor_index' => $sensorIndex,
             'sensor_descr' => $sensorDescr,
-            'rrd_def'      => RrdDefinition::make()->addDataset('sensor', 'GAUGE'),
+            'rrd_def'      => $this->sensorRrdDef ??= RrdDefinition::make()->addDataset('sensor', 'GAUGE'),
             'rrd_name'     => ['sensor', $sensorClass, $sensorType, $sensorIndex],
         ], ['sensor' => $sensorCurrent]);
     }
@@ -1676,20 +1678,15 @@ class BtrfsPoller
         // Process all devices: append per-device values into shared fs working state.
         $this->processDevices();
 
-        $devResult = [
-            'device_tables' => $this->working['fs']['acc']['device_tables'],
-            'metrics' => $this->working['fs']['acc']['device_metrics'],
-            'fs_io_errors_sum' => $this->working['fs']['acc']['total_io_errors'],
-            'io_status_code' => $this->working['fs']['status']['io_status_code'],
-            'scrub_status_code' => $this->working['fs']['status']['scrub_status_code'],
-            'fs_scrub_health' => $this->working['fs']['acc']['fs_scrub_health'],
-            'device_sensor_values' => $this->working['fs']['acc']['device_sensor_values'],
-        ];
+        $deviceTables = $this->working['fs']['acc']['device_tables'];
+        $deviceMetrics = $this->working['fs']['acc']['device_metrics'];
+        $fsIoErrorsSum = $this->working['fs']['acc']['total_io_errors'];
+        $deviceSensorValues = $this->working['fs']['acc']['device_sensor_values'];
 
         // Unpack aggregated results from processDevices().
-        $ioStatusCode = $devResult['io_status_code'];
-        $scrubStatusCode = $devResult['scrub_status_code'];
-        $fsScrubHealth = $devResult['fs_scrub_health'];
+        $ioStatusCode = $this->working['fs']['status']['io_status_code'];
+        $scrubStatusCode = $this->working['fs']['status']['scrub_status_code'];
+        $fsScrubHealth = $this->working['fs']['acc']['fs_scrub_health'];
 
         // Copy accumulated per-device usage totals into filesystem fields and metrics.
         $usageTotals = $this->working['fs']['acc']['usage_totals'];
@@ -1736,9 +1733,9 @@ class BtrfsPoller
                 'balance' => $balanceOperation,
             ],
             'counts' => [
-                'io_errors' => $devResult['fs_io_errors_sum'],
+                'io_errors' => $fsIoErrorsSum,
             ],
-            'devices' => $devResult['device_sensor_values'],
+            'devices' => $deviceSensorValues,
         ];
         $this->updateSensorsFromDiscoveryMap($fsUuid, $sensorContext);
 
@@ -1751,7 +1748,7 @@ class BtrfsPoller
         }
 
         // Merge per-device metrics into the filesystem metrics map.
-        foreach ($devResult['metrics'] as $k => $v) {
+        foreach ($deviceMetrics as $k => $v) {
             $this->working['acc']['metrics'][$fsMetricPrefix . $k] = $v;
         }
 
@@ -1760,7 +1757,7 @@ class BtrfsPoller
             'fs_bytes_used' => $this->working['FSdata']['FS'][$fsUuid]['filesystem']['bytes_used'] ?? null,
             'device_missing' => $overall['device_missing'] ?? 0,
             'table' => $fields,
-            'device_tables' => $devResult['device_tables'],
+            'device_tables' => $deviceTables,
             'profiles' => $this->working['fs']['input']['usage_type_totals'],
             'scrub' => [
                 'status' => $scrubStatusSnapshot,
@@ -1972,12 +1969,13 @@ class BtrfsPoller
         $devStats['missing'] = (bool) ($devStats['missing'] ?? false);
         $deviceNumericId = $devStats['devid'] ?? $devId;
         $scrubData = $rawScrubDevices[$devId] ?? null;
+        $processedScrub = null;
 
         if (is_array($scrubData)) {
-            $processedScrubData = $this->parser->processSingleDeviceScrub($scrubData, $this->working['fs']['previous_progress']);
+            $processedScrub = $this->parser->processSingleDeviceScrub($scrubData, $this->working['fs']['previous_progress']);
             $this->working['fs']['acc']['scrub_devices_data'][$devId] = array_merge($scrubData, [
-                'ops_status' => $processedScrubData['ops'],
-                'health' => $processedScrubData['health'],
+                'ops_status' => $processedScrub['ops'],
+                'health' => $processedScrub['health'],
             ]);
         }
 
@@ -2014,7 +2012,9 @@ class BtrfsPoller
         }
 
         // Process the raw scrub data into derived fields (running, health, bytes, progress).
-        $processedScrub = $this->parser->processSingleDeviceScrub($scrubData, $this->working['fs']['previous_progress']);
+        if ($processedScrub === null) {
+            return;
+        }
         $this->working['fs']['acc']['has_scrub_data'] = true;
 
         // Track the worst health and running state across all devices for the fs-level status.
@@ -2055,10 +2055,11 @@ class BtrfsPoller
 
         // Sum IO errors and log a one-time eventlog entry when errors first appear.
         $ioErrs = $this->rrdWriter->sumDeviceErrors($devStats);
-        if ($this->rrdWriter->hasDeviceError($devStats)) {
+        $hasDeviceError = $this->rrdWriter->hasDeviceError($devStats);
+        if ($hasDeviceError) {
             $this->working['fs']['acc']['io_has_error'] = true;
         }
-        if ($ioErrs > 0) {
+        if ($ioErrs > 0 && ! $this->hadDeviceIoErrorsPreviously($fsUuid, $devId)) {
             $this->logApplicationEvent('Device errors detected on ' . $this->working['fs']['name'] . ' (' . $devPath . ')', Severity::Error);
         }
         $this->working['fs']['acc']['total_io_errors'] += (float) $ioErrs;
@@ -2072,7 +2073,7 @@ class BtrfsPoller
         // Derive per-device IO and scrub status codes for the table row and sensors.
         $devIoStatusCode = $this->mapper->getDevIoStatusCode(
             count($devStats) > 0,
-            $this->rrdWriter->hasDeviceError($devStats),
+            $hasDeviceError,
             $devStats['missing']
         );
         $devScrubStatusCode = $this->mapper->getDevScrubStatusCode(
@@ -2148,6 +2149,22 @@ class BtrfsPoller
         $this->aggIoStatusMax = $this->aggIoStatusMax === null ? $ioStatusCode : max($this->aggIoStatusMax, $ioStatusCode);
         $this->aggScrubStatusMax = $this->aggScrubStatusMax === null ? $scrubStatusCode : max($this->aggScrubStatusMax, $scrubStatusCode);
         $this->aggBalanceStatusMax = $this->aggBalanceStatusMax === null ? $balanceStatusCode : max($this->aggBalanceStatusMax, $balanceStatusCode);
+    }
+
+    private function hadDeviceIoErrorsPreviously(string $fsUuid, string $devId): bool
+    {
+        $previousErrors = $this->app->data['filesystems'][$fsUuid]['device_tables'][$devId]['errors'] ?? [];
+        if (! is_array($previousErrors)) {
+            return false;
+        }
+
+        foreach ($previousErrors as $value) {
+            if (is_numeric($value) && (float) $value > 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
