@@ -7,16 +7,38 @@ use LibreNMS\RRD\RrdDefinition;
 $name = 'mdadm';
 $output = 'OK';
 
+// Try SNMP extend first, fall back to unix agent data
 try {
-    $mdadm_data = json_app_get($device, $name, 1)['data'];
+    $payload = json_app_get($device, $name, 1);
 } catch (JsonAppMissingKeysException $e) {
-    $mdadm_data = $e->getParsedJson();
+    $payload = $e->getParsedJson();
 } catch (JsonAppException $e) {
-    echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
-    update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
+    if (! empty($agent_data['mdadm'])) {
+        $payload = json_decode($agent_data['mdadm'], true);
+        if (! is_array($payload)) {
+            echo PHP_EOL . $name . ':Invalid JSON from agent data' . PHP_EOL;
+            update_application($app, 'ERROR: Invalid JSON from agent data', []);
+
+            return;
+        }
+    } else {
+        echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
+        update_application($app, $e->getCode() . ':' . $e->getMessage(), []);
+
+        return;
+    }
+}
+
+
+if (($payload['version'] ?? 0) >= 3) {
+    echo 'version: ' . $payload['version'] . ' running new ';
+    $module = new LibreNMS\Agent\Module\mdadm($device, $app);
+    $module->run($payload);
 
     return;
 }
+echo 'version: ' . $payload['version'] . ' running legacy ';
+$mdadm_data = $payload['data'] ?? [];
 
 $rrd_name = ['app', $name, $app->app_id];
 $rrd_def = RrdDefinition::make()
@@ -33,8 +55,6 @@ foreach ($mdadm_data as $data) {
     $array_name = $data['name'];
     $level = $data['level'];
     $size = $data['size'];
-    $device_list = $data['device_list'];
-    $missing_device_list = $data['missing_device_list'];
     $disc_count = $data['disc_count'];
     $hotspare_count = $data['hotspare_count'];
     $degraded = $data['degraded'];
