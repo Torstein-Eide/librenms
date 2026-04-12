@@ -21,7 +21,7 @@ function buildSensorGroupData(iterable $sensors): array
         if (! isset($groupNavigation[$g]) && ! empty($sensor->sensor_navigation)) {
             $groupNavigation[$g] = $sensor->sensor_navigation;
         }
-        $parts = $g !== '' ? explode('::', $g) : [];
+        $parts = $g !== '' ? explode('::', (string) $g) : [];
         for ($i = 0; $i < count($parts) - 1; $i++) {
             $ancestor = implode('::', array_slice($parts, 0, $i + 1));
             $groupHasChildren[$ancestor] = true;
@@ -78,8 +78,8 @@ function stripSensorDescrGroupPrefix(string $descr, string $groupStr, array $par
     }
 
     foreach (array_unique($candidates) as $candidate) {
-        if (stripos($descr, $candidate) === 0) {
-            $stripped = ltrim(substr($descr, strlen($candidate)), " \t-_:");
+        if (stripos($descr, (string) $candidate) === 0) {
+            $stripped = ltrim(substr($descr, strlen((string) $candidate)), " \t-_:");
             if ($stripped !== '') {
                 return $stripped;
             }

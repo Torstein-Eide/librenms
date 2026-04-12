@@ -21,7 +21,7 @@ $currentPath = [];
 foreach ($sensors as $sensor) {
     $groupStr = $sensor->group ?? '';
     // Split '::'-separated group path into level names.
-    $parts = $groupStr !== '' ? explode('::', $groupStr) : [];
+    $parts = $groupStr !== '' ? explode('::', (string) $groupStr) : [];
 
     // Emit section heading divs for every path level that changed since the last
     // sensor.  Depth 0 uses <h4>, deeper levels use <h5>; each is indented by

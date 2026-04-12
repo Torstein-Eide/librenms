@@ -31,7 +31,7 @@ if ($sensors->isNotEmpty()) {
     foreach ($sensors as $sensor) {
         $groupStr = $sensor->group ?? '';
         // Split '::'-separated group path into individual level names.
-        $parts = $groupStr !== '' ? explode('::', $groupStr) : [];
+        $parts = $groupStr !== '' ? explode('::', (string) $groupStr) : [];
 
         // Walk each path level.  The first depth where the new sensor's path differs
         // from $currentPath triggers a re-emit of all remaining heading levels.
