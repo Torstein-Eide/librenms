@@ -6,22 +6,22 @@ groups using a path-like notation.
 
 Before reading this document, familiarise yourself with the sensor discovery system:
 
-- [Health Information](Health-Information.md) — how sensors are defined, the available sensor
+- [Health Information](Health-Information.md) - how sensors are defined, the available sensor
   classes, and the YAML discovery format where `group` is set.
-- [Sensor State Support](../Sensor-State-Support.md) — how state sensors work, including the
+- [Sensor State Support](../Sensor-State-Support.md) - how state sensors work, including the
   state index and translation tables referenced in the Btrfs examples below.
-- [Device Sensors](../../Support/Device-Sensors.md) — end-user view of the health and sensor
+- [Device Sensors](../../Support/Device-Sensors.md) - end-user view of the health and sensor
   pages that this document affects.
 
 Hierarchical groups are most useful for device types that expose **multiple named instances** of the
 same kind of sensor, such as:
 
-- **UPS-NUT / SNMP UPS** — a host monitoring several UPS units, each with its own input, output,
+- **UPS-NUT** - a host monitoring several UPS units, each with its own input, output,
   bypass, and battery sensors.
-- **Btrfs / storage** — a host with multiple filesystems, each containing multiple block devices.
-- **PDU / power distribution** — outlets or phase groups with per-phase sensors.
-- **Multi-tenant or multi-stack equipment** — any device where the same sensor class (voltage,
-  temperature, state, …) appears under several logically separate entities.
+- **Btrfs / zfs/ mdadm storage** - a host with multiple filesystems, each containing multiple block devices.
+- **PDU / power distribution** - outlets or phase groups with per-phase sensors.
+- **Multi-tenant or multi-stack equipment** - any device where the same sensor class (voltage,
+  temperature, state, ...) appears under several logically separate entities.
 
 ---
 
@@ -29,20 +29,20 @@ same kind of sensor, such as:
 
 Setting `group` to a plain string places all sensors with the same value under a single shared
 heading. This is the basic case and requires no special syntax. Use flat groups when a device has
-only one instance of a given sensor category — for example a single UPS where grouping by
+only one instance of a given sensor category - for example a single UPS where grouping by
 measurement type (Input, Output, Bypass) is sufficient.
 
 ### sensor_descr must always be self-contained
 
 `sensor_descr` appears on the health page, in alerts, in the eventlog, and anywhere else sensors
-are listed without group context. It must be meaningful on its own — never rely on the group
+are listed without group context. It must be meaningful on its own - never rely on the group
 heading to supply missing context.
 
 On the device overview and `/health/metric=*` pages, grouped rendering can strip redundant
 prefix text when the group heading is already visible. This means the correct pattern is:
 
-- `sensor_descr` — full self-contained name, e.g. `Output L1`
-- `group` — the category the sensor belongs to, e.g. `Output`
+- `sensor_descr` - full self-contained name, e.g. `Output L1`
+- `group` - the category the sensor belongs to, e.g. `Output`
 
 Grouped pages can strip `Output` from `Output L1` and show `L1` under the `Output` heading.
 Alerts/eventlog still rely on the full stored `sensor_descr`.
@@ -52,56 +52,55 @@ sensors:
     voltage:
         data:
             -
-                oid: NUT-MIB::nutUpsInputTable
-                value: NUT-MIB::nutUpsInputVoltage
+                oid: UPS-MIB::upsUpsInputTable
+                value: UPS-MIB::upsUpsInputVoltage
                 descr: 'Input L{{ $index }}'
                 group: 'Input'
             -
-                oid: NUT-MIB::nutUpsOutputTable
-                value: NUT-MIB::nutUpsOutputVoltage
+                oid: UPS-MIB::upsUpsOutputTable
+                value: UPS-MIB::upsUpsOutputVoltage
                 descr: 'Output L{{ $index }}'
                 group: 'Output'
             -
-                oid: NUT-MIB::nutUpsBypassTable
-                value: NUT-MIB::nutUpsBypassVoltage
+                oid: UPS-MIB::upsUpsBypassTable
+                value: UPS-MIB::upsUpsBypassVoltage
                 descr: 'Bypass L{{ $index }}'
                 group: 'Bypass'
 ```
 
-Device overview page — the group name is stripped from `sensor_descr` under each heading.
+Device overview page - the group name is stripped from `sensor_descr` under each heading.
 The second column shows the full group path in muted text (for flat groups this repeats
 the heading; it becomes useful for suppressed single-sensor groups where no heading appears):
 
-```
+```txt
 Voltage
   Bypass
-    L1    Bypass    236 V
-    L2    Bypass    236 V
-    L3    Bypass    236 V
+    L1      236 V
+    L2      236 V
+    L3      236 V
   Input
-    L1    Input     230 V
-    L2    Input     230 V
-    L3    Input     230 V
+    L1      230 V
+    L2      230 V
+    L3      230 V
   Output
-    L1    Output    230 V
-    L2    Output    230 V
-    L3    Output    230 V
+    L1      230 V
+    L2      230 V
+    L3      230 V
 ```
 
-`/health/metric=voltage` — full `sensor_descr` shown, meaningful without group context:
+`/health/metric=voltage` - full `sensor_descr` shown, meaningful without group context:
 
-```
-Device              Sensor      Current
-ups-host.example    Bypass L1   236 V
-ups-host.example    Bypass L2   236 V
-ups-host.example    Bypass L3   236 V
-ups-host.example    Input L1    230 V
-ups-host.example    Input L2    230 V
-ups-host.example    Input L3    230 V
-ups-host.example    Output L1   230 V
-ups-host.example    Output L2   230 V
-ups-host.example    Output L3   230 V
-```
+| Device | Sensor | Current |
+|---|---|---|
+| ups-host.example | Bypass L1 | 236 V |
+| ups-host.example | Bypass L2 | 236 V |
+| ups-host.example | Bypass L3 | 236 V |
+| ups-host.example | Input L1 | 230 V |
+| ups-host.example | Input L2 | 230 V |
+| ups-host.example | Input L3 | 230 V |
+| ups-host.example | Output L1 | 230 V |
+| ups-host.example | Output L2 | 230 V |
+| ups-host.example | Output L3 | 230 V |
 
 ---
 
@@ -153,18 +152,17 @@ On the device overview page the last `::` segment of `group` is stripped as a pr
 `sensor_descr` when the group contains more than one sensor, removing repeated text:
 
 ```
-Voltage
-  UPS Eaton 3S 700
-    UPS Eaton 3S 700 Output    230 V    ← single sensor, heading suppressed; full descr shown
+Voltage 
+  UPS Eaton 3S 700 Output    230 V    ← single sensor, heading suppressed; full descr shown
   UPS Eaton 9135 6000
     Bypass
-      L1    236 V
-      L2    236 V
-      L3    236 V
+      L1    230.2 V
+      L2    230.2 V
+      L3    230.2 V
     Input
-      L1    230 V
-      L2    230 V
-      L3    230 V
+      L1    230.2 V
+      L2    230.2 V
+      L3    230.2 V
     Output
       L1    230 V
       L2    230 V
@@ -174,24 +172,20 @@ Voltage
 On `/health/metric=voltage`, grouped headings are shown and panel titles may be prefix-stripped
 when the root heading is visible. The sensor value and graph behavior are unchanged:
 
-```
-Voltage
-  UPS Eaton 3S 700
-    Output
-  UPS Eaton 9135 6000
-    Bypass
-      L1
-      L2
-      L3
-    Input
-      L1
-      L2
-      L3
-    Output
-      L1
-      L2
-      L3
-```
+| Device | Sensor | Current |
+|---|---|---|
+| Fubar-linux.example | UPS Eaton 3S 700 Output | 230 V |
+| fubar-linux.example | UPS Eaton 9135 6000 bypass L1 | 230.2 V |
+| fubar-linux.example | UPS Eaton 9135 6000 bypass L2 | 230.2 V |
+| fubar-linux.example | UPS Eaton 9135 6000 bypass L3 | 230.2 V |
+| fubar-linux.example | UPS Eaton 9135 6000 input L1 | 230.2 V |
+| fubar-linux.example | UPS Eaton 9135 6000 input L2 | 230.2 V |
+| fubar-linux.example | UPS Eaton 9135 6000 input L3 | 230.2 V |
+| fubar-linux.example | UPS Eaton 9135 6000 output L1 | 230.2 V |
+| fubar-linux.example | UPS Eaton 9135 6000 output L2 | 230.2 V |
+| fubar-linux.example | UPS Eaton 9135 6000 output L3 | 230.2 V |
+
+
 
 ### Btrfs / Storage Example
 
@@ -210,33 +204,33 @@ sensors:
             -
                 oid: BTRFS-MIB::btrfsFsTable
                 value: BTRFS-MIB::btrfsFsIo
-                descr: '{{ BTRFS-MIB::btrfsFsLabel }} IO'
-                group: '{{ BTRFS-MIB::btrfsFsLabel }}'
+                descr: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }} IO'
+                group: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }}'
             -
                 oid: BTRFS-MIB::btrfsFsTable
                 value: BTRFS-MIB::btrfsFsScrub
-                descr: '{{ BTRFS-MIB::btrfsFsLabel }} Scrub'
-                group: '{{ BTRFS-MIB::btrfsFsLabel }}'
+                descr: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }} Scrub'
+                group: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }}'
             -
                 oid: BTRFS-MIB::btrfsFsTable
                 value: BTRFS-MIB::btrfsFsScrubOps
-                descr: '{{ BTRFS-MIB::btrfsFsLabel }} Scrub Ops'
-                group: '{{ BTRFS-MIB::btrfsFsLabel }}'
+                descr: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }} Scrub Ops'
+                group: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }}'
             -
                 oid: BTRFS-MIB::btrfsFsTable
                 value: BTRFS-MIB::btrfsFsBalance
-                descr: '{{ BTRFS-MIB::btrfsFsLabel }} Balance'
-                group: '{{ BTRFS-MIB::btrfsFsLabel }}'
+                descr: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }} Balance'
+                group: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }}'
             -
                 oid: BTRFS-MIB::btrfsDevTable
                 value: BTRFS-MIB::btrfsDevIo
-                descr: '{{ BTRFS-MIB::btrfsDevPath }} IO'
-                group: '{{ BTRFS-MIB::btrfsFsLabel }}::{{ BTRFS-MIB::btrfsDevPath }}'
+                descr: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }} {{ BTRFS-MIB::btrfsDevPath }} IO'
+                group: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }}::Devices'
             -
                 oid: BTRFS-MIB::btrfsDevTable
                 value: BTRFS-MIB::btrfsDevScrub
-                descr: '{{ BTRFS-MIB::btrfsDevPath }} Scrub'
-                group: '{{ BTRFS-MIB::btrfsFsLabel }}::{{ BTRFS-MIB::btrfsDevPath }}'
+                descr: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }} {{ BTRFS-MIB::btrfsDevPath }} Scrub'
+                group: 'Btrfs {{ BTRFS-MIB::btrfsFsLabel }}::Devices'
 ```
 
 With filesystem `volum1` backed by five block devices this renders on the device overview page.
@@ -244,50 +238,45 @@ With filesystem `volum1` backed by five block devices this renders on the device
 shown. The `volum1` prefix is stripped from filesystem-level descrs; `/dev/sdX` is stripped
 from device-level descrs:
 
-```
+```txt
 State
-  volum1
-    Balance    OK
-    IO         OK
-    Scrub      OK
-    Scrub Ops  OK
-    /dev/sdc
-      IO       OK
-      Scrub    OK
-    /dev/sdd
-      IO       OK
-      Scrub    OK
-    /dev/sde
-      IO       OK
-      Scrub    OK
-    /dev/sdf
-      IO       OK
-      Scrub    OK
-    /dev/sdg
-      IO       OK
-      Scrub    OK
+  Btrfs volum1
+    Balance             OK
+    IO                  OK
+    Scrub               OK
+    Scrub Ops           OK
+    Devices
+      /dev/sdc IO       OK
+      /dev/sdc Scrub    OK
+      /dev/sdd IO       OK
+      /dev/sdd Scrub    OK
+      /dev/sde IO       OK
+      /dev/sdeScrub     OK 
+      /dev/sdfIO        OK
+      /dev/sdfScrub     OK
+      /dev/sdg IO       OK
+      /dev/sdg Scrub    OK
 ```
 
-On the `/health/metric=state` page the full `sensor_descr` is shown — self-contained without
+On the `/health/metric=state` page the full `sensor_descr` is shown - self-contained without
 any group context:
 
-```
-Device              Sensor              Current
-btrfs-host.example  volum1 Balance      OK
-btrfs-host.example  volum1 IO           OK
-btrfs-host.example  volum1 Scrub        OK
-btrfs-host.example  volum1 Scrub Ops    OK
-btrfs-host.example  /dev/sdc IO         OK
-btrfs-host.example  /dev/sdc Scrub      OK
-btrfs-host.example  /dev/sdd IO         OK
-btrfs-host.example  /dev/sdd Scrub      OK
-btrfs-host.example  /dev/sde IO         OK
-btrfs-host.example  /dev/sde Scrub      OK
-btrfs-host.example  /dev/sdf IO         OK
-btrfs-host.example  /dev/sdf Scrub      OK
-btrfs-host.example  /dev/sdg IO         OK
-btrfs-host.example  /dev/sdg Scrub      OK
-```
+| Device | Sensor | Current |
+| --- | --- | --- |
+| fubar-linux.example | Btrfs volum1 Balance | OK |
+| fubar-linux.example | Btrfs volum1 IO | OK |
+| fubar-linux.example | Btrfs volum1 Scrub | OK |
+| fubar-linux.example | Btrfs volum1 Scrub Ops | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sdc IO | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sdc Scrub | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sdd IO | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sdd Scrub | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sde IO | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sde Scrub | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sdf IO | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sdf Scrub | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sdg IO | OK |
+| fubar-linux.example | Btrfs volum1 /dev/sdg Scrub | OK |
 
 ---
 
@@ -298,7 +287,7 @@ When a sensor is rendered inside a visible group heading, redundant leading text
 
 On the overview page, prefix candidates are tried in this order:
 
-1. full `group` path normalized with spaces (`A::B` -> `A B`)
+1. full `group` path normalized with spaces (`A::B` -> `A B`    )
 2. first `::` segment
 3. last `::` segment
 
@@ -324,6 +313,42 @@ Prefix stripping only applies when a heading is visible. When a group path is su
 
 ---
 
+## Group Navigation Links
+
+Setting `sensor_navigation` on a sensor makes its group heading a clickable link on the device
+overview and health pages. The value is the URL path after `device/device={id}/`, and the full
+link is built automatically for the current device.
+
+```yaml
+sensors:
+    state:
+        data:
+            -
+                oid: LINUX-MIB::mdRaidArrayTable
+                value: LINUX-MIB::mdRaidArrayState
+                descr: 'Mdadm md0 State'
+                group: 'Mdadm md0'
+                sensor_navigation: 'tab=apps/app=mdadm/array=md0/'
+```
+
+On device 2, the `md0` heading becomes a link to:
+
+```
+http://librenms.example/device/device=2/tab=apps/app=mdadm/array=md0/
+```
+
+**Rules:**
+
+- `sensor_navigation` applies to the **exact group path** on the sensor. If sensors only carry
+  `group: 'md0::devices'`, the `md0` ancestor heading will not be linked unless at least one
+  sensor also carries `group: 'md0'` with a `sensor_navigation` value.
+- When multiple sensors share the same `group`, the first non-empty `sensor_navigation` value
+  is used for the heading link. All sensors in the group should carry the same value.
+- Headings with no navigation value render as plain text - existing behaviour is unchanged.
+- The `sensor_navigation` value is stored verbatim; do not include a leading `/`.
+
+---
+
 ## Edge Case: Single-Sensor Groups
 
 If only one sensor belongs to a particular group path **and** no sub-groups exist under it, the
@@ -336,8 +361,7 @@ shown directly:
 
 ```
 Voltage
-  UPS Eaton 3S 700
-    UPS Eaton 3S 700 Output    230 V    ← heading suppressed; full descr shown
+  UPS Eaton 3S 700 Output    230 V    ← heading suppressed; full descr shown
   UPS Eaton 9135 6000
     ...
 ```

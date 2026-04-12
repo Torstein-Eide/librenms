@@ -1,11 +1,12 @@
 <?php
 
 /**
- * Build lookup tables for sensor group heading suppression.
+ * Build lookup tables for sensor group heading suppression and navigation.
  *
- * Returns [$groupCounts, $groupHasChildren]:
+ * Returns [$groupCounts, $groupHasChildren, $groupNavigation]:
  *   $groupCounts      — exact group string → sensor count
  *   $groupHasChildren — group string → true when a deeper sub-path exists
+ *   $groupNavigation  — exact group string → sensor_navigation URL path (first non-null wins)
  *
  * Group paths use '::' as a level separator, e.g. 'volum1::/dev/sdc'.
  */
@@ -13,9 +14,13 @@ function buildSensorGroupData(iterable $sensors): array
 {
     $groupCounts = [];
     $groupHasChildren = [];
+    $groupNavigation = [];
     foreach ($sensors as $sensor) {
         $g = $sensor->group ?? '';
         $groupCounts[$g] = ($groupCounts[$g] ?? 0) + 1;
+        if (! isset($groupNavigation[$g]) && ! empty($sensor->sensor_navigation)) {
+            $groupNavigation[$g] = $sensor->sensor_navigation;
+        }
         $parts = $g !== '' ? explode('::', $g) : [];
         for ($i = 0; $i < count($parts) - 1; $i++) {
             $ancestor = implode('::', array_slice($parts, 0, $i + 1));
@@ -23,7 +28,7 @@ function buildSensorGroupData(iterable $sensors): array
         }
     }
 
-    return [$groupCounts, $groupHasChildren];
+    return [$groupCounts, $groupHasChildren, $groupNavigation];
 }
 
 /**

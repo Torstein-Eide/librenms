@@ -12,7 +12,7 @@ $graph_type ??= 'sensor_' . $class->value;
 $sensors = App\Models\Sensor::where('sensor_class', $class)->where('device_id', $device['device_id'])->orderBy('group')->orderBy('sensor_descr')->get();
 
 include_once 'includes/html/pages/device/sensor-group-helpers.inc.php';
-[$groupCounts, $groupHasChildren] = buildSensorGroupData($sensors);
+[$groupCounts, $groupHasChildren, $groupNavigation] = buildSensorGroupData($sensors);
 
 // Tracks which heading levels have already been rendered for the current position
 // in the sorted list.  Reset at each depth where the path changes.
@@ -34,8 +34,15 @@ foreach ($sensors as $sensor) {
                 if (! isSensorGroupSuppressed($pathToHere, $groupCounts, $groupHasChildren)) {
                     $marginLeft = $d * 16;
                     $headingSize = $d === 0 ? 'h4' : 'h5';
+                    $headingLabel = htmlspecialchars($parts[$d], ENT_QUOTES, 'UTF-8');
+                    if (! empty($groupNavigation[$pathToHere])) {
+                        $navUrl = 'device/device=' . $device['device_id'] . '/' . $groupNavigation[$pathToHere];
+                        $headingContent = '<a href="' . htmlspecialchars($navUrl, ENT_QUOTES, 'UTF-8') . '">' . $headingLabel . '</a>';
+                    } else {
+                        $headingContent = $headingLabel;
+                    }
                     echo "<div style='margin-left:{$marginLeft}px; margin-top: 8px; margin-bottom: 4px;'>"
-                        . "<{$headingSize} class='section-heading'>{$parts[$d]}</{$headingSize}>"
+                        . "<{$headingSize} class='section-heading'>{$headingContent}</{$headingSize}>"
                         . '</div>';
                 }
                 $currentPath[$d] = $parts[$d];

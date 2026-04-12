@@ -20,7 +20,7 @@ if ($sensors->isNotEmpty()) {
         <table class="table table-hover table-condensed table-striped">';
 
     include_once 'includes/html/pages/device/sensor-group-helpers.inc.php';
-    [$groupCounts, $groupHasChildren] = buildSensorGroupData($sensors);
+    [$groupCounts, $groupHasChildren, $groupNavigation] = buildSensorGroupData($sensors);
     $visibleDepthCache = [];
 
     // $currentPath tracks which group heading levels have already been emitted for the
@@ -46,7 +46,13 @@ if ($sensors->isNotEmpty()) {
                         // Indent by depth: 4 px base + 16 px per additional level.
                         $padding = ($d * 16) + 4;
                         $headingLabel = htmlspecialchars($parts[$d], ENT_QUOTES, 'UTF-8');
-                        echo "<tr><td colspan='3' style='padding-left:{$padding}px'><strong>{$headingLabel}</strong></td></tr>";
+                        if (! empty($groupNavigation[$pathToHere])) {
+                            $navUrl = 'device/device=' . $device['device_id'] . '/' . $groupNavigation[$pathToHere];
+                            $headingContent = '<a href="' . htmlspecialchars($navUrl, ENT_QUOTES, 'UTF-8') . '">' . $headingLabel . '</a>';
+                        } else {
+                            $headingContent = $headingLabel;
+                        }
+                        echo "<tr><td colspan='3' style='padding-left:{$padding}px'><strong>{$headingContent}</strong></td></tr>";
                     }
                     $currentPath[$d] = $parts[$d];
                 }
