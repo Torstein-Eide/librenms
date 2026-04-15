@@ -7,9 +7,11 @@ use LibreNMS\Exceptions\JsonAppParsingFailedException;
 use LibreNMS\RRD\RrdDefinition;
 
 $name = 'smart';
+$payload = [];
 
 try {
-    $data = json_app_get($device, $name)['data'];
+    $payload = json_app_get($device, $name);
+    $data = $payload['data'];
 } catch (JsonAppParsingFailedException $e) {
     // Legacy script, build compatible array
     $legacy = $e->getOutput();
@@ -19,10 +21,15 @@ try {
 
     $int = 0;
     while (isset($lines[$int])) {
+        $parts = explode(',', $lines[$int]);
+        $int++;
+        if (count($parts) < 26) {
+            continue;
+        }
+
         [$disk, $id5, $id10, $id173, $id177, $id183, $id184, $id187, $id188, $id190, $id194,
             $id196, $id197, $id198, $id199, $id231, $id233, $completed, $interrupted, $read_failure,
-            $unknown_failure, $extended, $short, $conveyance, $selective, $id9] = explode(',', $lines[$int]);
-        $int++;
+            $unknown_failure, $extended, $short, $conveyance, $selective, $id9] = $parts;
 
         // could really be any of these, but make sure we have something defined,
         // otherwise there is something wrong with the line
@@ -59,6 +66,27 @@ try {
 } catch (JsonAppException $e) {
     echo PHP_EOL . $name . ':' . $e->getCode() . ':' . $e->getMessage() . PHP_EOL;
     update_application($app, $e->getCode() . ':' . $e->getMessage(), []); // Set empty metrics and error message
+
+    return;
+}
+
+$payloadLines = explode("\n", json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '');
+$totalLines = count($payloadLines);
+$head = array_slice($payloadLines, 0, 20);
+$tail = $totalLines > 40 ? array_slice($payloadLines, -20) : [];
+echo PHP_EOL . "smart payload ({$totalLines} lines):" . PHP_EOL;
+echo implode(PHP_EOL, $head) . PHP_EOL;
+if ($tail !== []) {
+    echo '...' . PHP_EOL;
+    echo implode(PHP_EOL, $tail) . PHP_EOL;
+}
+
+$version = $payload['version'] ?? 'legacy';
+echo "smart version: {$version}" . PHP_EOL;
+
+if (($payload['version'] ?? 0) >= 2) {
+    $module = new LibreNMS\Agent\Module\smart($device, $app);
+    $module->run($payload);
 
     return;
 }
