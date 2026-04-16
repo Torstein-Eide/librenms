@@ -70,19 +70,19 @@ try {
     return;
 }
 
-$payloadLines = explode("\n", json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '');
-$totalLines = count($payloadLines);
-$head = array_slice($payloadLines, 0, 20);
-$tail = $totalLines > 40 ? array_slice($payloadLines, -20) : [];
-echo PHP_EOL . "smart payload ({$totalLines} lines):" . PHP_EOL;
-echo implode(PHP_EOL, $head) . PHP_EOL;
-if ($tail !== []) {
-    echo '...' . PHP_EOL;
-    echo implode(PHP_EOL, $tail) . PHP_EOL;
-}
+// $payloadLines = explode("\n", json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '');
+// $totalLines = count($payloadLines);
+// $head = array_slice($payloadLines, 0, 20);
+// $tail = $totalLines > 40 ? array_slice($payloadLines, -20) : [];
+// echo PHP_EOL . "smart payload ({$totalLines} lines):" . PHP_EOL;
+// echo implode(PHP_EOL, $head) . PHP_EOL;
+// if ($tail !== []) {
+//     echo '...' . PHP_EOL;
+//     echo implode(PHP_EOL, $tail) . PHP_EOL;
+// }
 
 $version = $payload['version'] ?? 'legacy';
-echo "smart version: {$version}" . PHP_EOL;
+// echo "smart version: {$version}" . PHP_EOL;
 
 if (($payload['version'] ?? 0) >= 2) {
     $module = new LibreNMS\Agent\Module\smart($device, $app);
