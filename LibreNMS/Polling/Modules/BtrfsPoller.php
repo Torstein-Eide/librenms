@@ -1769,6 +1769,12 @@ class BtrfsPoller
             'balance' => [
                 'status' => $fsBalanceStatus,
             ],
+            'rrd_key'      => $cachedFs['rrd_key'] ?? '',
+            'display_name' => $cachedFs['display_name'] ?? '',
+            'label'        => $cachedFs['label'] ?? '',
+            'mountpoint'   => $cachedFs['mountpoint'] ?? '',
+            'device_count' => $cachedFs['device_count'] ?? 0,
+            'devices'      => $cachedFs['devices'] ?? [],
         ];
 
     }
