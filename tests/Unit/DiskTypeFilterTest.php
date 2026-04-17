@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 class DiskTypeFilterTest extends TestCase
 {
-    public function testClassifyLinuxDisks()
+    public function testClassifyLinuxDisks(): void
     {
         // Physical drives
         $this->assertEquals(
@@ -62,7 +62,7 @@ class DiskTypeFilterTest extends TestCase
         );
     }
 
-    public function testClassifyUnixBsdDisks()
+    public function testClassifyUnixBsdDisks(): void
     {
         // Physical drives
         $this->assertEquals(
@@ -93,7 +93,7 @@ class DiskTypeFilterTest extends TestCase
         );
     }
 
-    public function testClassifyBsdSoftwareRaid()
+    public function testClassifyBsdSoftwareRaid(): void
     {
         // FreeBSD software RAID (ccd)
         $this->assertEquals(
@@ -140,7 +140,7 @@ class DiskTypeFilterTest extends TestCase
         );
     }
 
-    public function testClassifyLinuxMd()
+    public function testClassifyLinuxMd(): void
     {
         // Linux md devices should be software RAID
         $this->assertEquals(
@@ -163,7 +163,7 @@ class DiskTypeFilterTest extends TestCase
         );
     }
 
-    public function testClassifyUnknownDisks()
+    public function testClassifyUnknownDisks(): void
     {
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'other'],
@@ -171,7 +171,7 @@ class DiskTypeFilterTest extends TestCase
         );
     }
 
-    public function testMatchesFilter()
+    public function testMatchesFilter(): void
     {
         $physicalDisk = ['view' => 'physical', 'subtype' => 'sd_family'];
         $logicalDisk = ['view' => 'logical', 'subtype' => 'partitions'];
@@ -208,7 +208,7 @@ class DiskTypeFilterTest extends TestCase
         $this->assertFalse(DiskTypeFilter::matches($physicalDisk, 'logical', 'all'));
     }
 
-    public function testNormalizeSelection()
+    public function testNormalizeSelection(): void
     {
         // Test valid selections
         $this->assertEquals(
@@ -243,7 +243,7 @@ class DiskTypeFilterTest extends TestCase
         );
     }
 
-    public function testSubtypesFor()
+    public function testSubtypesFor(): void
     {
         $this->assertEquals(
             ['all', 'sd_family', 'nvme', 'mmcblk', 'memory', 'other'],
