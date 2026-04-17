@@ -134,6 +134,10 @@ class DiskTypeFilterTest extends TestCase
             ['view' => 'physical', 'subtype' => 'memory'],
             DiskTypeFilter::classify('md0', 'netbsd')
         );
+        $this->assertEquals(
+            ['view' => 'physical', 'subtype' => 'memory'],
+            DiskTypeFilter::classify('md0', 'pfSense pfSense.eideen.no 2.8.1-RELEASE FreeBSD 15.0-CURRENT amd64')
+        );
     }
 
     public function testClassifyLinuxMd()
