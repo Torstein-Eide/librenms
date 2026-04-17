@@ -12,6 +12,7 @@ class SmartPage
     use AppPageHelpers;
     private array $baseLink;
     private array $disk = [];
+    private string $diskLabel = '';
     private ?int $powerOnHours = null;
     private string $labelMode = 'device';
     private string $diskViewMode = 'basic';
@@ -53,7 +54,7 @@ class SmartPage
     }
 
     // ---------------------------------------------------------------
-    // V1 — existing behaviour, untouched
+    // V1 - existing behaviour, untouched
     // ---------------------------------------------------------------
 
     private function renderV1(): void
@@ -420,6 +421,12 @@ class SmartPage
     private function renderV2(): void
     {
         $disks = $this->app->data['tables']['disks'] ?? [];
+        uasort($disks, static function (array $a, array $b): int {
+            return strcmp(
+                strtolower((string) ($a['identity']['dev_name'] ?? '')),
+                strtolower((string) ($b['identity']['dev_name'] ?? ''))
+            );
+        });
 
         if (isset($this->vars['disk'])) {
             $this->diskViewMode = $this->resolveDiskViewMode();
@@ -516,6 +523,7 @@ class SmartPage
     {
         $sensors = Sensor::where('device_id', $this->device['device_id'])
             ->where('sensor_oid', 'like', 'app:smart:%')
+            ->with('translations')
             ->get()
             ->keyBy('sensor_index');
 
@@ -543,7 +551,7 @@ class SmartPage
             $modelText = htmlspecialchars($this->overviewModel($disk));
             $model = generate_link($modelText, $this->baseLink, ['disk' => $key]);
             $serialValue = $this->overviewSerial($disk);
-            $serialText = htmlspecialchars($serialValue !== '' ? $serialValue : '—');
+            $serialText = htmlspecialchars($serialValue !== '' ? $serialValue : '-');
             $serial = $serialValue !== '' ? generate_link($serialText, $this->baseLink, ['disk' => $key]) : $serialText;
             $type = htmlspecialchars($this->overviewType($disk));
             $temp = $this->overviewTempBadge($disk, (string) $key, $sensors);
@@ -705,7 +713,7 @@ class SmartPage
             }
         }
 
-        return '—';
+        return '-';
     }
 
     private function overviewType(array $disk): string
@@ -729,14 +737,14 @@ class SmartPage
             return $protocol;
         }
 
-        return $media ?? '—';
+        return $media ?? '-';
     }
 
     private function overviewTemperature(array $disk): string
     {
         $temp = $disk['temperature']['current_c'] ?? $disk['temperature'] ?? null;
         if (! is_numeric($temp)) {
-            return '—';
+            return '-';
         }
 
         return rtrim(rtrim(number_format((float) $temp, 1, '.', ''), '0'), '.');
@@ -747,31 +755,21 @@ class SmartPage
         $diskIdx = $this->diskIndex($diskKey);
 
         $sensor = $sensors->get("{$diskIdx}_nvme_crit_warn") ?? $sensors->get("{$diskIdx}_health");
-        if ($sensor) {
-            $value = (int) $sensor->sensor_current;
-            if ($value === 0) {
-                return '<span class="text-muted">OK</span>';
-            }
-
-            if ($sensor->sensor_type === 'smart_nvme_crit_warn') {
-                $class = in_array($value, [4, 8], true) ? 'danger' : 'warning';
-
-                return '<span class="label label-' . $class . '">Warn</span>';
-            }
-
-            return '<span class="label label-danger">FAIL</span>';
+        if (! $sensor) {
+            return '<span class="text-muted">-</span>';
         }
 
-        $passed = $disk['health']['smart_passed'] ?? null;
-        if ($passed === true) {
-            return '<span class="text-muted">OK</span>';
-        }
+        $translation = $sensor->currentTranslation();
+        $descr = $translation ? htmlspecialchars($translation->state_descr) : (string) (int) $sensor->sensor_current;
 
-        if ($passed === false) {
-            return '<span class="label label-danger">FAIL</span>';
-        }
+        $class = match ($translation?->severity()) {
+            \LibreNMS\Enum\Severity::Ok      => 'default',
+            \LibreNMS\Enum\Severity::Warning => 'warning',
+            \LibreNMS\Enum\Severity::Error   => 'danger',
+            default                          => 'default',
+        };
 
-        return '<span class="text-muted">—</span>';
+        return '<span class="label label-' . $class . '">' . $descr . '</span>';
     }
 
     private function overviewWearBadge(array $disk, string $diskKey, mixed $sensors): string
@@ -793,12 +791,12 @@ class SmartPage
                 return '<span class="label label-warning">' . $rounded . '%</span>';
             }
 
-            return '<span class="text-muted">' . $rounded . '%</span>';
+            return '<span class="label label-default">' . $rounded . '%</span>';
         }
 
         $wearRemaining = $this->overviewWearRemaining($disk);
         if ($wearRemaining === null) {
-            return '<span class="text-muted">—</span>';
+            return '<span class="text-muted">-</span>';
         }
 
         $rounded = (int) round(max(0.0, min(100.0, $wearRemaining)));
@@ -810,7 +808,7 @@ class SmartPage
             return '<span class="label label-warning">' . $rounded . '%</span>';
         }
 
-        return '<span class="text-muted">' . $rounded . '%</span>';
+        return '<span class="label label-default">' . $rounded . '%</span>';
     }
 
     private function overviewWearRemaining(array $disk): ?float
@@ -836,7 +834,7 @@ class SmartPage
     {
         $currentHours = $disk['power']['power_on_time']['hours'] ?? null;
         if (! is_numeric($currentHours)) {
-            return '—';
+            return '-';
         }
 
         $table = $disk['selftest']['ata_smart_self_test_log']['extended']['table'] ?? [];
@@ -853,14 +851,14 @@ class SmartPage
             return ltrim($this->formatHoursAgo($delta), '-') . ' ago';
         }
 
-        return '—';
+        return '-';
     }
 
     private function overviewTempBadge(array $disk, string $diskKey, mixed $sensors): string
     {
         $text = $this->overviewTemperature($disk);
-        if ($text === '—') {
-            return '<span class="text-muted">—</span>';
+        if ($text === '-') {
+            return '<span class="text-muted">-</span>';
         }
 
         $diskIdx = $this->diskIndex($diskKey);
@@ -886,8 +884,8 @@ class SmartPage
     private function overviewSelftestBadge(array $disk, string $diskKey, string $type, mixed $sensors): string
     {
         $text = $this->overviewSelftestAge($disk, $type);
-        if ($text === '—') {
-            return '<span class="text-muted">—</span>';
+        if ($text === '-') {
+            return '<span class="text-muted">-</span>';
         }
 
         $diskIdx = $this->diskIndex($diskKey);
@@ -1139,14 +1137,14 @@ class SmartPage
 
         $this->panelsRowEnd();
 
-        // Row 2: Attributes — full width
+        // Row 2: Attributes - full width
         if (isset($this->disk['attributes'])) {
             $this->renderAttributes();
         }
 
-        // Row 3: Stats panels — flex
+        // Row 3: Stats panels - flex
         if (isset($this->disk['stats'])) {
-            // Row 4: Extended Error Log — full width
+            // Row 4: Extended Error Log - full width
             $this->renderExtendedErrorLog();
         }
 
@@ -1158,7 +1156,7 @@ class SmartPage
     // Section-specific renderers
     // ---------------------------------------------------------------
 
-    /** Same transform as smart.php diskIndex() — must stay in sync. */
+    /** Same transform as smart.php diskIndex() - must stay in sync. */
     private function diskIndex(string $key): string
     {
         return substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
@@ -1221,6 +1219,7 @@ class SmartPage
             'type'      => "application_{$graphType}",
             'disk'      => $diskIdx,
             'scale_min' => '0',
+            'page_title' => trim($this->diskLabel . ' - ' . $graphTitle, ' -'),
         ];
         if ($extraVars !== []) {
             $graph_array = array_merge($graph_array, $extraVars);
@@ -1267,6 +1266,7 @@ JS;
     private function renderDriveGraphs(string $diskKey, array $disk): void
     {
         $diskIdx = $this->diskIndex($diskKey);
+        $this->diskLabel = trim(($disk['identity']['dev_name'] ?? $diskKey) . ' ' . ($disk['identity']['model_name'] ?? ''));
         $isAta = $this->diskIsAta();
         $attributeSpecs = $this->ataAttributeGraphSpecs($diskIdx, $disk);
 
@@ -1283,7 +1283,7 @@ JS;
             $this->renderSensorGraph($tempSensor, 'Temperature');
         }
 
-        // Health — colored Passed/Failed badge
+        // Health - colored Passed/Failed badge
         $healthSensor = $sensors->get("{$diskIdx}_health");
         if ($healthSensor) {
             $passed = $disk['health']['smart_passed'] ?? null;
@@ -1341,7 +1341,6 @@ JS;
                         'attr_thresh' => $attr['thresh'] !== null ? (string) $attr['thresh'] : '',
                         'has_raw'     => $attr['has_raw'] ? '1' : '0',
                         'has_norm'    => $attr['has_norm'] ? '1' : '0',
-                        'page_title'  => ($disk['identity']['dev_name'] ?? $diskKey) . ' ' . ($disk['identity']['model_name'] ?? '') . ' ' . ($disk['identity']['serial_number'] ?? '') . ' - ' . $attr['title'],
                     ]
                 );
             }
@@ -1624,12 +1623,12 @@ JS;
 
                 // Thresh tooltip
                 $threshStr = htmlspecialchars((string) ($thresh ?? ''));
-                $threshTip = 'Failure threshold — attribute fails when Value drops below this';
+                $threshTip = 'Failure threshold - attribute fails when Value drops below this';
                 $threshCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($threshTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . $threshStr . '</span>';
 
                 // Raw tooltip
                 $rawStr = htmlspecialchars((string) ($r['raw']['string'] ?? ''));
-                $rawTip = 'Raw hardware reading — vendor-specific meaning';
+                $rawTip = 'Raw hardware reading - vendor-specific meaning';
                 $rawCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($rawTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . $rawStr . '</span>';
 
                 echo '<tr' . $rowClass . '>'
@@ -1688,7 +1687,7 @@ JS;
         // 1. Model Family
         $add('model_family', $data['model_family'] ?? null);
 
-        // 2. Model — first available alias
+        // 2. Model - first available alias
         foreach (['model_name', 'device_model', 'model_number'] as $alias) {
             if (isset($data[$alias]) && $data[$alias] !== '') {
                 $add('model_name', $data[$alias]);
@@ -1702,7 +1701,7 @@ JS;
         // 3. Serial
         $add('serial_number', $data['serial_number'] ?? null);
 
-        // 4. Path — dev_name or device_path (whichever was used as title still appears)
+        // 4. Path - dev_name or device_path (whichever was used as title still appears)
         foreach (['dev_name', 'device_path'] as $k) {
             if (isset($data[$k]) && $data[$k] !== '') {
                 $add($k, $data[$k]);
@@ -1733,7 +1732,7 @@ JS;
             $seen['interface_speed'] = true;
         }
 
-        // 8. Remaining fields — skip noisy/duplicate ones
+        // 8. Remaining fields - skip noisy/duplicate ones
         $skip = ['wwn', 'interface_speed', 'device_model', 'model_number'];
         foreach ($data as $k => $v) {
             if (in_array($k, $skip, true) || isset($seen[$k])) {
@@ -2194,7 +2193,7 @@ JS;
             return;
         }
 
-        // Scalar or empty — skip
+        // Scalar or empty - skip
     }
 
     private function renderPanel(string $title, callable $body, string $badge = ''): void
