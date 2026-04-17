@@ -29,7 +29,6 @@ if (Rrd::checkRrdExists($rrd_filename)) {
         'id183' => 'Runtime Bad Block',
         'id184' => 'End-to-End Error',
         'id196' => 'Reall Evnt Cnt',
-        'id197' => 'Crnt Pnd Sct Cnt',
         'id199' => 'UDMA CRC Err Count',
     ] as $ds => $descr) {
         if ($availableDs !== [] && ! in_array($ds, $availableDs, true)) {
@@ -42,6 +41,10 @@ if (Rrd::checkRrdExists($rrd_filename)) {
             'ds'       => $ds,
         ];
     }
+}
+
+if (empty($rrd_list)) {
+    return;
 }
 
 require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';

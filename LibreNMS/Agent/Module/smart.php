@@ -128,7 +128,7 @@ class smart
             $this->discoverDisk((string) $diskKey, is_array($disk) ? $disk : []);
         }
 
-        foreach (['smart_temperature', 'smart_health', 'smart_wear', 'smart_selftest_short', 'smart_selftest_long'] as $type) {
+        foreach (['smart_temperature', 'smart_health', 'smart_wear', 'smart_selftest_short', 'smart_selftest_long', 'smart_nvme_crit_warn'] as $type) {
             app('sensor-discovery')->sync(sensor_type: $type);
         }
 
@@ -165,36 +165,77 @@ class smart
         }
 
         // ── Health (state) ───────────────────────────────────────────────────
-        $healthIndex = "{$idx}_health";
-        $healthValue = isset($disk['health']['smart_passed'])
-            ? ($disk['health']['smart_passed'] ? 0 : 1)
-            : 0;
-        app('sensor-discovery')
-            ->discover(new Sensor([
-                'device_id'         => $this->device['device_id'],
-                'poller_type'       => 'agent',
-                'sensor_class'      => 'state',
-                'sensor_type'       => 'smart_health',
-                'sensor_index'      => $healthIndex,
-                'sensor_oid'        => "app:smart:{$healthIndex}",
-                'group'             => $group,
-                'sensor_navigation' => $nav,
-                'sensor_descr'      => "{$group} {$devName} Health",
-                'sensor_current'    => $healthValue,
-            ]))
-            ->withStateTranslations('smart_health', [
-                StateTranslation::define('Passed', 0, Severity::Ok),
-                StateTranslation::define('Failed', 1, Severity::Error),
-            ]);
+        $nvmeCwLog = $disk['stats']['nvme_smart_health_information_log'] ?? null;
+        if (! is_array($nvmeCwLog)) {
+            $healthIndex = "{$idx}_health";
+            $healthValue = isset($disk['health']['smart_passed'])
+                ? ($disk['health']['smart_passed'] ? 0 : 1)
+                : 0;
+            app('sensor-discovery')
+                ->discover(new Sensor([
+                    'device_id'         => $this->device['device_id'],
+                    'poller_type'       => 'agent',
+                    'sensor_class'      => 'state',
+                    'sensor_type'       => 'smart_health',
+                    'sensor_index'      => $healthIndex,
+                    'sensor_oid'        => "app:smart:{$healthIndex}",
+                    'group'             => $group,
+                    'sensor_navigation' => $nav,
+                    'sensor_descr'      => "{$group} {$devName} Health",
+                    'sensor_current'    => $healthValue,
+                ]))
+                ->withStateTranslations('smart_health', [
+                    StateTranslation::define('Passed', 0, Severity::Ok),
+                    StateTranslation::define('Failed', 1, Severity::Error),
+                ]);
+        }
+
+        // ── NVMe critical warning ────────────────────────────────────────────
+        // critical_warning is a bitmask; bits 0-4 are defined, bits 5-7 reserved.
+        // Bit 0: available spare below threshold
+        // Bit 1: temperature above/below threshold
+        // Bit 2: NVM subsystem reliability degraded
+        // Bit 3: media placed in read-only mode
+        // Bit 4: volatile memory backup device failed
+        // Store the raw value (0-31 meaningful) and provide a state translation
+        // for every combination so the UI always shows a descriptive label.
+        if (is_array($nvmeCwLog) && array_key_exists('critical_warning', $nvmeCwLog)) {
+            $cwIndex = "{$idx}_nvme_crit_warn";
+            $cwValue = (int) $nvmeCwLog['critical_warning'];
+
+            $cwStates = [
+                StateTranslation::define('OK',                      0,  Severity::Ok),
+                StateTranslation::define('Spare below threshold',    1,  Severity::Warning),
+                StateTranslation::define('Temperature out of range', 2,  Severity::Warning),
+                StateTranslation::define('Reliability degraded',     4,  Severity::Error),
+                StateTranslation::define('Media read-only',          8,  Severity::Error),
+                StateTranslation::define('Volatile backup failed',   16, Severity::Warning),
+            ];
+
+            app('sensor-discovery')
+                ->discover(new Sensor([
+                    'device_id'         => $this->device['device_id'],
+                    'poller_type'       => 'agent',
+                    'sensor_class'      => 'state',
+                    'sensor_type'       => 'smart_nvme_crit_warn',
+                    'sensor_index'      => $cwIndex,
+                    'sensor_oid'        => "app:smart:{$cwIndex}",
+                    'group'             => $group,
+                    'sensor_navigation' => $nav,
+                    'sensor_descr'      => "{$group} {$devName} Health",
+                    'sensor_current'    => $cwValue,
+                ]))
+                ->withStateTranslations('smart_nvme_crit_warn', $cwStates);
+        }
 
         // ── Wear level ───────────────────────────────────────────────────────
         $wear = $this->extractWear($disk);
         if ($wear !== null) {
             $wearIndex = "{$idx}_wear";
-            // NVMe wear can be read via a simple payload path; ATA is computed
-            $nvmeUsed = $disk['health']['nvme_smart_health_information_log']['percentage_used'] ?? null;
+            // NVMe wear: percentage_used is at disk top level, not under health
+            $nvmeUsed = $disk['stats']['nvme_smart_health_information_log']['percentage_used'] ?? null;
             if ($nvmeUsed !== null) {
-                $this->registerSensorPath($diskKey, $wearIndex, 'health.nvme_smart_health_information_log.percentage_used');
+                $this->registerSensorPath($diskKey, $wearIndex, 'stats.nvme_smart_health_information_log.percentage_used');
             }
             app('sensor-discovery')->discover(new Sensor([
                 'device_id'         => $this->device['device_id'],
@@ -262,7 +303,7 @@ class smart
         $expected = [];
         foreach (array_keys($disks) as $diskKey) {
             $idx = $this->diskIndex((string) $diskKey);
-            foreach (['temp', 'health', 'wear', 'selftest_short', 'selftest_long'] as $suffix) {
+            foreach (['temp', 'health', 'wear', 'selftest_short', 'selftest_long', 'nvme_crit_warn'] as $suffix) {
                 $expected[] = "app:smart:{$idx}_{$suffix}";
             }
         }
@@ -346,21 +387,36 @@ class smart
         }
 
         // ── NVMe health log ───────────────────────────────────────────────────
-        $nvmeLog = $disk['health']['nvme_smart_health_information_log'] ?? null;
-        if ($nvmeLog !== null) {
-            $rrd_def_nvme = RrdDefinition::make()
-                ->addDataset('pct_used', 'GAUGE', 0, 100)
-                ->addDataset('avail_spare', 'GAUGE', 0, 100)
-                ->addDataset('media_errors', 'GAUGE', 0)
-                ->addDataset('pwr_hours', 'GAUGE', 0)
-                ->addDataset('unsafe_shut', 'GAUGE', 0);
-            $fields_nvme = [
-                'pct_used'    => isset($nvmeLog['percentage_used']) ? (int) $nvmeLog['percentage_used'] : null,
-                'avail_spare' => isset($nvmeLog['available_spare']) ? (int) $nvmeLog['available_spare'] : null,
-                'media_errors' => isset($nvmeLog['media_errors']) ? (int) $nvmeLog['media_errors'] : null,
-                'pwr_hours'   => isset($nvmeLog['power_on_hours']) ? (int) $nvmeLog['power_on_hours'] : null,
-                'unsafe_shut' => isset($nvmeLog['unsafe_shutdowns']) ? (int) $nvmeLog['unsafe_shutdowns'] : null,
+        // nvme_smart_health_information_log is at the disk top level (not under health).
+        // DS names are max 19 chars (RRDtool limit); see $nvmeDsMap for translation.
+        $nvmeLog = $disk['stats']['nvme_smart_health_information_log'] ?? null;
+
+        if (is_array($nvmeLog)) {
+            echo "Y";
+            // [json_key => [ds_name, rrd_type, min, max]]
+            $nvmeDsMap = [
+                'available_spare'      => ['avail_spare',  'GAUGE',  0, 100],
+                'percentage_used'      => ['pct_used',     'GAUGE',  0, 100],
+                'critical_warning'     => ['crit_warn',    'GAUGE',  0, 255],
+                'controller_busy_time' => ['ctrl_busy',    'DERIVE', 0, null],
+                'critical_comp_time'   => ['crit_cmp_t',   'DERIVE', 0, null],
+                'data_units_read'      => ['du_rd',        'DERIVE', 0, null],
+                'data_units_written'   => ['du_wr',        'DERIVE', 0, null],
+                'host_reads'           => ['host_rd',      'DERIVE', 0, null],
+                'host_writes'          => ['host_wr',      'DERIVE', 0, null],
+                'media_errors'         => ['media_errors', 'GAUGE',  0, null],
+                'num_err_log_entries'  => ['err_log_cnt',  'GAUGE',  0, null],
+                'power_cycles'         => ['pwr_cycles',   'GAUGE',  0, null],
+                'power_on_hours'       => ['pwr_hours',    'GAUGE',  0, null],
+                'unsafe_shutdowns'     => ['unsafe_shut',  'GAUGE',  0, null],
+                'warning_temp_time'    => ['warn_tmp_t',   'DERIVE', 0, null],
             ];
+            $rrd_def_nvme = RrdDefinition::make();
+            $fields_nvme = [];
+            foreach ($nvmeDsMap as $jsonKey => [$dsName, $rrdType, $min, $max]) {
+                $rrd_def_nvme->addDataset($dsName, $rrdType, $min, $max);
+                $fields_nvme[$dsName] = isset($nvmeLog[$jsonKey]) ? (float) $nvmeLog[$jsonKey] : null;
+            }
             $rrd_name_nvme = ['app', 'smart_nvme', $this->app->app_id, $idx];
             $tags_nvme = [
                 'name'     => 'smart',
@@ -428,6 +484,12 @@ class smart
                 ? ($disk['health']['smart_passed'] ? 0 : 1)
                 : null;
             $this->updateStateSensor($sensor, $value);
+        }
+
+        // NVMe critical warning (raw bitmask: 0=OK, bits 0-4 = fault conditions)
+        if ($sensor = $sensors->get("{$idx}_nvme_crit_warn")) {
+            $cwRaw = $disk['stats']['nvme_smart_health_information_log']['critical_warning'] ?? null;
+            $this->updateStateSensor($sensor, $cwRaw !== null ? (int) $cwRaw : null);
         }
 
         // ATA wear (computed from attributes, no stored path)
@@ -574,8 +636,8 @@ class smart
      */
     private function extractWear(array $disk): ?float
     {
-        // NVMe
-        $nvmeUsed = $disk['health']['nvme_smart_health_information_log']['percentage_used'] ?? null;
+        // NVMe — log is at disk top level, not under health
+        $nvmeUsed = $disk['stats']['nvme_smart_health_information_log']['percentage_used'] ?? null;
         if ($nvmeUsed !== null) {
             return (float) (100 - $nvmeUsed);
         }

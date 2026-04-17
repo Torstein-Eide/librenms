@@ -1,6 +1,6 @@
 <?php
 
-// V2 power-on hours and cycle count graph — reads from smart_power RRD (DS: hours, cycles)
+// V2 power-on hours graph — reads from smart_power RRD (DS: hours)
 // $vars['disk'] is the pre-computed diskIndex (safe chars only, max 80), set by renderDriveGraphs()
 
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart_power', $app->app_id, $vars['disk']]);
@@ -22,11 +22,6 @@ if (Rrd::checkRrdExists($rrd_filename)) {
         'filename' => $rrd_filename,
         'descr'    => 'Power-on Hours',
         'ds'       => 'hours',
-    ];
-    $rrd_list[] = [
-        'filename' => $rrd_filename,
-        'descr'    => 'Power Cycles',
-        'ds'       => 'cycles',
     ];
 }
 

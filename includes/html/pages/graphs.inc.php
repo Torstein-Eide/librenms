@@ -36,7 +36,11 @@ if (is_file('includes/html/graphs/' . $type . '/auth.inc.php')) {
 if (! $auth) {
     require 'includes/html/error-no-perm.inc.php';
 } else {
-    if (LibrenmsConfig::has("graph_types.$type.$subtype.descr")) {
+    if (! empty($vars['page_title'])) {
+        $title .= ' :: ' . $vars['page_title'];
+    } elseif (! empty($vars['title']) && $vars['title'] !== 'no') {
+        $title .= ' :: ' . $vars['title'];
+    } elseif (LibrenmsConfig::has("graph_types.$type.$subtype.descr")) {
         $title .= ' :: ' . LibrenmsConfig::get("graph_types.$type.$subtype.descr");
     } elseif ($type == 'device' && $subtype == 'collectd') {
         $title .= ' :: ' . \LibreNMS\Util\StringHelpers::niceCase($subtype) . ' :: ' . $vars['c_plugin'];

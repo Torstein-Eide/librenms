@@ -1,5 +1,6 @@
 <?php
 
+use App\Facades\LibrenmsConfig;
 use App\Facades\Rrd;
 use LibreNMS\Exceptions\RrdGraphException;
 
@@ -9,49 +10,142 @@ if ($attrId <= 0) {
     throw new RrdGraphException('Missing SMART attribute id');
 }
 
-$scale_min = '0';
 require 'includes/html/graphs/common.inc.php';
-
-$graph_params->right_axis = '1:0';
-$graph_params->right_axis_label = 'Normalized';
-$graph_params->vertical_label = 'Raw';
 
 if (! Rrd::checkRrdExists($rrd_filename)) {
     throw new RrdGraphException('No SMART attributes RRD file');
 }
 
-$dsRaw = 'id' . $attrId;
+$dsRaw        = 'id' . $attrId;
 $dsNormalized = $dsRaw . 'Normalized';
-$hasRaw = ($vars['has_raw'] ?? '0') === '1';
+$hasRaw        = ($vars['has_raw']  ?? '0') === '1';
 $hasNormalized = ($vars['has_norm'] ?? '0') === '1';
 if (! $hasRaw && ! $hasNormalized) {
     throw new RrdGraphException('Requested SMART attribute not found in RRD');
 }
 
-$rrd_options[] = 'COMMENT:Series               Last      Min      Max\n';
-
 $normalizedColor = session('applied_site_style') == 'dark' ? '#f2f2f2' : '#272b30';
 $rawColor = '#ff9a9a';
+$thresh   = $vars['attr_thresh'] ?? null;
+$normMax  = 255.0;
 
-if ($hasRaw) {
+/**
+ * Fetch the MAX consolidation peak for $ds over the graphed period.
+ * Returns null if rrdtool is unavailable or the DS produces no valid data.
+ */
+$fetchRawMax = static function (string $file, string $ds, int $start, int $end): ?float {
+    $bin  = LibrenmsConfig::get('rrdtool', 'rrdtool');
+    $cmd  = escapeshellcmd($bin) . ' fetch ' . escapeshellarg($file)
+          . ' MAX --start ' . $start . ' --end ' . $end;
+    exec($cmd . ' 2>/dev/null', $lines, $rc);
+    if ($rc !== 0 || empty($lines)) {
+        return null;
+    }
+
+    // First non-empty line is the DS header.
+    $header = array_shift($lines);
+    $dsNames = preg_split('/\s+/', trim($header));
+    $col = array_search($ds, $dsNames, true);
+    if ($col === false) {
+        return null;
+    }
+
+    $peak = null;
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '') {
+            continue;
+        }
+        // "timestamp: v0 v1 v2 ..."
+        $parts = preg_split('/:\s*|\s+/', $line);
+        array_shift($parts); // remove timestamp
+        $val = $parts[$col] ?? null;
+        if ($val === null || $val === 'nan' || $val === '-nan') {
+            continue;
+        }
+        $fval = (float) $val;
+        if ($peak === null || $fval > $peak) {
+            $peak = $fval;
+        }
+    }
+
+    return $peak;
+};
+
+$rawMax = $hasRaw ? $fetchRawMax($rrd_filename, $dsRaw, $graph_params->from, $graph_params->to) : null;
+
+$rrd_options[] = 'COMMENT:Series               Last      Min      Max\n';
+
+if ($hasRaw && $hasNormalized) {
     $rrd_options[] = "DEF:raw={$rrd_filename}:{$dsRaw}:AVERAGE";
-    $rrd_options[] = 'LINE1.5:raw' . $rawColor . ':Raw                ';
+    $rrd_options[] = "DEF:normalized={$rrd_filename}:{$dsNormalized}:AVERAGE";
+
+    $graph_params->right_axis_label = 'Normalized';
+    $graph_params->vertical_label   = 'Raw';
+
+    if ($rawMax !== null && $rawMax > 0) {
+        // Lock the left axis to the actual period max so right-axis top = 255 exactly.
+        // Format as plain decimal — rrdtool rejects scientific notation for --right-axis.
+        $slope = rtrim(rtrim(sprintf('%.18f', $normMax / $rawMax), '0'), '.');
+        $graph_params->right_axis  = $slope . ':0';
+        $graph_params->scale_max   = (int) ceil($rawMax);
+        $graph_params->scale_rigid = true;
+
+        $rrd_options[] = 'CDEF:norm_display=normalized,' . $rawMax . ',*,' . $normMax . ',/';
+
+        if (is_numeric($thresh)) {
+            $threshDisplay = round((float) $thresh * $rawMax / $normMax, 4);
+            $rrd_options[] = 'COMMENT:Alert thresholds\:';
+            $rrd_options[] = 'LINE1.5:' . $threshDisplay . '#005bdf:low_warn = ' . rtrim(rtrim(number_format((float) $thresh, 2, '.', ''), '0'), '.') . '\l:dashes';
+        }
+
+        $rrd_options[] = 'LINE1.5:raw' . $rawColor . ':Raw         ';
+        $rrd_options[] = 'GPRINT:raw:LAST:%8.1lf';
+        $rrd_options[] = 'GPRINT:raw:MIN:%8.1lf';
+        $rrd_options[] = 'GPRINT:raw:MAX:%8.1lf\l';
+        $rrd_options[] = 'LINE2:norm_display' . $normalizedColor . ':Normalized  ';
+        $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
+        $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
+        $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
+    } else {
+        // Raw is 0 or unavailable — both sit naturally in the 0-255 range.
+        $graph_params->right_axis = '1:0';
+
+        if (is_numeric($thresh)) {
+            $threshold = (float) $thresh;
+            $rrd_options[] = 'COMMENT:Alert thresholds\:';
+            $rrd_options[] = 'LINE1.5:' . $threshold . '#005bdf:low_warn = ' . rtrim(rtrim(number_format($threshold, 2, '.', ''), '0'), '.') . '\l:dashes';
+        }
+
+        $rrd_options[] = 'LINE1.5:raw' . $rawColor . ':Raw         ';
+        $rrd_options[] = 'GPRINT:raw:LAST:%8.1lf';
+        $rrd_options[] = 'GPRINT:raw:MIN:%8.1lf';
+        $rrd_options[] = 'GPRINT:raw:MAX:%8.1lf\l';
+        $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized  ';
+        $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
+        $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
+        $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
+    }
+} elseif ($hasRaw) {
+    $graph_params->vertical_label = 'Raw';
+
+    $rrd_options[] = "DEF:raw={$rrd_filename}:{$dsRaw}:AVERAGE";
+    $rrd_options[] = 'LINE1.5:raw' . $rawColor . ':Raw         ';
     $rrd_options[] = 'GPRINT:raw:LAST:%8.1lf';
     $rrd_options[] = 'GPRINT:raw:MIN:%8.1lf';
     $rrd_options[] = 'GPRINT:raw:MAX:%8.1lf\l';
-}
+} else {
+    $graph_params->vertical_label = 'Normalized';
 
-if ($hasNormalized) {
+    if (is_numeric($thresh)) {
+        $threshold = (float) $thresh;
+        $rrd_options[] = 'COMMENT:Alert thresholds\:';
+        $rrd_options[] = 'LINE1.5:' . $threshold . '#005bdf:low_warn = ' . rtrim(rtrim(number_format($threshold, 2, '.', ''), '0'), '.') . '\l:dashes';
+    }
+
     $rrd_options[] = "DEF:normalized={$rrd_filename}:{$dsNormalized}:AVERAGE";
-    $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized         :dashes';
+    $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized  ';
     $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
     $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
     $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
-}
-
-$thresh = $vars['attr_thresh'] ?? null;
-if ($hasNormalized && is_numeric($thresh)) {
-    $threshold = (float) $thresh;
-    $rrd_options[] = 'COMMENT:Alert thresholds\:';
-    $rrd_options[] = 'LINE1.5:' . $threshold . '#005bdf:low_warn = ' . rtrim(rtrim(number_format($threshold, 2, '.', ''), '0'), '.') . ':dashes';
 }

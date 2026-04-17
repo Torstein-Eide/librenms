@@ -14,7 +14,8 @@ class SmartPage
     private array $disk = [];
     private ?int $powerOnHours = null;
     private string $labelMode = 'device';
-    private string $diskViewMode = 'detailed';
+    private string $diskViewMode = 'basic';
+    private bool $attrScaleScriptEmitted = false;
 
     public function __construct(
         private array $device,
@@ -232,9 +233,32 @@ class SmartPage
             return;
         }
 
-        $dataJson = htmlspecialchars(
-            json_encode((array) ($this->app->data ?? []), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}'
+        $diskIdx = isset($this->vars['disk'])
+            ? $this->diskIndex((string) $this->vars['disk'])
+            : null;
+
+        $appData = (array) ($this->app->data ?? []);
+        $fullDataJson = htmlspecialchars(
+            json_encode($appData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}'
         );
+
+        if ($diskIdx !== null) {
+            $rawKey = (string) $this->vars['disk'];
+            $filteredData = $appData;
+            if (isset($filteredData['tables']['disks'])) {
+                $filteredData['tables']['disks'] = isset($filteredData['tables']['disks'][$rawKey])
+                    ? [$rawKey => $filteredData['tables']['disks'][$rawKey]]
+                    : [];
+            }
+            if (isset($filteredData['Discovery']['disk_list'])) {
+                $filteredData['Discovery']['disk_list'] = isset($filteredData['Discovery']['disk_list'][$rawKey])
+                    ? [$rawKey => $filteredData['Discovery']['disk_list'][$rawKey]]
+                    : [];
+            }
+            $filteredDataJson = htmlspecialchars(
+                json_encode($filteredData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) ?: '{}'
+            );
+        }
 
         $rows = Sensor::where('device_id', $this->device['device_id'])
             ->where('sensor_oid', 'like', 'app:smart:%')
@@ -285,7 +309,7 @@ class SmartPage
                 $descr = htmlspecialchars((string) $r['sensor_descr']);
                 $curr = htmlspecialchars((string) $r['current']);
                 $sensorRows .= <<<HTML
-                    <tr>
+                    <tr data-oid="{$oid}">
                         <td>{$oid}</td><td>{$type}</td><td>{$group}</td>
                         <td>{$sensorNavigation}</td><td>{$index}</td><td>{$descr}</td><td>{$curr}</td>
                     </tr>
@@ -310,7 +334,7 @@ class SmartPage
                 HTML;
         }
 
-        echo <<<HTML
+        echo <<<'HTML'
             <div class="text-right" style="margin-bottom:6px">
                 <a class="btn btn-xs btn-default" data-toggle="collapse" href="#smart-debug-panels"
                    aria-expanded="false" aria-controls="smart-debug-panels">
@@ -320,19 +344,73 @@ class SmartPage
             <div id="smart-debug-panels" class="collapse">
             HTML;
 
-        $this->panelStart('Debug: Database Data');
-        echo '<pre style="max-height:260px;overflow:auto">' . $dataJson . '</pre>';
+        $dbToggle = '';
+        $storeToggle = '';
+        $sensorToggle = '';
+        if ($diskIdx !== null) {
+            $diskIdxEsc = htmlspecialchars($diskIdx, ENT_QUOTES);
+            $toggleLabel = '<label style="font-weight:normal;margin-left:12px;font-size:12px">';
+            $toggleAttrs = 'checked data-diskidx="' . $diskIdxEsc . '"';
+            $toggleSuffix = 'current drive only</label>';
+            $dbToggle = $toggleLabel
+                . '<input type="checkbox" id="smart-debug-db-filter" ' . $toggleAttrs
+                . ' onchange="smartDebugDbFilter(this)"> ' . $toggleSuffix;
+            $storeToggle = $toggleLabel
+                . '<input type="checkbox" id="smart-debug-store-filter" ' . $toggleAttrs
+                . ' onchange="smartDebugStoreFilter(this)"> ' . $toggleSuffix;
+            $sensorToggle = $toggleLabel
+                . '<input type="checkbox" id="smart-debug-disk-filter" ' . $toggleAttrs
+                . ' onchange="smartDebugFilter(this)"> ' . $toggleSuffix;
+        }
+
+        $this->panelStart('Debug: Database Data' . $dbToggle);
+        if ($diskIdx !== null) {
+            echo '<pre id="smart-debug-db-filtered" style="max-height:260px;overflow:auto">' . $filteredDataJson . '</pre>';
+            echo '<pre id="smart-debug-db-full" style="max-height:260px;overflow:auto;display:none">' . $fullDataJson . '</pre>';
+        } else {
+            echo '<pre style="max-height:260px;overflow:auto">' . $fullDataJson . '</pre>';
+        }
         $this->panelEnd();
 
-        $this->panelStart('Debug: Datastore (app(\'Datastore\'))');
+        $this->panelStart('Debug: Datastore (app(\'Datastore\'))' . $storeToggle);
         echo $datastoreTablesHtml;
         $this->panelEnd();
 
-        $this->panelStart('Debug: Sensors (app:smart:*) &mdash; ' . $rowCount . ' row(s)');
+        $this->panelStart('Debug: Sensors (app:smart:*) &mdash; ' . $rowCount . ' row(s)' . $sensorToggle);
         echo $tableHtml;
         $this->panelEnd();
 
         echo '</div>';
+        echo <<<'JS'
+            <script>
+            function smartDebugFilter(cb) {
+                var diskIdx = cb.dataset.diskidx;
+                var prefix  = 'app:smart:' + diskIdx + '_';
+                document.querySelectorAll('#smart-debug-panels tbody tr[data-oid]').forEach(function(tr) {
+                    tr.style.display = (!cb.checked || tr.dataset.oid.startsWith(prefix)) ? '' : 'none';
+                });
+            }
+            function smartDebugDbFilter(cb) {
+                document.getElementById('smart-debug-db-filtered').style.display = cb.checked ? '' : 'none';
+                document.getElementById('smart-debug-db-full').style.display     = cb.checked ? 'none' : '';
+            }
+            function smartDebugStoreFilter(cb) {
+                var diskIdx = cb.dataset.diskidx;
+                document.querySelectorAll('#smart-debug-panels tbody tr[data-disk]').forEach(function(tr) {
+                    tr.style.display = (!cb.checked || tr.dataset.disk.startsWith(diskIdx)) ? '' : 'none';
+                });
+            }
+            (function() {
+                var cb;
+                cb = document.getElementById('smart-debug-db-filter');
+                if (cb) smartDebugDbFilter(cb);
+                cb = document.getElementById('smart-debug-store-filter');
+                if (cb) smartDebugStoreFilter(cb);
+                cb = document.getElementById('smart-debug-disk-filter');
+                if (cb) smartDebugFilter(cb);
+            })();
+            </script>
+            JS;
     }
 
     // ---------------------------------------------------------------
@@ -400,16 +478,19 @@ class SmartPage
 
         echo implode(' | ', $links);
 
-        print_optionbar_end();
-
         if (isset($this->vars['disk']) && isset($disks[$this->vars['disk']])) {
-            $this->renderDiskViewNavigation();
+            $selectedDisk = is_array($disks[$this->vars['disk']] ?? null) ? $disks[$this->vars['disk']] : [];
+            if (! $this->isNvmeDisk($selectedDisk)) {
+                $this->renderDiskViewNavigation();
+            }
         }
+
+        print_optionbar_end();
     }
 
     private function renderDiskViewNavigation(): void
     {
-        print_optionbar_start();
+        //print_optionbar_start();
 
         $currentUrl = LibreNMS\Util\Url::generate($this->baseLink + ['disk' => (string) $this->vars['disk']]);
         $cookieName = htmlspecialchars($this->diskViewModeCookieName(), ENT_QUOTES);
@@ -426,13 +507,18 @@ class SmartPage
             $links[] = '<a href="' . $urlEsc . '" onclick="document.cookie=\'' . $cookieName . '=' . $modeEsc . '; path=/; max-age=31536000; samesite=lax\';">' . $label . '</a>';
         }
 
-        echo '&nbsp;&nbsp; Disk: ' . implode(' | ', $links);
+        echo '<br>&nbsp;&nbsp; Disk: ' . implode(' | ', $links);
 
-        print_optionbar_end();
+        //print_optionbar_end();
     }
 
     private function renderOverview(array $disks): void
     {
+        $sensors = Sensor::where('device_id', $this->device['device_id'])
+            ->where('sensor_oid', 'like', 'app:smart:%')
+            ->get()
+            ->keyBy('sensor_index');
+
         $this->panelStart('Drives');
         echo <<<'HTML'
             <div class="table-responsive">
@@ -454,15 +540,17 @@ class SmartPage
         foreach ($disks as $key => $disk) {
             $deviceLabel = htmlspecialchars($this->overviewDeviceName($disk, (string) $key));
             $diskLink = generate_link($deviceLabel, $this->baseLink, ['disk' => $key]);
-            $model = htmlspecialchars($this->overviewModel($disk));
+            $modelText = htmlspecialchars($this->overviewModel($disk));
+            $model = generate_link($modelText, $this->baseLink, ['disk' => $key]);
             $serialValue = $this->overviewSerial($disk);
-            $serial = htmlspecialchars($serialValue !== '' ? $serialValue : '—');
+            $serialText = htmlspecialchars($serialValue !== '' ? $serialValue : '—');
+            $serial = $serialValue !== '' ? generate_link($serialText, $this->baseLink, ['disk' => $key]) : $serialText;
             $type = htmlspecialchars($this->overviewType($disk));
-            $temp = htmlspecialchars($this->overviewTemperature($disk));
-            $health = $this->overviewHealthBadge($disk);
-            $wear = $this->overviewWearBadge($disk);
-            $short = htmlspecialchars($this->overviewSelftestAge($disk, 'short'));
-            $long = htmlspecialchars($this->overviewSelftestAge($disk, 'extended'));
+            $temp = $this->overviewTempBadge($disk, (string) $key, $sensors);
+            $health = $this->overviewHealthBadge($disk, (string) $key, $sensors);
+            $wear = $this->overviewWearBadge($disk, (string) $key, $sensors);
+            $short = $this->overviewSelftestBadge($disk, (string) $key, 'short', $sensors);
+            $long = $this->overviewSelftestBadge($disk, (string) $key, 'extended', $sensors);
 
             echo "<tr><td>{$diskLink}</td><td>{$model}</td><td>{$serial}</td><td>{$type}</td><td>{$temp}</td><td>{$health}</td><td>{$wear}</td><td>{$short}</td><td>{$long}</td></tr>\n";
         }
@@ -473,6 +561,69 @@ class SmartPage
             </div>
         HTML;
         $this->panelEnd();
+
+        $this->renderOverviewGraphs($disks);
+    }
+
+    private function renderOverviewGraphs(array $disks): void
+    {
+        $appId = $this->app->app_id;
+        $baseGraph = [
+            'id'     => $appId,
+            'from'   => App\Facades\LibrenmsConfig::get('time.day'),
+            'to'     => App\Facades\LibrenmsConfig::get('time.now'),
+            'legend' => 'no',
+        ];
+
+        // ── All temperatures ──────────────────────────────────────────────────
+        $graph_array = $baseGraph + ['height' => '100', 'width' => '215', 'type' => 'application_smart_v2_all_temp'];
+        $this->panelStart('All Temperatures');
+        echo '<div class="row">';
+        include 'includes/html/print-graphrow.inc.php';
+        echo '</div>';
+        $this->panelEnd();
+
+        // ── All wear ──────────────────────────────────────────────────────────
+        $graph_array = $baseGraph + ['height' => '100', 'width' => '215', 'type' => 'application_smart_v2_all_wear'];
+        $this->panelStart('Wear Remaining');
+        echo '<div class="row">';
+        include 'includes/html/print-graphrow.inc.php';
+        echo '</div>';
+        $this->panelEnd();
+
+        // ── Per-attribute-ID multiline graphs ─────────────────────────────────
+        $attrIds = $this->collectOverviewAttrIds($disks);
+        foreach ($attrIds as $id => $name) {
+            $graph_array = $baseGraph + [
+                'height'  => '100',
+                'width'   => '215',
+                'type'    => 'application_smart_v2_attr_multi',
+                'attr_id' => $id,
+            ];
+            $title = 'ID# ' . $id . ', ' . $name;
+            $this->panelStart(htmlspecialchars($title));
+            echo '<div class="row">';
+            include 'includes/html/print-graphrow.inc.php';
+            echo '</div>';
+            $this->panelEnd();
+        }
+    }
+
+    private function collectOverviewAttrIds(array $disks): array
+    {
+        $attrIds = [];
+        foreach ($disks as $disk) {
+            foreach ($disk['attributes']['ata'] ?? [] as $attr) {
+                $id = isset($attr['id']) ? (int) $attr['id'] : 0;
+                if ($id <= 0 || isset($attrIds[$id])) {
+                    continue;
+                }
+                $attrIds[$id] = trim((string) ($attr['name'] ?? 'Attribute ' . $id));
+            }
+        }
+        ksort($attrIds);
+
+        return $attrIds;
     }
 
     private function resolveLabelMode(): string
@@ -591,37 +742,81 @@ class SmartPage
         return rtrim(rtrim(number_format((float) $temp, 1, '.', ''), '0'), '.');
     }
 
-    private function overviewHealthBadge(array $disk): string
+    private function overviewHealthBadge(array $disk, string $diskKey, mixed $sensors): string
     {
-        $passed = $disk['health']['smart_passed'] ?? null;
+        $diskIdx = $this->diskIndex($diskKey);
 
+        $sensor = $sensors->get("{$diskIdx}_nvme_crit_warn") ?? $sensors->get("{$diskIdx}_health");
+        if ($sensor) {
+            $value = (int) $sensor->sensor_current;
+            if ($value === 0) {
+                return '<span class="text-muted">OK</span>';
+            }
+
+            if ($sensor->sensor_type === 'smart_nvme_crit_warn') {
+                $class = in_array($value, [4, 8], true) ? 'danger' : 'warning';
+
+                return '<span class="label label-' . $class . '">Warn</span>';
+            }
+
+            return '<span class="label label-danger">FAIL</span>';
+        }
+
+        $passed = $disk['health']['smart_passed'] ?? null;
         if ($passed === true) {
-            return '<span class="label label-success">OK</span>';
+            return '<span class="text-muted">OK</span>';
         }
 
         if ($passed === false) {
             return '<span class="label label-danger">FAIL</span>';
         }
 
-        return '<span class="label label-default">Unknown</span>';
+        return '<span class="text-muted">—</span>';
     }
 
-    private function overviewWearBadge(array $disk): string
+    private function overviewWearBadge(array $disk, string $diskKey, mixed $sensors): string
     {
+        $diskIdx = $this->diskIndex($diskKey);
+        $sensor = $sensors->get("{$diskIdx}_wear");
+
+        if ($sensor && $sensor->sensor_current !== null) {
+            $value = (float) $sensor->sensor_current;
+            $rounded = (int) round(max(0.0, min(100.0, $value)));
+            $warnLow = $sensor->sensor_limit_low_warn !== null ? (float) $sensor->sensor_limit_low_warn : 20.0;
+            $hardLow = $sensor->sensor_limit_low !== null ? (float) $sensor->sensor_limit_low : 10.0;
+
+            if ($value <= $hardLow) {
+                return '<span class="label label-danger">' . $rounded . '%</span>';
+            }
+
+            if ($value <= $warnLow) {
+                return '<span class="label label-warning">' . $rounded . '%</span>';
+            }
+
+            return '<span class="text-muted">' . $rounded . '%</span>';
+        }
+
         $wearRemaining = $this->overviewWearRemaining($disk);
         if ($wearRemaining === null) {
             return '<span class="text-muted">—</span>';
         }
 
         $rounded = (int) round(max(0.0, min(100.0, $wearRemaining)));
-        $class = $rounded <= 10 ? 'danger' : ($rounded <= 20 ? 'warning' : 'success');
+        if ($rounded <= 10) {
+            return '<span class="label label-danger">' . $rounded . '%</span>';
+        }
 
-        return '<span class="label label-' . $class . '">' . $rounded . '%</span>';
+        if ($rounded <= 20) {
+            return '<span class="label label-warning">' . $rounded . '%</span>';
+        }
+
+        return '<span class="text-muted">' . $rounded . '%</span>';
     }
 
     private function overviewWearRemaining(array $disk): ?float
     {
-        $nvmeUsed = $disk['health']['nvme_smart_health_information_log']['percentage_used']
+        $nvmeUsed = $disk['nvme_smart_health_information_log']['percentage_used']
+            ?? $disk['health']['nvme_smart_health_information_log']['percentage_used']
             ?? $disk['stats']['nvme_smart_health_information_log']['percentage_used']
             ?? null;
         if (is_numeric($nvmeUsed)) {
@@ -661,6 +856,63 @@ class SmartPage
         return '—';
     }
 
+    private function overviewTempBadge(array $disk, string $diskKey, mixed $sensors): string
+    {
+        $text = $this->overviewTemperature($disk);
+        if ($text === '—') {
+            return '<span class="text-muted">—</span>';
+        }
+
+        $diskIdx = $this->diskIndex($diskKey);
+        $sensor = $sensors->get("{$diskIdx}_temp");
+        $class = 'default';
+
+        if ($sensor) {
+            // updateNumericSensor() applies the multiplier before saving, so sensor_current is already in final units (°C)
+            $value = (float) $sensor->sensor_current;
+            $warnLimit = $sensor->sensor_limit_warn !== null ? (float) $sensor->sensor_limit_warn : null;
+            $hardLimit = $sensor->sensor_limit !== null ? (float) $sensor->sensor_limit : null;
+
+            if ($hardLimit !== null && $value >= $hardLimit) {
+                $class = 'danger';
+            } elseif ($warnLimit !== null && $value >= $warnLimit) {
+                $class = 'warning';
+            }
+        }
+
+        return '<span class="label label-' . $class . '">' . htmlspecialchars($text) . '°C</span>';
+    }
+
+    private function overviewSelftestBadge(array $disk, string $diskKey, string $type, mixed $sensors): string
+    {
+        $text = $this->overviewSelftestAge($disk, $type);
+        if ($text === '—') {
+            return '<span class="text-muted">—</span>';
+        }
+
+        $diskIdx = $this->diskIndex($diskKey);
+        $sensorKey = $type === 'short' ? "{$diskIdx}_selftest_short" : "{$diskIdx}_selftest_long";
+        $sensor = $sensors->get($sensorKey);
+        $class = 'default';
+
+        if ($sensor) {
+            // updateNumericSensor() applies the multiplier before saving, so sensor_current is in minutes
+            $value = (float) $sensor->sensor_current;
+            $warnLimit = $sensor->sensor_limit_warn !== null ? (float) $sensor->sensor_limit_warn : null;
+            $hardLimit = $sensor->sensor_limit !== null
+                ? (float) $sensor->sensor_limit
+                : ($sensor->sensor_max !== null ? (float) $sensor->sensor_max : null);
+
+            if ($hardLimit !== null && $value >= $hardLimit) {
+                $class = 'danger';
+            } elseif ($warnLimit !== null && $value >= $warnLimit) {
+                $class = 'warning';
+            }
+        }
+
+        return '<span class="label label-' . $class . '">' . htmlspecialchars($text) . '</span>';
+    }
+
     private function renderDrive(string $key, array $disk): void
     {
         $this->disk = $disk;
@@ -669,35 +921,204 @@ class SmartPage
             : null;
 
         echo '<style>
-            .smart-panels{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}
+            .smart-panels{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;margin-bottom:15px}
             .smart-panels .panel{flex:0 0 auto;margin-bottom:0}
             .smart-panels table{white-space:nowrap}
         </style>';
 
-        if ($this->diskViewMode === 'graphs') {
-            $this->renderDriveGraphs($key, $this->disk);
+        if ($this->diskIsNvme()) {
+            $this->renderNvmeBasic($key);
 
             return;
         }
 
-        if ($this->diskViewMode === 'basic') {
-            if (isset($this->disk['identity'])) {
-                $this->renderIdentity();
-            }
-            if (isset($this->disk['attributes'])) {
-                $this->renderAttributes();
-            }
-            if (isset($this->disk['stats'])) {
-                $this->renderExtendedErrorLog();
-            }
-            $this->renderDriveGraphs($key, $this->disk);
+        match ($this->diskViewMode) {
+            'graphs'   => $this->renderDrivePageGraphs($key),
+            'basic'    => $this->renderDrivePageBasic($key),
+            default    => $this->renderDrivePageDetailed($key),
+        };
+    }
 
-            return;
+    private function renderNvmeBasic(string $key): void
+    {
+        $this->panelsRowStart();
+        if (isset($this->disk['identity'])) {
+            $this->renderNvmeIdentity();
         }
 
-        // Row 1: Identity + Self-test + any other small sections
-        $skipInRow1 = ['source', 'temperature', 'identity', 'attributes', 'power', 'selftest', 'stats'];
+        if (isset($this->disk['selftest']['nvme_self_test_log']) && is_array($this->disk['selftest']['nvme_self_test_log'])) {
+            $this->renderNvmeSelftest($this->disk['selftest']['nvme_self_test_log']);
+        }
+
+        if (isset($this->disk['stats']) && is_array($this->disk['stats'])) {
+            $this->renderNvmeStats();
+        }
+        $this->panelsRowEnd();
+
+        $this->renderNvmeGraphs($key);
+    }
+
+    private function renderNvmeGraphs(string $key): void
+    {
+        $diskIdx = $this->diskIndex($key);
+        $sensors = Sensor::where('device_id', $this->device['device_id'])
+            ->where('sensor_oid', 'like', "app:smart:{$diskIdx}_%")
+            ->get()
+            ->keyBy('sensor_index');
+
+        $nvmeLog = $this->disk['health']['nvme_smart_health_information_log'] ?? [];
+        $wearHeader = [];
+        if (is_numeric($nvmeLog['available_spare_threshold'] ?? null)) {
+            $wearHeader[] = 'Limit: ' . (int) $nvmeLog['available_spare_threshold'] . '%';
+        }
+        if (is_numeric($nvmeLog['available_spare'] ?? null)) {
+            $wearHeader[] = 'Spare: ' . (int) $nvmeLog['available_spare'] . '%';
+        }
+        if (is_numeric($nvmeLog['percentage_used'] ?? null)) {
+            $wearHeader[] = 'Used: ' . (int) $nvmeLog['percentage_used'] . '%';
+        }
+
+        $this->renderAppRrdGraph(
+            'smart_v2_nvme_wear',
+            'Wear',
+            $diskIdx,
+            $wearHeader !== [] ? implode(' | ', $wearHeader) : null,
+            [
+                'avail_spare_threshold' => is_numeric($nvmeLog['available_spare_threshold'] ?? null)
+                    ? (string) (int) $nvmeLog['available_spare_threshold']
+                    : '',
+            ]
+        );
+
+        $tempSensor = $sensors->get("{$diskIdx}_temp");
+        if ($tempSensor) {
+            $this->renderSensorGraph($tempSensor, 'Sensor Temperature');
+        }
+
+        $this->renderAppRrdGraph('smart_v2_nvme', 'Media Errors', $diskIdx, null, ['metric' => 'media_errors']);
+        $this->renderAppRrdGraph('smart_v2_nvme', 'Data Units Read/Write', $diskIdx, null, ['metric' => 'data_units']);
+        $this->renderAppRrdGraph('smart_v2_nvme', 'Host Reads/Writes', $diskIdx, null, ['metric' => 'host_io']);
+        $this->renderAppRrdGraph('smart_v2_nvme', 'Controller Busy Time', $diskIdx, null, ['metric' => 'controller_busy']);
+
+        $wearSensor = $sensors->get("{$diskIdx}_wear");
+        if ($wearSensor) {
+            $this->renderSensorGraph($wearSensor, 'Remaining');
+        }
+    }
+
+    private function renderNvmeIdentity(): void
+    {
+        $data = $this->disk['identity'];
+
+        $title = htmlspecialchars(
+            (string) ($data['dev_name'] ?? $data['device_path'] ?? 'NVMe Identity')
+        );
+
+        $passed = $this->disk['health']['smart_passed'] ?? null;
+        $badge = match ($passed) {
+            true  => '<span class="label label-success">Passed</span>',
+            false => '<span class="label label-danger">Failed</span>',
+            default => '',
+        };
+
+        $flat = [];
+        $seen = [];
+
+        $add = function (string $key, mixed $value) use (&$flat, &$seen): void {
+            if (isset($seen[$key]) || $value === '' || $value === null) {
+                return;
+            }
+
+            $seen[$key] = true;
+            if ($key === 'capacity_bytes' && is_int($value)) {
+                $flat[$key] = LibreNMS\Util\Number::formatBi($value);
+            } elseif (in_array($key, ['logical_block_size', 'physical_block_size'], true) && is_int($value)) {
+                $flat[$key] = LibreNMS\Util\Number::formatSi($value, 0, 0, 'B');
+            } else {
+                $flat[$key] = $value;
+            }
+        };
+
+        foreach (['model_name', 'device_model', 'model_number'] as $alias) {
+            if (isset($data[$alias]) && $data[$alias] !== '') {
+                $add('model_name', $data[$alias]);
+                foreach (['model_name', 'device_model', 'model_number'] as $nameKey) {
+                    $seen[$nameKey] = true;
+                }
+                break;
+            }
+        }
+
+        $add('serial_number', $data['serial_number'] ?? null);
+        $add('dev_name', $data['dev_name'] ?? null);
+        $add('device_path', $data['device_path'] ?? null);
+        $add('capacity_bytes', $data['capacity_bytes'] ?? null);
+        $add('firmware_version', $data['firmware_version'] ?? null);
+        $add('protocol', $data['protocol'] ?? null);
+        $add('logical_block_size', $data['logical_block_size'] ?? null);
+        $add('physical_block_size', $data['physical_block_size'] ?? null);
+        $add('form_factor', $data['form_factor'] ?? null);
+
+        $skip = [
+            'ata_version',
+            'device_model',
+            'interface_speed',
+            'model_family',
+            'model_number',
+            'rotation_rate',
+            'sata_version',
+            'wwn',
+        ];
+        foreach ($data as $k => $v) {
+            if (in_array($k, $skip, true) || isset($seen[$k])) {
+                continue;
+            }
+            $add($k, $v);
+        }
+
+        $this->panelStart($title, $badge);
+        echo '<div class="table-responsive">';
+        $this->renderFlatTable($flat);
+        echo '</div>';
+        $this->panelEnd();
+    }
+
+    private function renderDrivePageGraphs(string $key): void
+    {
+        $this->renderDriveGraphs($key, $this->disk);
+    }
+
+    private function renderDrivePageBasic(string $key): void
+    {
+        $this->panelsRowStart();
+        if (isset($this->disk['identity'])) {
+            $this->renderIdentity();
+        }
+        if (isset($this->disk['selftest'])) {
+            $this->renderSelftest();
+        }
+        $this->panelsRowEnd();
+        if (isset($this->disk['attributes'])) {
+            $this->renderAttributes();
+        }
+        $this->renderDriveGraphs($key, $this->disk);
+    }
+
+    private function panelsRowStart(): void
+    {
         echo '<div class="smart-panels">';
+    }
+
+    private function panelsRowEnd(): void
+    {
+        echo '</div>';
+    }
+
+    private function renderDrivePageDetailed(string $key): void
+    {
+        // Row 1: Identity + Self-test + any other small sections (flex)
+        $skipInRow1 = ['source', 'temperature', 'identity', 'attributes', 'power', 'selftest', 'stats'];
+        $this->panelsRowStart();
         if (isset($this->disk['identity'])) {
             $this->renderIdentity();
         }
@@ -706,13 +1127,17 @@ class SmartPage
             $this->renderSelftest();
         }
 
+        if (isset($this->disk['stats'])) {
+            $this->renderStats();
+        }
+
         foreach ($this->disk as $section => $data) {
             if (! in_array($section, $skipInRow1, true)) {
                 $this->renderSection(ucfirst($section), $data);
             }
         }
 
-        echo '</div>';
+        $this->panelsRowEnd();
 
         // Row 2: Attributes — full width
         if (isset($this->disk['attributes'])) {
@@ -721,10 +1146,6 @@ class SmartPage
 
         // Row 3: Stats panels — flex
         if (isset($this->disk['stats'])) {
-            echo '<div class="smart-panels">';
-            $this->renderStats();
-            echo '</div>';
-
             // Row 4: Extended Error Log — full width
             $this->renderExtendedErrorLog();
         }
@@ -745,7 +1166,12 @@ class SmartPage
 
     private function diskIsNvme(): bool
     {
-        $protocol = strtolower(trim((string) ($this->disk['identity']['protocol'] ?? $this->disk['identity']['device_type'] ?? '')));
+        return $this->isNvmeDisk($this->disk);
+    }
+
+    private function isNvmeDisk(array $disk): bool
+    {
+        $protocol = strtolower(trim((string) ($disk['identity']['protocol'] ?? $disk['identity']['device_type'] ?? '')));
 
         return $protocol === 'nvme';
     }
@@ -758,7 +1184,7 @@ class SmartPage
         return in_array($protocol, ['ata', 'sata'], true) || $deviceType === 'sat';
     }
 
-    private function renderSensorGraph(mixed $sensor, string $title): void
+    private function renderSensorGraph(mixed $sensor, string $title, string $badge = ''): void
     {
         $graph_array = [
             'height' => '100',
@@ -769,11 +1195,14 @@ class SmartPage
             'legend' => 'no',
         ];
 
-        $headerValue = method_exists($sensor, 'formatValue')
-            ? htmlspecialchars((string) $sensor->formatValue())
-            : htmlspecialchars((string) $sensor->sensor_current);
+        if ($badge === '') {
+            $value = method_exists($sensor, 'formatValue')
+                ? htmlspecialchars((string) $sensor->formatValue())
+                : htmlspecialchars((string) $sensor->sensor_current);
+            $badge = '<span class="text-muted">' . $value . '</span>';
+        }
 
-        $this->panelStart(htmlspecialchars($title), '<span class="text-muted">' . $headerValue . '</span>');
+        $this->panelStart(htmlspecialchars($title), $badge);
         echo '<div class="row">';
 
         include 'includes/html/print-graphrow.inc.php';
@@ -810,10 +1239,34 @@ class SmartPage
         $this->panelEnd();
     }
 
+    private function emitAttrScaleScript(): void
+    {
+        if ($this->attrScaleScriptEmitted) {
+            return;
+        }
+        $this->attrScaleScriptEmitted = true;
+        echo <<<'JS'
+<script>
+function smartAttrScaleToggle(cb, wrapperId) {
+    var w = document.getElementById(wrapperId);
+    if (!w) return;
+    w.querySelectorAll('img.graph-image').forEach(function(img) {
+        if (cb.checked) {
+            if (img.src.indexOf('scale_min=') === -1) {
+                img.src += (img.src.indexOf('?') !== -1 ? '&' : '?') + 'scale_min=0';
+            }
+        } else {
+            img.src = img.src.replace(/[&?]scale_min=[^&]*/g, '');
+        }
+    });
+}
+</script>
+JS;
+    }
+
     private function renderDriveGraphs(string $diskKey, array $disk): void
     {
         $diskIdx = $this->diskIndex($diskKey);
-        $isNvme = $this->diskIsNvme();
         $isAta = $this->diskIsAta();
         $attributeSpecs = $this->ataAttributeGraphSpecs($diskIdx, $disk);
 
@@ -822,19 +1275,33 @@ class SmartPage
             ->get()
             ->keyBy('sensor_index');
 
-        // Temperature, health, wear — one panel each
-        foreach ([
-            "{$diskIdx}_temp"   => 'Temperature',
-            "{$diskIdx}_health" => 'Health',
-            "{$diskIdx}_wear"   => 'Wear Remaining',
-        ] as $index => $title) {
-            $sensor = $sensors->get($index);
-            if ($sensor) {
-                $this->renderSensorGraph($sensor, $title);
-            }
+        // ── Basic graphs ─────────────────────────────────────────────
+
+        // Temperature
+        $tempSensor = $sensors->get("{$diskIdx}_temp");
+        if ($tempSensor) {
+            $this->renderSensorGraph($tempSensor, 'Temperature');
         }
 
-        // Short + long self-test ages in one multiline graph
+        // Health — colored Passed/Failed badge
+        $healthSensor = $sensors->get("{$diskIdx}_health");
+        if ($healthSensor) {
+            $passed = $disk['health']['smart_passed'] ?? null;
+            $healthBadge = match ($passed) {
+                true    => '<span class="label label-success">Passed</span>',
+                false   => '<span class="label label-danger">Failed</span>',
+                default => '',
+            };
+            $this->renderSensorGraph($healthSensor, 'Health', $healthBadge);
+        }
+
+        // Wear
+        $wearSensor = $sensors->get("{$diskIdx}_wear");
+        if ($wearSensor) {
+            $this->renderSensorGraph($wearSensor, 'Wear Remaining');
+        }
+
+        // Self-test age
         if ($sensors->has("{$diskIdx}_selftest_short") || $sensors->has("{$diskIdx}_selftest_long")) {
             $this->renderAppRrdGraph('smart_v2_selftest', 'Self-test Age', $diskIdx, $this->selftestHeaderValue($sensors, $diskIdx));
         }
@@ -847,27 +1314,38 @@ class SmartPage
             if ($this->hasOtherDatasetInRrd($diskIdx)) {
                 $this->renderAppRrdGraph('smart_v2_other', 'Other', $diskIdx);
             }
-            $this->renderAppRrdGraph('smart_v2_power', 'Power-on Hours / Cycles', $diskIdx, $this->powerHeaderValue($disk));
+            $this->renderAppRrdGraph('smart_v2_power', 'Power-on Hours', $diskIdx, $this->powerHeaderValue($disk));
         }
 
-        foreach ($attributeSpecs as $attr) {
-            $this->renderAppRrdGraph(
-                'smart_v2_attributes',
-                $attr['title'],
-                $diskIdx,
-                $attr['header'],
-                [
-                    'attr_id' => (string) $attr['id'],
-                    'attr_thresh' => $attr['thresh'] !== null ? (string) $attr['thresh'] : '',
-                    'has_raw' => $attr['has_raw'] ? '1' : '0',
-                    'has_norm' => $attr['has_norm'] ? '1' : '0',
-                ]
-            );
-        }
+        // ── Attribute graphs ─────────────────────────────────────────
 
-        // NVMe-only RRD graphs
-        if ($isNvme) {
-            $this->renderAppRrdGraph('smart_v2_nvme', 'NVMe Health Log', $diskIdx, $this->nvmeHeaderValue($disk));
+        if ($attributeSpecs !== []) {
+            $this->emitAttrScaleScript();
+            $wrapperId = 'smart-attr-graphs-' . htmlspecialchars($diskIdx);
+            $toggleId  = 'smart-attr-scale-' . htmlspecialchars($diskIdx);
+            echo '<h4 style="margin:20px 0 8px;border-bottom:1px solid #ddd;padding-bottom:6px">'
+                . 'Attributes'
+                . '<label style="float:right;font-size:13px;font-weight:normal;margin-bottom:0;cursor:pointer">'
+                . '<input type="checkbox" id="' . $toggleId . '" checked'
+                . ' onchange="smartAttrScaleToggle(this,\'' . $wrapperId . '\')">'
+                . ' Scale from zero</label></h4>';
+            echo '<div id="' . $wrapperId . '">';
+            foreach ($attributeSpecs as $attr) {
+                $this->renderAppRrdGraph(
+                    'smart_v2_attributes',
+                    $attr['title'],
+                    $diskIdx,
+                    $attr['header'],
+                    [
+                        'attr_id'     => (string) $attr['id'],
+                        'attr_thresh' => $attr['thresh'] !== null ? (string) $attr['thresh'] : '',
+                        'has_raw'     => $attr['has_raw'] ? '1' : '0',
+                        'has_norm'    => $attr['has_norm'] ? '1' : '0',
+                        'page_title'  => ($disk['identity']['dev_name'] ?? $diskKey) . ' ' . ($disk['identity']['model_name'] ?? '') . ' ' . ($disk['identity']['serial_number'] ?? '') . ' - ' . $attr['title'],
+                    ]
+                );
+            }
+            echo '</div>';
         }
     }
 
@@ -916,7 +1394,7 @@ class SmartPage
             return false;
         }
 
-        $other = ['id10', 'id183', 'id184', 'id196', 'id197', 'id199'];
+        $other = ['id10', 'id183', 'id184', 'id196', 'id199'];
 
         return array_intersect(array_keys($point->data), $other) !== [];
     }
@@ -952,7 +1430,7 @@ class SmartPage
                 continue;
             }
 
-            $name = trim((string) ($attr['name'] ?? 'Attribute'));
+            $name = str_replace('_', ' ', trim((string) ($attr['name'] ?? 'Attribute')));
             $title = 'ID# ' . $id . ', ' . $name;
             $rawValue = $attr['raw']['string'] ?? $attr['raw']['value'] ?? null;
             $normValue = $attr['value'] ?? null;
@@ -1005,7 +1483,7 @@ class SmartPage
             return $cookie;
         }
 
-        return 'detailed';
+        return 'basic';
     }
 
     private function setDiskViewModeCookie(string $mode): void
@@ -1055,23 +1533,15 @@ class SmartPage
 
     private function powerHeaderValue(array $disk): string
     {
-        $parts = [];
         $hours = $disk['power']['power_on_time']['hours'] ?? null;
-        if (is_numeric($hours)) {
-            $parts[] = 'Hours: ' . (int) $hours;
-        }
 
-        $cycles = $disk['power']['power_cycle_count'] ?? null;
-        if (is_numeric($cycles)) {
-            $parts[] = 'Cycles: ' . (int) $cycles;
-        }
-
-        return $parts !== [] ? implode(' | ', $parts) : '-';
+        return is_numeric($hours) ? 'Hours: ' . (int) $hours : '-';
     }
 
     private function nvmeHeaderValue(array $disk): string
     {
-        $used = $disk['health']['nvme_smart_health_information_log']['percentage_used']
+        $used = $disk['nvme_smart_health_information_log']['percentage_used']
+            ?? $disk['health']['nvme_smart_health_information_log']['percentage_used']
             ?? $disk['stats']['nvme_smart_health_information_log']['percentage_used']
             ?? null;
         if (! is_numeric($used)) {
@@ -1090,45 +1560,165 @@ class SmartPage
             return;
         }
 
-        $mapped = array_map(fn ($r) => [
-            'id'          => $r['id'],
-            'name'        => str_replace('_', ' ', (string) $r['name']),
-            'flags'       => $r['flags']['string'] ?? '',
-            'value'       => $r['value'],
-            'worst'       => $r['worst'],
-            'thresh'      => $r['thresh'],
-            'raw'         => $r['raw']['string'] ?? '',
-            'when_failed' => $r['when_failed'],
-        ], $rows);
+        $this->renderPanel('Attributes', function () use ($rows) {
+            echo '<table class="table table-condensed table-striped table-hover">';
+            echo '<thead><tr>'
+                . '<th>' . $this->keyLabel('id') . '</th>'
+                . '<th>Name</th>'
+                . '<th>Flags</th>'
+                . '<th>Value</th>'
+                . '<th>Worst</th>'
+                . '<th>Thresh</th>'
+                . '<th>Raw</th>'
+                . '<th>' . $this->keyLabel('when_failed') . '</th>'
+                . '</tr></thead><tbody>';
 
-        $this->renderPanel('Attributes', fn () => $this->renderArrayTable($mapped));
+            foreach ($rows as $r) {
+                $whenFailed = (string) ($r['when_failed'] ?? '');
+                $rowClass = match ($whenFailed) {
+                    'now'  => ' class="danger"',
+                    'past' => ' class="warning"',
+                    default => '',
+                };
+
+                $thresh = $r['thresh'] ?? null;
+                $value = $r['value'] ?? null;
+                $worst = $r['worst'] ?? null;
+
+                // Flags tooltip
+                $flagsStr = htmlspecialchars((string) ($r['flags']['string'] ?? ''));
+                $flagMap = [
+                    'prefailure'     => 'Pre-failure',
+                    'updated_online' => 'Online updated',
+                    'performance'    => 'Performance',
+                    'error_rate'     => 'Error rate',
+                    'event_count'    => 'Event count',
+                    'auto_keep'      => 'Auto-keep',
+                ];
+                $flagLines = [];
+                foreach ($flagMap as $key => $label) {
+                    if (isset($r['flags'][$key])) {
+                        $flagLines[] = $label . ': ' . ($r['flags'][$key] ? 'yes' : 'no');
+                    }
+                }
+                $flagsTip = htmlspecialchars(implode("\n", $flagLines), ENT_QUOTES);
+                $flagsCell = $flagLines !== []
+                    ? '<span data-toggle="tooltip" data-placement="top" title="' . $flagsTip . '" style="cursor:default;border-bottom:1px dotted">' . $flagsStr . '</span>'
+                    : $flagsStr;
+
+                // Value tooltip
+                $valueStr = htmlspecialchars((string) ($value ?? ''));
+                $valueTip = 'Normalized value (1–253, higher is better)';
+                if (is_numeric($thresh) && is_numeric($value)) {
+                    $valueTip .= (float) $value < (float) $thresh ? "\nFAIL: below threshold " . $thresh : "\nOK: above threshold " . $thresh;
+                }
+                $valueCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($valueTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . $valueStr . '</span>';
+
+                // Worst tooltip
+                $worstStr = htmlspecialchars((string) ($worst ?? ''));
+                $worstTip = 'Worst normalized value ever recorded';
+                if (is_numeric($thresh) && is_numeric($worst)) {
+                    $worstTip .= (float) $worst < (float) $thresh ? "\nFAIL: below threshold " . $thresh : "\nOK: above threshold " . $thresh;
+                }
+                $worstCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($worstTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . $worstStr . '</span>';
+
+                // Thresh tooltip
+                $threshStr = htmlspecialchars((string) ($thresh ?? ''));
+                $threshTip = 'Failure threshold — attribute fails when Value drops below this';
+                $threshCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($threshTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . $threshStr . '</span>';
+
+                // Raw tooltip
+                $rawStr = htmlspecialchars((string) ($r['raw']['string'] ?? ''));
+                $rawTip = 'Raw hardware reading — vendor-specific meaning';
+                $rawCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($rawTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . $rawStr . '</span>';
+
+                echo '<tr' . $rowClass . '>'
+                    . '<td>' . htmlspecialchars((string) ($r['id'] ?? '')) . '</td>'
+                    . '<td>' . htmlspecialchars(str_replace('_', ' ', (string) ($r['name'] ?? ''))) . '</td>'
+                    . '<td>' . $flagsCell . '</td>'
+                    . '<td>' . $valueCell . '</td>'
+                    . '<td>' . $worstCell . '</td>'
+                    . '<td>' . $threshCell . '</td>'
+                    . '<td>' . $rawCell . '</td>'
+                    . '<td>' . htmlspecialchars($whenFailed) . '</td>'
+                    . '</tr>';
+            }
+
+            echo '</tbody></table>';
+        });
     }
 
     private function renderIdentity(): void
     {
         $data = $this->disk['identity'];
-        $skip = ['wwn', 'interface_speed', 'device_model', 'model_number'];
+
+        // Panel title = device name
+        $title = htmlspecialchars(
+            (string) ($data['dev_name'] ?? $data['device_path'] ?? 'Identity')
+        );
+
+        // Health badge
+        $passed = $this->disk['health']['smart_passed'] ?? null;
+        $badge = match ($passed) {
+            true  => '<span class="label label-success">Passed</span>',
+            false => '<span class="label label-danger">Failed</span>',
+            default => '',
+        };
+
+        // Build flat table in priority order
         $flat = [];
-        foreach ($data as $k => $v) {
-            if (in_array($k, $skip, true)) {
-                continue;
-            }
+        $seen = [];
 
-            if ($v === '' || $v === null) {
-                continue;
+        $add = function (string $key, mixed $value) use (&$flat, &$seen, $data): void {
+            if (isset($seen[$key]) || $value === '' || $value === null) {
+                return;
             }
-
-            if ($k === 'capacity_bytes' && is_int($v)) {
-                $flat[$k] = LibreNMS\Util\Number::formatBi($v);
-            } elseif (in_array($k, ['logical_block_size', 'physical_block_size'], true) && is_int($v)) {
-                $flat[$k] = LibreNMS\Util\Number::formatSi($v, 0, 0, 'B');
-            } elseif ($k === 'rotation_rate' && is_int($v)) {
-                $flat[$k] = $v . ' RPM';
+            $seen[$key] = true;
+            if ($key === 'capacity_bytes' && is_int($value)) {
+                $flat[$key] = LibreNMS\Util\Number::formatBi($value);
+            } elseif (in_array($key, ['logical_block_size', 'physical_block_size'], true) && is_int($value)) {
+                $flat[$key] = LibreNMS\Util\Number::formatSi($value, 0, 0, 'B');
+            } elseif ($key === 'rotation_rate' && is_int($value)) {
+                $flat[$key] = $value . ' RPM';
             } else {
-                $flat[$k] = $v;
+                $flat[$key] = $value;
+            }
+        };
+
+        // 1. Model Family
+        $add('model_family', $data['model_family'] ?? null);
+
+        // 2. Model — first available alias
+        foreach (['model_name', 'device_model', 'model_number'] as $alias) {
+            if (isset($data[$alias]) && $data[$alias] !== '') {
+                $add('model_name', $data[$alias]);
+                foreach (['model_name', 'device_model', 'model_number'] as $a) {
+                    $seen[$a] = true;
+                }
+                break;
             }
         }
 
+        // 3. Serial
+        $add('serial_number', $data['serial_number'] ?? null);
+
+        // 4. Path — dev_name or device_path (whichever was used as title still appears)
+        foreach (['dev_name', 'device_path'] as $k) {
+            if (isset($data[$k]) && $data[$k] !== '') {
+                $add($k, $data[$k]);
+                $seen['dev_name'] = true;
+                $seen['device_path'] = true;
+                break;
+            }
+        }
+
+        // 5. Size
+        $add('capacity_bytes', $data['capacity_bytes'] ?? null);
+
+        // 6. Firmware
+        $add('firmware_version', $data['firmware_version'] ?? null);
+
+        // 7. Interface speed (formatted)
         $ifSpeed = $data['interface_speed'] ?? null;
         if (is_array($ifSpeed)) {
             $curStr = $ifSpeed['current']['string'] ?? null;
@@ -1137,67 +1727,103 @@ class SmartPage
                 $speed = (string) $curStr;
                 if ($maxStr !== null && $maxStr !== $curStr) {
                     $speed .= " ({$maxStr})";
-                } elseif ($maxStr !== null) {
-                    $speed .= " ({$maxStr})";
                 }
-
                 $flat['interface_speed'] = $speed;
             }
+            $seen['interface_speed'] = true;
         }
 
-        $this->renderPanel('Identity', fn () => $this->renderFlatTable($flat));
+        // 8. Remaining fields — skip noisy/duplicate ones
+        $skip = ['wwn', 'interface_speed', 'device_model', 'model_number'];
+        foreach ($data as $k => $v) {
+            if (in_array($k, $skip, true) || isset($seen[$k])) {
+                continue;
+            }
+            $add($k, $v);
+        }
+
+        $this->panelStart($title, $badge);
+        echo '<div class="table-responsive">';
+        $this->renderFlatTable($flat);
+        echo '</div>';
+        $this->panelEnd();
     }
 
     private function renderSelftest(): void
     {
         $data = $this->disk['selftest'];
+        $dst = isset($data['ata_smart_data_self_test']) && is_array($data['ata_smart_data_self_test'])
+            ? $data['ata_smart_data_self_test']
+            : null;
         $extTable = $data['ata_smart_self_test_log']['extended']['table'] ?? [];
-        if (! empty($extTable)) {
-            $rows = array_map(function ($r) {
-                $h = $r['lifetime_hours'] ?? null;
-                $hoursCell = (string) ($h ?? '');
-                if ($this->powerOnHours !== null && is_numeric($h)) {
-                    $delta = $this->powerOnHours - (int) $h;
-                    if ($delta > 0) {
-                        $hoursCell = $this->formatHoursAgo($delta) . " ({$h})";
-                    } else {
-                        $hoursCell = "<0 hour ({$h})";
-                    }
-                }
 
-                $remaining = $r['status']['remaining_percent'] ?? null;
+        if (! empty($extTable) || $dst !== null) {
+            $passed = $dst['status']['passed'] ?? null;
+            $remaining = isset($dst['status']['remaining_percent']) && is_numeric($dst['status']['remaining_percent'])
+                ? (int) $dst['status']['remaining_percent']
+                : null;
 
-                return [
-                    'lifetime_hours'    => $hoursCell,
-                    'type'              => $r['type']['string'] ?? '',
-                    'status'            => $r['status']['string'] ?? '',
-                    'remaining_percent' => $remaining !== null ? $remaining . '%' : '',
+            if ($remaining !== null) {
+                $done = max(0, min(100, 100 - $remaining));
+                $badge = '<span class="label label-info">Running ' . $done . '%</span>';
+            } else {
+                $badge = match ($passed) {
+                    true  => '<span class="label label-success">Passed</span>',
+                    false => '<span class="label label-danger">Failed</span>',
+                    default => '',
+                };
+            }
+
+            $this->panelStart('Self-test', $badge);
+            echo '<div class="table-responsive">';
+
+            if ($dst !== null) {
+                $pollingLabels = [
+                    'short'      => 'Est. Short Test',
+                    'extended'   => 'Est. Extended Test',
+                    'conveyance' => 'Est. Conveyance Test',
                 ];
-            }, $extTable);
-            $this->renderPanel('Self-test Log', fn () => $this->renderArrayTable($rows));
-        }
+                $flat = [];
+                $statusStr = $dst['status']['string'] ?? null;
+                if ($statusStr !== null) {
+                    $flat['Status'] = $statusStr;
+                }
 
-        if (isset($data['ata_smart_data_self_test']) && is_array($data['ata_smart_data_self_test'])) {
-            $dst = $data['ata_smart_data_self_test'];
-            $flat = [];
-            if (isset($dst['status'])) {
-                $flat['status'] = $dst['status']['string'] ?? $this->scalarToString($dst['status']);
-                if (isset($dst['status']['passed'])) {
-                    $flat['passed'] = $dst['status']['passed'];
+                foreach ($dst['polling_minutes'] ?? [] as $k => $v) {
+                    $label = $pollingLabels[$k] ?? ('Est. ' . ucfirst((string) $k) . ' Test');
+                    $flat[$label] = $v . ' min';
+                }
+
+                if ($flat !== []) {
+                    $this->renderFlatTable($flat);
                 }
             }
 
-            foreach ($dst['polling_minutes'] ?? [] as $k => $v) {
-                $flat['polling_' . $k . '_min'] = $v;
+            if (! empty($extTable)) {
+                $rows = array_map(function ($r) {
+                    $h = $r['lifetime_hours'] ?? null;
+                    $hoursCell = (string) ($h ?? '');
+                    if ($this->powerOnHours !== null && is_numeric($h)) {
+                        $delta = $this->powerOnHours - (int) $h;
+                        $hoursCell = $delta > 0
+                            ? $this->formatHoursAgo($delta) . " ({$h})"
+                            : "<0 hour ({$h})";
+                    }
+
+                    $remaining = $r['status']['remaining_percent'] ?? null;
+
+                    return [
+                        'lifetime_hours'    => $hoursCell,
+                        'type'              => $r['type']['string'] ?? '',
+                        'status'            => $r['status']['string'] ?? '',
+                        'remaining_percent' => $remaining !== null ? $remaining . '%' : '',
+                    ];
+                }, $extTable);
+                $this->renderArrayTable($rows);
             }
 
-            if ($flat !== []) {
-                $this->renderPanel('Data Self-test', fn () => $this->renderFlatTable($flat));
-            }
-        }
-
-        if (isset($data['nvme_self_test_log']) && is_array($data['nvme_self_test_log'])) {
-            $this->renderSection('NVMe Self-test Log', $data['nvme_self_test_log']);
+            echo '</div>';
+            $this->panelEnd();
         }
     }
 
@@ -1206,7 +1832,9 @@ class SmartPage
         $data = $this->disk['stats'];
         $skipPages = ['Temperature Statistics', 'Vendor Specific Statistics', 'Solid State Device Statistics'];
         $skipRows = ['Lifetime Power-On Resets', 'Power-on Hours'];
-
+        if (isset($data['sata_phy_event_counters'])) {
+            $this->renderSection('SATA PHY Event Counters', $data['sata_phy_event_counters']);
+        }
         foreach ($data['ata_device_statistics']['pages'] ?? [] as $page) {
             $pageName = (string) ($page['name'] ?? 'Unknown');
             if (in_array($pageName, $skipPages, true)) {
@@ -1233,30 +1861,30 @@ class SmartPage
         }
 
         // Merge device_state + smart_status into one flat panel; skip temperature
-        if (isset($data['ata_sct_status'])) {
-            $merged = [];
-            foreach ($data['ata_sct_status'] as $k => $v) {
-                if ($k === 'temperature') {
-                    continue;
-                }
+        // if (isset($data['ata_sct_status'])) {
+        //     $merged = [];
+        //     foreach ($data['ata_sct_status'] as $k => $v) {
+        //         if ($k === 'temperature') {
+        //             continue;
+        //         }
 
-                if (in_array($k, ['device_state', 'smart_status'], true) && is_array($v)) {
-                    foreach ($v as $sk => $sv) {
-                        if ($k === 'device_state' && $sk === 'value') {
-                            continue; // redundant when string is present
-                        }
+        //         if (in_array($k, ['device_state', 'smart_status'], true) && is_array($v)) {
+        //             foreach ($v as $sk => $sv) {
+        //                 if ($k === 'device_state' && $sk === 'value') {
+        //                     continue; // redundant when string is present
+        //                 }
 
-                        $merged[$k . '_' . $sk] = $sv;
-                    }
-                } else {
-                    $merged[$k] = $v;
-                }
-            }
+        //                 $merged[$k . '_' . $sk] = $sv;
+        //             }
+        //         } else {
+        //             $merged[$k] = $v;
+        //         }
+        //     }
 
-            if ($merged !== []) {
-                $this->renderPanel('SCT Status', fn () => $this->renderFlatTable($merged));
-            }
-        }
+        //     if ($merged !== []) {
+        //         $this->renderPanel('SCT Status', fn () => $this->renderFlatTable($merged));
+        //     }
+        // }
 
         // Non-extended error log types
         if (isset($data['ata_smart_error_log'])) {
@@ -1278,41 +1906,95 @@ class SmartPage
                 }
             }
         }
+    }
 
-        if (isset($data['sata_phy_event_counters'])) {
-            $this->renderSection('SATA PHY Event Counters', $data['sata_phy_event_counters']);
+    private function renderNvmeSelftest(array $log): void
+    {
+        $operation = $log['current_self_test_operation'] ?? [];
+        $operationValue = isset($operation['value']) && is_numeric($operation['value'])
+            ? (int) $operation['value']
+            : null;
+        $operationString = trim((string) ($operation['string'] ?? ''));
+        $completion = isset($log['current_self_test_completion_percent']) && is_numeric($log['current_self_test_completion_percent'])
+            ? (int) $log['current_self_test_completion_percent']
+            : null;
+
+        $isRunning = $operationValue !== null && in_array($operationValue, [1, 2], true);
+        $statusLabel = match (true) {
+            $operationValue === 0 => 'Idle',
+            $isRunning => 'Running',
+            default => 'Unknown',
+        };
+        $statusClass = match (true) {
+            $operationValue === 0 => 'label-default',
+            $isRunning => 'label-info',
+            default => 'label-warning',
+        };
+
+        $badge = '<span class="label ' . $statusClass . '">' . htmlspecialchars($statusLabel) . '</span>';
+        if ($isRunning && $completion !== null) {
+            $badge .= ' <span class="text-muted">' . htmlspecialchars((string) $completion) . '%</span>';
         }
 
-        $this->renderNvmeStats();
+        $this->panelStart('NVMe Self-test Log', $badge);
+        if ($operationString !== '') {
+            echo '<p class="text-muted" style="margin:8px 15px 4px">' . htmlspecialchars($operationString) . '</p>';
+        }
+        echo '<div class="table-responsive">';
+        echo '<table class="table table-condensed table-striped table-hover">';
+        echo '<thead><tr><th>Num</th><th>Test_Description</th><th>Status</th><th>Power_on_Hours</th><th>Failing_LBA</th><th>NSID</th><th>Seg</th><th>SCT Code</th></tr></thead>';
+        echo '<tbody>';
+
+        $rows = $log['table'] ?? [];
+        if (! is_array($rows) || $rows === []) {
+            echo '<tr><td colspan="8" class="text-muted">No entries.</td></tr>';
+        } else {
+            foreach ($rows as $index => $row) {
+                $code = $row['self_test_code'] ?? [];
+                $result = $row['self_test_result'] ?? [];
+
+                $failingLba = $row['failing_lba']
+                    ?? ($row['lba']['value'] ?? null)
+                    ?? ($row['lba'] ?? null);
+                $nsid = $row['nsid'] ?? ($log['nsid'] ?? null);
+                $segment = $row['segment'] ?? ($row['seg'] ?? null);
+
+                $h = $row['power_on_hours'] ?? null;
+                $hoursCell = $h !== null ? (string) $h : '-';
+                if ($this->powerOnHours !== null && is_numeric($h)) {
+                    $delta = $this->powerOnHours - (int) $h;
+                    $hoursCell = $delta > 0
+                        ? $this->formatHoursAgo($delta) . " ({$h})"
+                        : "<0 hour ({$h})";
+                }
+
+                $cells = [
+                    (string) ($index + 1),
+                    (string) ($code['string'] ?? '-'),
+                    (string) ($result['string'] ?? '-'),
+                    $hoursCell,
+                    $failingLba !== null ? (string) $failingLba : '-',
+                    $nsid !== null ? (string) $nsid : '-',
+                    $segment !== null ? (string) $segment : '-',
+                    isset($code['value']) ? (string) $code['value'] : '-',
+                ];
+
+                echo '<tr>';
+                foreach ($cells as $cell) {
+                    echo '<td>' . htmlspecialchars($cell) . '</td>';
+                }
+                echo '</tr>';
+            }
+        }
+
+        echo '</tbody></table>';
+        echo '</div>';
+        $this->panelEnd();
     }
 
     private function renderNvmeStats(): void
     {
         $data = $this->disk['stats'];
-        $nvmeInfo = [];
-        foreach (['nvme_controller_id', 'nvme_ieee_oui_identifier', 'nvme_number_of_namespaces'] as $k) {
-            if (isset($data[$k])) {
-                $nvmeInfo[$k] = $data[$k];
-            }
-        }
-
-        foreach (['nvme_total_capacity', 'nvme_unallocated_capacity'] as $k) {
-            if (isset($data[$k]) && is_int($data[$k]) && $data[$k] > 0) {
-                $nvmeInfo[$k] = LibreNMS\Util\Number::formatBi($data[$k]);
-            }
-        }
-
-        if (isset($data['nvme_version']['string'])) {
-            $nvmeInfo['nvme_version'] = $data['nvme_version']['string'];
-        }
-
-        if (isset($data['nvme_pci_vendor']['id'])) {
-            $nvmeInfo['nvme_pci_vendor_id'] = $data['nvme_pci_vendor']['id'];
-        }
-
-        if ($nvmeInfo !== []) {
-            $this->renderPanel('NVMe Info', fn () => $this->renderFlatTable($nvmeInfo));
-        }
 
         if (isset($data['nvme_smart_health_information_log']) && is_array($data['nvme_smart_health_information_log'])) {
             $flat = [];
@@ -1330,32 +2012,35 @@ class SmartPage
             $meta = array_filter($eil, fn ($k) => $k !== 'table', ARRAY_FILTER_USE_KEY);
             $table = $eil['table'] ?? [];
 
-            if ($meta !== []) {
-                $this->renderPanel('NVMe Error Log', fn () => $this->renderFlatTable($meta));
-            }
-
-            if ($table !== []) {
-                $rows = array_map(fn ($r) => [
+            if ($meta !== [] || $table !== []) {
+                $rows = $table !== [] ? array_map(fn ($r) => [
                     'error_count' => $r['error_count'],
                     'command_id'  => $r['command_id'],
                     'status'      => $r['status_field']['string'] ?? '',
                     'nsid'        => $r['nsid'],
                     'lba'         => $r['lba']['value'] ?? '',
-                ], $table);
-                $this->renderPanel('NVMe Error Log / Entries', fn () => $this->renderArrayTable($rows));
+                ], $table) : [];
+                $this->renderPanel('NVMe Error Log / Entries', function () use ($meta, $rows) {
+                    if ($meta !== []) {
+                        $this->renderFlatTable($meta);
+                    }
+                    if ($rows !== []) {
+                        $this->renderArrayTable($rows);
+                    }
+                });
             }
         }
 
-        if (! empty($data['nvme_namespaces']) && is_array($data['nvme_namespaces'])) {
-            $rows = array_map(fn ($ns) => [
-                'id'          => $ns['id'],
-                'size'        => LibreNMS\Util\Number::formatBi($ns['size']['bytes'] ?? 0),
-                'capacity'    => LibreNMS\Util\Number::formatBi($ns['capacity']['bytes'] ?? 0),
-                'utilization' => LibreNMS\Util\Number::formatBi($ns['utilization']['bytes'] ?? 0),
-                'lba_size'    => $ns['formatted_lba_size'] ?? '',
-            ], $data['nvme_namespaces']);
-            $this->renderPanel('NVMe Namespaces', fn () => $this->renderArrayTable($rows));
-        }
+        // if (! empty($data['nvme_namespaces']) && is_array($data['nvme_namespaces'])) {
+        //     $rows = array_map(fn ($ns) => [
+        //         'id'          => $ns['id'],
+        //         'size'        => LibreNMS\Util\Number::formatBi($ns['size']['bytes'] ?? 0),
+        //         'capacity'    => LibreNMS\Util\Number::formatBi($ns['capacity']['bytes'] ?? 0),
+        //         'utilization' => LibreNMS\Util\Number::formatBi($ns['utilization']['bytes'] ?? 0),
+        //         'lba_size'    => $ns['formatted_lba_size'] ?? '',
+        //     ], $data['nvme_namespaces']);
+        //     $this->renderPanel('NVMe Namespaces', fn () => $this->renderArrayTable($rows));
+        // }
     }
 
     private function renderExtendedErrorLog(): void
@@ -1566,7 +2251,7 @@ class SmartPage
 
     private function renderFlatTable(array $data): void
     {
-        echo '<table class="table table-condensed table-striped table-hover">';
+        echo '<table class="table table-condensed table-striped table-hover" style="width:auto">';
         echo '<tbody>';
         foreach ($data as $key => $value) {
             $k = $this->keyLabel((string) $key);
