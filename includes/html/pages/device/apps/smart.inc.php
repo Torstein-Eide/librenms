@@ -577,14 +577,13 @@ class SmartPage
     {
         $appId = $this->app->app_id;
         $baseGraph = [
-            'id'     => $appId,
-            'from'   => App\Facades\LibrenmsConfig::get('time.day'),
-            'to'     => App\Facades\LibrenmsConfig::get('time.now'),
-            'legend' => 'no',
+            'id'   => $appId,
+            'from' => App\Facades\LibrenmsConfig::get('time.day'),
+            'to'   => App\Facades\LibrenmsConfig::get('time.now'),
         ];
 
         // ── All temperatures ──────────────────────────────────────────────────
-        $graph_array = $baseGraph + ['height' => '100', 'width' => '215', 'type' => 'application_smart_v2_all_temp'];
+        $graph_array = $baseGraph + ['height' => '100', 'width' => '215', 'type' => 'application_smart_v2_all_temp', 'page_title' => 'All Drives — Temperatures'];
         $this->panelStart('All Temperatures');
         echo '<div class="row">';
         include 'includes/html/print-graphrow.inc.php';
@@ -592,7 +591,7 @@ class SmartPage
         $this->panelEnd();
 
         // ── All wear ──────────────────────────────────────────────────────────
-        $graph_array = $baseGraph + ['height' => '100', 'width' => '215', 'type' => 'application_smart_v2_all_wear'];
+        $graph_array = $baseGraph + ['height' => '100', 'width' => '215', 'type' => 'application_smart_v2_all_wear', 'page_title' => 'All Drives — Wear Remaining'];
         $this->panelStart('Wear Remaining');
         echo '<div class="row">';
         include 'includes/html/print-graphrow.inc.php';
@@ -602,13 +601,14 @@ class SmartPage
         // ── Per-attribute-ID multiline graphs ─────────────────────────────────
         $attrIds = $this->collectOverviewAttrIds($disks);
         foreach ($attrIds as $id => $name) {
-            $graph_array = $baseGraph + [
-                'height'  => '100',
-                'width'   => '215',
-                'type'    => 'application_smart_v2_attr_multi',
-                'attr_id' => $id,
-            ];
             $title = 'ID# ' . $id . ', ' . $name;
+            $graph_array = $baseGraph + [
+                'height'     => '100',
+                'width'      => '215',
+                'type'       => 'application_smart_v2_attr_multi',
+                'attr_id'    => $id,
+                'page_title' => 'All Drives — ' . $title,
+            ];
             $this->panelStart(htmlspecialchars($title));
             echo '<div class="row">';
             include 'includes/html/print-graphrow.inc.php';
@@ -626,7 +626,7 @@ class SmartPage
                 if ($id <= 0 || isset($attrIds[$id])) {
                     continue;
                 }
-                $attrIds[$id] = trim((string) ($attr['name'] ?? 'Attribute ' . $id));
+                $attrIds[$id] = str_replace('_', ' ', trim((string) ($attr['name'] ?? 'Attribute ' . $id)));
             }
         }
         ksort($attrIds);
