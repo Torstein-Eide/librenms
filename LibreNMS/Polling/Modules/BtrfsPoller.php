@@ -1752,6 +1752,10 @@ class BtrfsPoller
             $this->working['acc']['metrics'][$fsMetricPrefix . $k] = $v;
         }
 
+        $deviceSize = (float) ($fields['device_size'] ?? 0);
+        $usedBytes  = (float) ($fields['used'] ?? 0);
+        $usedPercent = $deviceSize > 0 ? round($usedBytes / $deviceSize * 100, 2) : null;
+
         // Assemble and persist the complete per-filesystem poll data block.
         $this->newData['filesystems'][$fsUuid] = [
             'fs_bytes_used' => $this->working['FSdata']['FS'][$fsUuid]['filesystem']['bytes_used'] ?? null,
@@ -1769,6 +1773,7 @@ class BtrfsPoller
             'balance' => [
                 'status' => $fsBalanceStatus,
             ],
+            'used_percent' => $usedPercent,
             'rrd_key'      => $cachedFs['rrd_key'] ?? '',
             'display_name' => $cachedFs['display_name'] ?? '',
             'label'        => $cachedFs['label'] ?? '',
