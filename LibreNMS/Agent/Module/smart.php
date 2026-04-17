@@ -128,7 +128,7 @@ class smart
             $this->discoverDisk((string) $diskKey, is_array($disk) ? $disk : []);
         }
 
-        foreach (['smart_temperature', 'smart_health', 'smart_wear', 'smart_selftest_short', 'smart_selftest_long', 'smart_nvme_crit_warn'] as $type) {
+        foreach (['smart_temperature', 'smart_health', 'smart_wear', 'smart_selftest_short', 'smart_selftest_long', 'smart_nvme_crit_warn', 'smart_selftest_status'] as $type) {
             app('sensor-discovery')->sync(sensor_type: $type);
         }
 
@@ -139,7 +139,7 @@ class smart
     {
         $idx = $this->diskIndex($diskKey);
         $devName = $disk['identity']['dev_name'] ?? $idx;
-        $group = 'SMART' ;
+        $group = 'SMART';
         $nav = $this->diskNavigation($diskKey);
 
         // ── Temperature ──────────────────────────────────────────────────────
@@ -204,12 +204,12 @@ class smart
             $cwValue = (int) $nvmeCwLog['critical_warning'];
 
             $cwStates = [
-                StateTranslation::define('OK',                      0,  Severity::Ok),
-                StateTranslation::define('Spare below threshold',    1,  Severity::Warning),
-                StateTranslation::define('Temperature out of range', 2,  Severity::Warning),
-                StateTranslation::define('Reliability degraded',     4,  Severity::Error),
-                StateTranslation::define('Media read-only',          8,  Severity::Error),
-                StateTranslation::define('Volatile backup failed',   16, Severity::Warning),
+                StateTranslation::define('OK', 0, Severity::Ok),
+                StateTranslation::define('Spare below threshold', 1, Severity::Warning),
+                StateTranslation::define('Temperature out of range', 2, Severity::Warning),
+                StateTranslation::define('Reliability degraded', 4, Severity::Error),
+                StateTranslation::define('Media read-only', 8, Severity::Error),
+                StateTranslation::define('Volatile backup failed', 16, Severity::Warning),
             ];
 
             app('sensor-discovery')
@@ -295,6 +295,40 @@ class smart
                 'sensor_min'        => 0,
             ]));
         }
+
+        // ── Self-test execution status (ATA/SAT) ─────────────────────────────
+        // Present on ATA and SAT devices via ata_smart_data.self_test.status.value.
+        // Upper nibble (bits 7:4) encodes the result; 0xf means a test is running.
+        $statusRaw = $disk['ata_smart_data']['self_test']['status']['value'] ?? null;
+        if (is_numeric($statusRaw)) {
+            $statusNibble = ((int) $statusRaw) >> 4;
+            $statusIndex = "{$idx}_selftest_status";
+            app('sensor-discovery')
+                ->discover(new Sensor([
+                    'device_id'         => $this->device['device_id'],
+                    'poller_type'       => 'agent',
+                    'sensor_class'      => 'state',
+                    'sensor_type'       => 'smart_selftest_status',
+                    'sensor_index'      => $statusIndex,
+                    'sensor_oid'        => "app:smart:{$statusIndex}",
+                    'group'             => $group,
+                    'sensor_navigation' => $nav,
+                    'sensor_descr'      => "{$group} {$devName} Self-test Status",
+                    'sensor_current'    => $statusNibble,
+                ]))
+                ->withStateTranslations('smart_selftest_status', [
+                    StateTranslation::define('Completed without error', 0x0, Severity::Ok),
+                    StateTranslation::define('Aborted by host', 0x1, Severity::Ok),
+                    StateTranslation::define('Interrupted (host reset)', 0x2, Severity::Ok),
+                    StateTranslation::define('Fatal or unknown error', 0x3, Severity::Warning),
+                    StateTranslation::define('Completed: unknown failure', 0x4, Severity::Warning),
+                    StateTranslation::define('Completed: electrical failure', 0x5, Severity::Warning),
+                    StateTranslation::define('Completed: servo/seek failure', 0x6, Severity::Warning),
+                    StateTranslation::define('Completed: read failure', 0x7, Severity::Warning),
+                    StateTranslation::define('Completed: handling damage', 0x8, Severity::Warning),
+                    StateTranslation::define('Self-test in progress', 0xf, Severity::Ok),
+                ]);
+        }
     }
 
     private function cleanupStaleSensors(): void
@@ -303,7 +337,7 @@ class smart
         $expected = [];
         foreach (array_keys($disks) as $diskKey) {
             $idx = $this->diskIndex((string) $diskKey);
-            foreach (['temp', 'health', 'wear', 'selftest_short', 'selftest_long', 'nvme_crit_warn'] as $suffix) {
+            foreach (['temp', 'health', 'wear', 'selftest_short', 'selftest_long', 'nvme_crit_warn', 'selftest_status'] as $suffix) {
                 $expected[] = "app:smart:{$idx}_{$suffix}";
             }
         }
@@ -392,7 +426,7 @@ class smart
         $nvmeLog = $disk['stats']['nvme_smart_health_information_log'] ?? null;
 
         if (is_array($nvmeLog)) {
-            echo "Y";
+            echo 'Y';
             // [json_key => [ds_name, rrd_type, min, max]]
             $nvmeDsMap = [
                 'available_spare'      => ['avail_spare',  'GAUGE',  0, 100],
@@ -506,6 +540,13 @@ class smart
         if ($sensor = $sensors->get("{$idx}_selftest_long")) {
             $age = $this->hoursSinceTest($disk, 'extended');
             $this->updateNumericSensor($sensor, $age !== null ? (float) $age : null);
+        }
+
+        // Self-test execution status (ATA/SAT)
+        if ($sensor = $sensors->get("{$idx}_selftest_status")) {
+            $statusRaw = $disk['ata_smart_data']['self_test']['status']['value'] ?? null;
+            $value = is_numeric($statusRaw) ? ((int) $statusRaw) >> 4 : null;
+            $this->updateStateSensor($sensor, $value);
         }
     }
 
