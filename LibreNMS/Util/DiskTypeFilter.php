@@ -13,6 +13,9 @@ final class DiskTypeFilter
 {
     private const BSD_FAMILY = ['freebsd', 'openbsd', 'netbsd', 'dragonfly'];
 
+    /**
+     * @return array{view: 'physical'|'logical'|'all', subtype: string}
+     */
     public static function normalizeSelection(?string $view, ?string $subtype): array
     {
         if (! in_array((string) $view, ['physical', 'logical', 'all'], true)) {
@@ -30,6 +33,9 @@ final class DiskTypeFilter
         return ['view' => $view, 'subtype' => $subtype];
     }
 
+    /**
+     * @return list<string>
+     */
     public static function subtypesFor(string $view): array
     {
         return match ($view) {
@@ -39,6 +45,9 @@ final class DiskTypeFilter
         };
     }
 
+    /**
+     * @return array{view: 'physical'|'logical', subtype: string}
+     */
     public static function classify(string $diskName, ?string $osOrSysDescr = null): array
     {
         // Device mapper (dm-0, dm-1, etc.)
@@ -93,6 +102,9 @@ final class DiskTypeFilter
         return ['view' => 'physical', 'subtype' => 'other'];
     }
 
+    /**
+     * @param array{view: string, subtype: string} $diskType
+     */
     public static function matches(array $diskType, string $selectedView, string $selectedSubtype): bool
     {
         if ($selectedView !== 'all' && $diskType['view'] !== $selectedView) {
