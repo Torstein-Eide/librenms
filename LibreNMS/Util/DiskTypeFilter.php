@@ -39,7 +39,7 @@ final class DiskTypeFilter
         };
     }
 
-    public static function classify(string $diskName, ?string $os = null): array
+    public static function classify(string $diskName, ?string $osOrSysDescr = null): array
     {
         // Device mapper (dm-0, dm-1, etc.)
         if (preg_match('/^dm-\d+$/i', $diskName)) {
@@ -55,7 +55,8 @@ final class DiskTypeFilter
         if (preg_match('/^(ram|zram)\d+$/i', $diskName)) {
             return ['view' => 'physical', 'subtype' => 'memory'];
         }
-        if ($os !== null && in_array($os, self::BSD_FAMILY, true)) {
+
+        if (self::isBsdFamily($osOrSysDescr)) {
             if (preg_match('/^md\d+$/i', $diskName)) {
                 return ['view' => 'physical', 'subtype' => 'memory'];
             }
@@ -99,5 +100,26 @@ final class DiskTypeFilter
         }
 
         return $selectedView === 'all' || $selectedSubtype === 'all' || $diskType['subtype'] === $selectedSubtype;
+    }
+
+    private static function isBsdFamily(?string $osOrSysDescr): bool
+    {
+        if ($osOrSysDescr === null) {
+            return false;
+        }
+
+        $normalized = strtolower($osOrSysDescr);
+
+        if (in_array($normalized, self::BSD_FAMILY, true)) {
+            return true;
+        }
+
+        foreach (self::BSD_FAMILY as $bsd) {
+            if (str_contains($normalized, $bsd)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
