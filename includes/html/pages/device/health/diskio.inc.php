@@ -2,6 +2,8 @@
 
 use App\Models\DiskIo;
 
+/** @var array{device_id: int|string, os_group?: string|null, sysDescr?: string|null} $device */
+
 /*
  * File structure:
  * 1) Resolve selected diskio view/subtype and UI option lists.
@@ -46,8 +48,6 @@ $diskioLinkArray = [
     'metric' => 'diskio',
 ];
 
-echo "<pre>DEBUG: device = " . print_r($device, true) . "</pre>";
-
 // Pre-classify all drives to determine which subtypes have matching devices
 $drives = DiskIo::query()->where('device_id', $device['device_id'])->orderBy('diskio_descr')->get();
 $driveTypes = LibreNMS\Util\DiskTypeFilter::classify(
@@ -64,7 +64,7 @@ $activeSubtypes = [
 
 // Build active subtype map from the pre-classified drive type results.
 $drives->each(function ($drive) use (&$activeSubtypes, $driveTypes): void {
-    $driveType = $driveTypes[$drive['diskio_id']] ?? ['view' => 'physical', 'subtype' => 'other'];
+    $driveType = $driveTypes[$drive['diskio_id']];
     $view = $driveType['view'];
     $subtype = $driveType['subtype'];
 
@@ -162,11 +162,13 @@ echo '</div>';
 $row = 1;
 
 // Render graphs only for drives matching the selected view/subtype filters.
-$drives->filter(function ($drive) use ($driveTypes, $selectedDiskioView, $selectedDiskioSubtype): bool {
-    $driveType = $driveTypes[$drive['diskio_id']] ?? ['view' => 'physical', 'subtype' => 'other'];
+$filteredDrives = $drives->filter(function ($drive) use ($driveTypes, $selectedDiskioView, $selectedDiskioSubtype): bool {
+    $driveType = $driveTypes[$drive['diskio_id']];
 
     return LibreNMS\Util\DiskTypeFilter::matches($driveType, $selectedDiskioView, $selectedDiskioSubtype);
-})->each(function ($drive) use (&$row, $selectedDiskioView, $selectedDiskioSubtype, $device): void {
+});
+
+$filteredDrives->each(function ($drive) use (&$row, $selectedDiskioView, $selectedDiskioSubtype, $device): void {
     if (is_int($row / 2)) {
         $row_colour = App\Facades\LibrenmsConfig::get('list_colour.even');
     } else {

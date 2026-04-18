@@ -12,6 +12,7 @@ namespace LibreNMS\Util;
 final class DiskTypeFilter
 {
     private const BSD_FAMILY = ['freebsd', 'openbsd', 'netbsd', 'dragonfly'];
+    private const FALLBACK_TYPE = ['view' => 'physical', 'subtype' => 'other'];
 
     /**
      * File structure:
@@ -126,7 +127,7 @@ final class DiskTypeFilter
     {
         $classified = [];
         foreach ($diskNames as $key => $_diskName) {
-            $classified[$key] = ['view' => 'physical', 'subtype' => 'other'];
+            $classified[$key] = self::FALLBACK_TYPE;
         }
 
         return $classified;
@@ -186,7 +187,7 @@ final class DiskTypeFilter
             return ['view' => 'physical', 'subtype' => 'mmcblk'];
         }
 
-        return ['view' => 'physical', 'subtype' => 'other'];
+        return self::FALLBACK_TYPE;
     }
 
     /**
