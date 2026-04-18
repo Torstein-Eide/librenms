@@ -14,6 +14,39 @@ final class DiskTypeFilter
     private const BSD_FAMILY = ['freebsd', 'openbsd', 'netbsd', 'dragonfly'];
 
     /**
+     * File structure:
+     * 1) Public selection helpers (normalizeSelection(), subtypesFor(), matches())
+     * 2) Public classification entrypoint (classify())
+     * 3) OS group dispatcher and per-group handlers (unix(), unknown())
+     * 4) Per-disk unix classifier (classifyUnixDisk())
+     * 5) Cached subgroup checks for scalable os_group_sub logic (hasOsGroupSub(), detectBsdFamily())
+     */
+
+    /** @var array<string, string> */
+    private array $osGroupHandlers = [
+        'unix' => 'unix',
+    ];
+
+    /** @var array<string, string> */
+    private array $osGroupSubResolvers = [
+        'bsd_family' => 'detectBsdFamily',
+    ];
+
+    /** @var array<string, bool> */
+    private array $osGroupSubCache = [];
+
+    /** @var array{os_or_sys_descr?: string|null} */
+    private array $context = [];
+
+    /**
+     * @param array{os_or_sys_descr?: string|null} $context
+     */
+    private function __construct(array $context = [])
+    {
+        $this->context = $context;
+    }
+
+    /**
      * @return array{view: 'physical'|'logical'|'all', subtype: string}
      */
     public static function normalizeSelection(?string $view, ?string $subtype): array
@@ -46,9 +79,63 @@ final class DiskTypeFilter
     }
 
     /**
+     * @param array<int|string, string> $diskNames
+     * @param array{os_or_sys_descr?: string|null} $context
+     * @return array<int|string, array{view: 'physical'|'logical', subtype: string}>
+     */
+    public static function classify(array $diskNames, ?string $osGroup = null, array $context = []): array
+    {
+        $filter = new self($context);
+
+        return $filter->classifyByOsGroup($diskNames, $osGroup);
+    }
+
+    /**
+     * @param array<int|string, string> $diskNames
+     * @return array<int|string, array{view: 'physical'|'logical', subtype: string}>
+     */
+    private function classifyByOsGroup(array $diskNames, ?string $osGroup): array
+    {
+        $handlerName = $this->osGroupHandlers[strtolower((string) $osGroup)] ?? null;
+        if ($handlerName === null) {
+            return $this->unknown($diskNames);
+        }
+
+        return $this->{$handlerName}($diskNames);
+    }
+
+    /**
+     * @param array<int|string, string> $diskNames
+     * @return array<int|string, array{view: 'physical'|'logical', subtype: string}>
+     */
+    private function unix(array $diskNames): array
+    {
+        $classified = [];
+        foreach ($diskNames as $key => $diskName) {
+            $classified[$key] = $this->classifyUnixDisk($diskName);
+        }
+
+        return $classified;
+    }
+
+    /**
+     * @param array<int|string, string> $diskNames
+     * @return array<int|string, array{view: 'physical'|'logical', subtype: string}>
+     */
+    private function unknown(array $diskNames): array
+    {
+        $classified = [];
+        foreach ($diskNames as $key => $_diskName) {
+            $classified[$key] = ['view' => 'physical', 'subtype' => 'other'];
+        }
+
+        return $classified;
+    }
+
+    /**
      * @return array{view: 'physical'|'logical', subtype: string}
      */
-    public static function classify(string $diskName, ?string $osOrSysDescr = null): array
+    private function classifyUnixDisk(string $diskName): array
     {
         // Device mapper (dm-0, dm-1, etc.)
         if (preg_match('/^dm-\d+$/i', $diskName)) {
@@ -65,7 +152,7 @@ final class DiskTypeFilter
             return ['view' => 'physical', 'subtype' => 'memory'];
         }
 
-        if (self::isBsdFamily($osOrSysDescr)) {
+        if ($this->hasOsGroupSub('bsd_family')) {
             if (preg_match('/^md\d+$/i', $diskName)) {
                 return ['view' => 'physical', 'subtype' => 'memory'];
             }
@@ -114,8 +201,28 @@ final class DiskTypeFilter
         return $selectedView === 'all' || $selectedSubtype === 'all' || $diskType['subtype'] === $selectedSubtype;
     }
 
-    private static function isBsdFamily(?string $osOrSysDescr): bool
+    private function hasOsGroupSub(string $subCheck): bool
     {
+        if (array_key_exists($subCheck, $this->osGroupSubCache)) {
+            return $this->osGroupSubCache[$subCheck];
+        }
+
+        $resolver = $this->osGroupSubResolvers[$subCheck] ?? null;
+        if ($resolver === null) {
+            $this->osGroupSubCache[$subCheck] = false;
+
+            return false;
+        }
+
+        $value = $this->{$resolver}();
+        $this->osGroupSubCache[$subCheck] = $value;
+
+        return $value;
+    }
+
+    private function detectBsdFamily(): bool
+    {
+        $osOrSysDescr = $this->context['os_or_sys_descr'] ?? null;
         if ($osOrSysDescr === null) {
             return false;
         }

@@ -7,58 +7,72 @@ use PHPUnit\Framework\TestCase;
 
 class DiskTypeFilterTest extends TestCase
 {
+    /**
+     * @return array{view: 'physical'|'logical', subtype: string}
+     */
+    private function classifyUnix(string $diskName, ?string $osOrSysDescr = null): array
+    {
+        $classified = DiskTypeFilter::classify(
+            [$diskName],
+            'unix',
+            ['os_or_sys_descr' => $osOrSysDescr]
+        );
+
+        return $classified[0];
+    }
+
     public function testClassifyLinuxDisks(): void
     {
         // Physical drives
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'sd_family'],
-            DiskTypeFilter::classify('sda')
+            $this->classifyUnix('sda')
         );
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'nvme'],
-            DiskTypeFilter::classify('nvme0n1')
+            $this->classifyUnix('nvme0n1')
         );
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'mmcblk'],
-            DiskTypeFilter::classify('mmcblk0')
+            $this->classifyUnix('mmcblk0')
         );
 
         // Logical partitions
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'partitions'],
-            DiskTypeFilter::classify('sda1')
+            $this->classifyUnix('sda1')
         );
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'partitions'],
-            DiskTypeFilter::classify('nvme0n1p1')
+            $this->classifyUnix('nvme0n1p1')
         );
 
         // Logical devices
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'dm'],
-            DiskTypeFilter::classify('dm-0')
+            $this->classifyUnix('dm-0')
         );
 
         // Memory-backed devices
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'memory'],
-            DiskTypeFilter::classify('ram0')
+            $this->classifyUnix('ram0')
         );
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'memory'],
-            DiskTypeFilter::classify('zram0')
+            $this->classifyUnix('zram0')
         );
 
         // Software RAID
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('md0')
+            $this->classifyUnix('md0')
         );
 
         // Image/Mem devices
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'loop'],
-            DiskTypeFilter::classify('loop0')
+            $this->classifyUnix('loop0')
         );
     }
 
@@ -67,29 +81,29 @@ class DiskTypeFilterTest extends TestCase
         // Physical drives
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'sd_family'],
-            DiskTypeFilter::classify('da0')
+            $this->classifyUnix('da0')
         );
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'other'],
-            DiskTypeFilter::classify('wd0')
+            $this->classifyUnix('wd0')
         );
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'sd_family'],
-            DiskTypeFilter::classify('ad0')
+            $this->classifyUnix('ad0')
         );
 
         // Partitions (detected as logical)
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'partitions'],
-            DiskTypeFilter::classify('da0p1')
+            $this->classifyUnix('da0p1')
         );
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'partitions'],
-            DiskTypeFilter::classify('da0s1a')
+            $this->classifyUnix('da0s1a')
         );
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'partitions'],
-            DiskTypeFilter::classify('ad0s1c')
+            $this->classifyUnix('ad0s1c')
         );
     }
 
@@ -98,45 +112,45 @@ class DiskTypeFilterTest extends TestCase
         // FreeBSD software RAID (ccd)
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('ccd0', 'freebsd')
+            $this->classifyUnix('ccd0', 'freebsd')
         );
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('ccd1', 'freebsd')
+            $this->classifyUnix('ccd1', 'freebsd')
         );
 
         // BSD VND (vnode disk)
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('vnd0', 'freebsd')
+            $this->classifyUnix('vnd0', 'freebsd')
         );
 
         // OpenBSD/NetBSD software RAID
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('ccd0', 'openbsd')
+            $this->classifyUnix('ccd0', 'openbsd')
         );
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('ccd0', 'netbsd')
+            $this->classifyUnix('ccd0', 'netbsd')
         );
 
         // BSD memory disks (md*)
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'memory'],
-            DiskTypeFilter::classify('md0', 'freebsd')
+            $this->classifyUnix('md0', 'freebsd')
         );
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'memory'],
-            DiskTypeFilter::classify('md0', 'openbsd')
+            $this->classifyUnix('md0', 'openbsd')
         );
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'memory'],
-            DiskTypeFilter::classify('md0', 'netbsd')
+            $this->classifyUnix('md0', 'netbsd')
         );
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'memory'],
-            DiskTypeFilter::classify('md0', 'pfSense pfSense.eideen.no 2.8.1-RELEASE FreeBSD 15.0-CURRENT amd64')
+            $this->classifyUnix('md0', 'pfSense pfSense.eideen.no 2.8.1-RELEASE FreeBSD 15.0-CURRENT amd64')
         );
     }
 
@@ -145,21 +159,21 @@ class DiskTypeFilterTest extends TestCase
         // Linux md devices should be software RAID
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('md0', 'linux')
+            $this->classifyUnix('md0', 'linux')
         );
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('md1', 'linux')
+            $this->classifyUnix('md1', 'linux')
         );
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('md127', 'linux')
+            $this->classifyUnix('md127', 'linux')
         );
 
-        // Without OS specified, md should still be software RAID
+        // Unix group without OS descriptor should still classify md as software RAID
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'sw_raid'],
-            DiskTypeFilter::classify('md0')
+            $this->classifyUnix('md0')
         );
     }
 
@@ -167,7 +181,17 @@ class DiskTypeFilterTest extends TestCase
     {
         $this->assertEquals(
             ['view' => 'physical', 'subtype' => 'other'],
-            DiskTypeFilter::classify('unknown0')
+            $this->classifyUnix('unknown0')
+        );
+
+        $this->assertEquals(
+            ['view' => 'physical', 'subtype' => 'other'],
+            DiskTypeFilter::classify(['sda'])[0]
+        );
+
+        $this->assertEquals(
+            ['view' => 'physical', 'subtype' => 'other'],
+            DiskTypeFilter::classify(['sda'], 'windows')[0]
         );
     }
 
