@@ -2,6 +2,14 @@
 
 use App\Models\DiskIo;
 
+/*
+ * File structure:
+ * 1) Resolve selected diskio view/subtype and UI option lists.
+ * 2) Fetch drives, classify once per disk via DiskTypeFilter, and collect active subtypes.
+ * 3) Render option bars and descriptive text for current selection.
+ * 4) Render filtered drive graphs using pre-classified drive types.
+ */
+
 $diskioViews = [
     'physical' => 'Physical Drives',
     'logical' => 'Logical Drives',
@@ -38,38 +46,51 @@ $diskioLinkArray = [
     'metric' => 'diskio',
 ];
 
+echo "<pre>DEBUG: device = " . print_r($device, true) . "</pre>";
+
 // Pre-classify all drives to determine which subtypes have matching devices
 $drives = DiskIo::query()->where('device_id', $device['device_id'])->orderBy('diskio_descr')->get();
+$driveTypes = LibreNMS\Util\DiskTypeFilter::classify(
+    $drives->pluck('diskio_descr', 'diskio_id')->all(),
+    $device['os_group'] ?? null,
+    ['os_or_sys_descr' => $device['sysDescr'] ?? null]
+);
+
+// Track which subtype keys exist in the current dataset to hide empty filter tabs.
 $activeSubtypes = [
     'physical' => ['all' => true],
     'logical' => ['all' => true],
 ];
 
-foreach ($drives as $drive) {
-    $driveType = LibreNMS\Util\DiskTypeFilter::classify($drive['diskio_descr'], $device['os'] ?? null);
+// Build active subtype map from the pre-classified drive type results.
+$drives->each(function ($drive) use (&$activeSubtypes, $driveTypes): void {
+    $driveType = $driveTypes[$drive['diskio_id']] ?? ['view' => 'physical', 'subtype' => 'other'];
     $view = $driveType['view'];
     $subtype = $driveType['subtype'];
 
     if (isset($activeSubtypes[$view])) {
         $activeSubtypes[$view][$subtype] = true;
     }
-}
+});
 
 // Filter subtypes to only show those with matching drives (keep 'all' always visible)
-foreach (['physical', 'logical'] as $view) {
-    $filteredSubtypes = [];
-    foreach ($diskioSubtypes[$view] as $subtype => $label) {
-        if ($subtype === 'all' || $subtype === 'other' || isset($activeSubtypes[$view][$subtype])) {
-            $filteredSubtypes[$subtype] = $label;
-        }
-    }
-    $diskioSubtypes[$view] = $filteredSubtypes;
-}
+$viewsToFilter = ['physical', 'logical'];
+array_walk($viewsToFilter, function (string $view) use (&$diskioSubtypes, $activeSubtypes): void {
+    $diskioSubtypes[$view] = array_filter(
+        $diskioSubtypes[$view],
+        function (string $label, string $subtype) use ($activeSubtypes, $view): bool {
+            return $subtype === 'all' || $subtype === 'other' || isset($activeSubtypes[$view][$subtype]);
+        },
+        ARRAY_FILTER_USE_BOTH
+    );
+});
 
 print_optionbar_start();
 echo "<span style='font-weight: bold;'>Drives</span> &#187; ";
 $sep = '';
-foreach ($diskioViews as $diskioView => $text) {
+
+// Render top-level drive view selector (physical/logical/all).
+array_walk($diskioViews, function (string $text, string $diskioView) use (&$sep, $selectedDiskioView, $diskioLinkArray): void {
     echo $sep;
     if ($selectedDiskioView == $diskioView) {
         echo '<span class="pagemenu-selected">';
@@ -81,12 +102,14 @@ foreach ($diskioViews as $diskioView => $text) {
     }
 
     $sep = ' | ';
-}
+});
 
 if (in_array($selectedDiskioView, ['physical', 'logical'], true) && count($diskioSubtypes[$selectedDiskioView]) > 1) {
     echo '<br><span style="padding-left: 22px;"><strong>Type</strong> &#187; ';
     $sep = '';
-    foreach ($diskioSubtypes[$selectedDiskioView] as $diskioSubtype => $text) {
+
+    // Render subtype selector for the selected view when multiple subtype tabs are available.
+    array_walk($diskioSubtypes[$selectedDiskioView], function (string $text, string $diskioSubtype) use (&$sep, $selectedDiskioSubtype, $selectedDiskioView, $diskioLinkArray): void {
         echo $sep;
         if ($selectedDiskioSubtype == $diskioSubtype) {
             echo '<span class="pagemenu-selected">';
@@ -98,7 +121,7 @@ if (in_array($selectedDiskioView, ['physical', 'logical'], true) && count($diski
         }
 
         $sep = ' | ';
-    }
+    });
     echo '</span>';
 }
 
@@ -138,17 +161,18 @@ echo '</div>';
 
 $row = 1;
 
-foreach ($drives as $drive) {
-    $driveType = LibreNMS\Util\DiskTypeFilter::classify($drive['diskio_descr'], $device['os'] ?? null);
-    if (! LibreNMS\Util\DiskTypeFilter::matches($driveType, $selectedDiskioView, $selectedDiskioSubtype)) {
-        continue;
-    }
+// Render graphs only for drives matching the selected view/subtype filters.
+$drives->filter(function ($drive) use ($driveTypes, $selectedDiskioView, $selectedDiskioSubtype): bool {
+    $driveType = $driveTypes[$drive['diskio_id']] ?? ['view' => 'physical', 'subtype' => 'other'];
 
+    return LibreNMS\Util\DiskTypeFilter::matches($driveType, $selectedDiskioView, $selectedDiskioSubtype);
+})->each(function ($drive) use (&$row, $selectedDiskioView, $selectedDiskioSubtype, $device): void {
     if (is_int($row / 2)) {
         $row_colour = App\Facades\LibrenmsConfig::get('list_colour.even');
     } else {
         $row_colour = App\Facades\LibrenmsConfig::get('list_colour.odd');
     }
+    unset($row_colour);
 
     $fs_url = 'device/device=' . $device['device_id'] . '/tab=health/metric=diskio/';
     if ($selectedDiskioView !== 'all') {
@@ -169,21 +193,14 @@ foreach ($drives as $drive) {
 
     $overlib_link = LibreNMS\Util\Url::overlibLink($fs_url, $drive['diskio_descr'], LibreNMS\Util\Url::graphTag($graph_array_zoom));
 
-    $types = [
-        'diskio_bits',
-        'diskio_ops',
-    ];
-
-    foreach ($types as $graph_type) {
+    // Each matching drive renders throughput and operations graph panels.
+    $graphTypes = ['diskio_bits', 'diskio_ops'];
+    array_walk($graphTypes, function (string $graph_type) use ($drive, $overlib_link): void {
         $graph_array = [];
         $graph_array['id'] = $drive['diskio_id'];
         $graph_array['type'] = $graph_type;
-        if ($graph_array['type'] == 'diskio_ops') {
-            $graph_type_title = 'Ops/sec';
-        }
-        if ($graph_array['type'] == 'diskio_bits') {
-            $graph_type_title = 'bps';
-        }
+        $graph_type_title = $graph_array['type'] == 'diskio_ops' ? 'Ops/sec' : 'bps';
+
         echo "<div class='panel panel-default'>
                 <div class='panel-heading'>
                 <h3 class='panel-title'>$overlib_link - $graph_type_title</h3>
@@ -191,7 +208,7 @@ foreach ($drives as $drive) {
         echo "<div class='panel-body'>";
         include 'includes/html/print-graphrow.inc.php';
         echo '</div></div>';
-    }
+    });
 
     $row++;
-}
+});
