@@ -36,15 +36,11 @@ final class DiskTypeFilter
     /** @var array<string, bool> */
     private array $osGroupSubCache = [];
 
-    /** @var array{os_or_sys_descr?: string|null} */
-    private array $context = [];
-
     /**
-     * @param array{os_or_sys_descr?: string|null} $context
+     * @param  array{os_or_sys_descr?: string|null}  $context
      */
-    private function __construct(array $context = [])
+    private function __construct(private array $context = [])
     {
-        $this->context = $context;
     }
 
     /**
@@ -80,8 +76,8 @@ final class DiskTypeFilter
     }
 
     /**
-     * @param array<int|string, string> $diskNames
-     * @param array{os_or_sys_descr?: string|null} $context
+     * @param  array<int|string, string>  $diskNames
+     * @param  array{os_or_sys_descr?: string|null}  $context
      * @return array<int|string, array{view: 'physical'|'logical', subtype: string}>
      */
     public static function classify(array $diskNames, ?string $osGroup = null, array $context = []): array
@@ -92,7 +88,7 @@ final class DiskTypeFilter
     }
 
     /**
-     * @param array<int|string, string> $diskNames
+     * @param  array<int|string, string>  $diskNames
      * @return array<int|string, array{view: 'physical'|'logical', subtype: string}>
      */
     private function classifyByOsGroup(array $diskNames, ?string $osGroup): array
@@ -106,7 +102,7 @@ final class DiskTypeFilter
     }
 
     /**
-     * @param array<int|string, string> $diskNames
+     * @param  array<int|string, string>  $diskNames
      * @return array<int|string, array{view: 'physical'|'logical', subtype: string}>
      */
     private function unix(array $diskNames): array
@@ -120,7 +116,7 @@ final class DiskTypeFilter
     }
 
     /**
-     * @param array<int|string, string> $diskNames
+     * @param  array<int|string, string>  $diskNames
      * @return array<int|string, array{view: 'physical'|'logical', subtype: string}>
      */
     private function unknown(array $diskNames): array
@@ -191,7 +187,7 @@ final class DiskTypeFilter
     }
 
     /**
-     * @param array{view: string, subtype: string} $diskType
+     * @param  array{view: string, subtype: string}  $diskType
      */
     public static function matches(array $diskType, string $selectedView, string $selectedSubtype): bool
     {
