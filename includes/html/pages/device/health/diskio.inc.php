@@ -78,9 +78,7 @@ $viewsToFilter = ['physical', 'logical'];
 array_walk($viewsToFilter, function (string $view) use (&$diskioSubtypes, $activeSubtypes): void {
     $diskioSubtypes[$view] = array_filter(
         $diskioSubtypes[$view],
-        function (string $label, string $subtype) use ($activeSubtypes, $view): bool {
-            return $subtype === 'all' || $subtype === 'other' || isset($activeSubtypes[$view][$subtype]);
-        },
+        fn(string $label, string $subtype): bool => $subtype === 'all' || $subtype === 'other' || isset($activeSubtypes[$view][$subtype]),
         ARRAY_FILTER_USE_BOTH
     );
 });
