@@ -147,7 +147,9 @@ repo_name: GitHub
 nav:
   - General:
     - Home: index.md
-    - Features: Support/Features.md
+      # Uses plugin include_dir_to_nav
+    - Features: General/Features
+    - User Interface: General/User-Interface
     - Changelog:
       - Current Changelog: General/Changelog.md
       - Historical: General/Changelogs
