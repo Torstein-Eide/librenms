@@ -172,7 +172,7 @@ $filteredDrives = $drives->filter(function ($drive) use ($driveTypes, $selectedD
 
 // Shared graph metadata keeps DS names, label text, and value formatting in one place.
 $diskioGraphMeta = [
-    'diskio_bits' => [
+    'diskio_bytes' => [
         'label' => 'Bytes/sec',
         'in_ds' => 'read',
         'out_ds' => 'written',

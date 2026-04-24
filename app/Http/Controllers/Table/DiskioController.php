@@ -64,7 +64,7 @@ class DiskioController extends TableController
     public function formatItem($diskio): array
     {
         $graph_array = [
-            'type' => 'diskio_bits',
+            'type' => 'diskio_bytes',
             'popup_title' => htmlentities(strip_tags($diskio->device?->displayName() . ': ' . $diskio->diskio_descr)),
             'id' => $diskio->diskio_id,
             'from' => '-1d',
@@ -73,14 +73,14 @@ class DiskioController extends TableController
         ];
 
         $hostname = Blade::render('<x-device-link :device="$device" />', ['device' => $diskio->device]);
-        $bits_graph = Url::graphPopup($graph_array);
+        $bytes_graph = Url::graphPopup($graph_array);
         $graph_array['type'] = 'diskio_ops';
         $ops_graph = Url::graphPopup($graph_array);
 
         return [
             'device_hostname' => $hostname,
             'diskio_descr' => $diskio->diskio_descr,
-            'bits_graph' => $bits_graph,
+            'bytes_graph' => $bytes_graph,
             'ops_graph' => $ops_graph,
         ];
     }

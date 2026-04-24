@@ -1,11 +1,9 @@
 <?php
 
-$units = 'bps';
-$total_units = 'B';
+$format = 'bytes';
+$multiplier = '1';
 $colours_in = 'greens';
-$multiplier = '8';
 $colours_out = 'blues';
-
 $nototal = 1;
 $ds_in = 'read';
 $ds_out = 'written';
@@ -17,4 +15,4 @@ foreach ($rrd_list as $index => $rrd) {
     $rrd_list[$index]['ds_out'] = $ds_out;
 }
 
-require 'includes/html/graphs/generic_multi_bits_separated.inc.php';
+require 'includes/html/graphs/generic_multi_seperated.inc.php';
