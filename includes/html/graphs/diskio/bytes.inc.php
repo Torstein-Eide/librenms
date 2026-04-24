@@ -15,13 +15,12 @@ if (is_numeric($vars['id'] ?? null)) {
 
     require 'includes/html/graphs/generic_duplex.inc.php';
 } else {
-    $units = 'bps';
-    $total_units = 'B';
+    $format = 'bytes';
+    $multiplier = '1';
     $colours_in = 'greens';
-    $multiplier = '8';
     $colours_out = 'blues';
     $nototal = 1;
-    $graph_params->title = strip_tags($title ?? '') . ' :: bps';
+    $graph_params->title = strip_tags($title ?? '') . ' :: Bytes/sec';
 
     foreach ($rrd_list as $index => $rrd) {
         $rrd_list[$index]['ds_in'] = $ds_in;

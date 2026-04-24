@@ -21,7 +21,7 @@
                 <tr>
                     <th data-column-id="device_hostname">{{ __('Device') }}</th>
                     <th data-column-id="diskio_descr">{{ __('Storage') }}</th>
-                    <th data-column-id="bits_graph" data-sortable="false" data-searchable="false">{{ __('Bits') }}</th>
+                    <th data-column-id="bytes_graph" data-sortable="false" data-searchable="false">{{ __('Bytes') }}</th>
                     <th data-column-id="ops_graph" data-sortable="false" data-searchable="false">{{ __('Ops') }}</th>
                 </tr>
                 </thead>
