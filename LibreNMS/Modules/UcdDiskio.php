@@ -32,6 +32,7 @@ use App\Models\DiskIo;
 use App\Observers\ModuleModelObserver;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use LibreNMS\Data\Store\Rrd as RrdStore;
 use LibreNMS\DB\SyncsModels;
 use LibreNMS\Interfaces\Data\DataStorageInterface;
 use LibreNMS\Interfaces\Module;
@@ -43,6 +44,20 @@ use SnmpQuery;
 class UcdDiskio implements Module
 {
     use SyncsModels;
+
+    private string $rrdName = 'ucd_diskio';
+
+    /** @var array<string, array{type: string, min: int, max: int}> */
+    private array $rrdDatasetConfig = [
+        'read'    => ['type' => 'DERIVE', 'min' => 0, 'max' => 125000000000],
+        'written' => ['type' => 'DERIVE', 'min' => 0, 'max' => 125000000000],
+        'reads'   => ['type' => 'DERIVE', 'min' => 0, 'max' => 125000000000],
+        'writes'  => ['type' => 'DERIVE', 'min' => 0, 'max' => 125000000000],
+        'la1'     => ['type' => 'GAUGE',  'min' => 0, 'max' => 100],
+        'la5'     => ['type' => 'GAUGE',  'min' => 0, 'max' => 100],
+        'la15'    => ['type' => 'GAUGE',  'min' => 0, 'max' => 100],
+        'busy_usec' => ['type' => 'DERIVE', 'min' => 0, 'max' => 1000000],
+    ];
 
     /**
      * @inheritDoc
@@ -74,6 +89,7 @@ class UcdDiskio implements Module
     public function discover(OS $os): void
     {
         $this->poll($os);
+        $this->syncMissingRrdDatasets($os);
     }
 
     /**
@@ -86,32 +102,35 @@ class UcdDiskio implements Module
 
         foreach ($oids as $diskData) {
             if (is_array($diskData)) { // invalid snmp response
+                $readCounter = $diskData['diskIONReadX'] ?? $diskData['diskIONRead'] ?? null;
+                $writtenCounter = $diskData['diskIONWrittenX'] ?? $diskData['diskIONWritten'] ?? null;
+
                 if ($this->valid_disk($os, $diskData['diskIODevice']) &&
-                    ($diskData['diskIONRead'] > '0' || $diskData['diskIONWritten'] > '0')) {
+                    ($this->isPositive($readCounter) || $this->isPositive($writtenCounter))) {
                     $ucddisk->push(new DiskIo([
                         'diskio_index' => $diskData['diskIOIndex'],
                         'diskio_descr' => $diskData['diskIODevice'],
                     ]));
 
                     $tags = [
-                        'rrd_name' => ['ucd_diskio', $diskData['diskIODevice']],
-                        'rrd_def' => RrdDefinition::make()
-                            ->addDataset('read', 'DERIVE', 0, 125000000000)
-                            ->addDataset('written', 'DERIVE', 0, 125000000000)
-                            ->addDataset('reads', 'DERIVE', 0, 125000000000)
-                            ->addDataset('writes', 'DERIVE', 0, 125000000000),
+                        'rrd_name' => [$this->rrdName, $diskData['diskIODevice']],
+                        'rrd_def' => $this->makeRrdDefinition(),
                         'descr' => $diskData['diskIODevice'],
                     ];
 
                     $fields = [
-                        'read' => $diskData['diskIONReadX'],
-                        'written' => $diskData['diskIONWrittenX'],
+                        'read' => $readCounter,
+                        'written' => $writtenCounter,
                         'reads' => $diskData['diskIOReads'],
                         'writes' => $diskData['diskIOWrites'],
+                        'la1' => $diskData['diskIOLA1'],
+                        'la5' => $diskData['diskIOLA5'],
+                        'la15' => $diskData['diskIOLA15'],
+                        'busy_usec' => $diskData['diskIOBusyTime'],
                     ];
 
                     if ($datastore) {
-                        $datastore->put($os->getDeviceArray(), 'ucd_diskio', $tags, $fields);
+                        $datastore->put($os->getDeviceArray(), $this->rrdName, $tags, $fields);
                     }
                 } else {
                     Log::info('Skip Disk: ' . $diskData['diskIODevice']);
@@ -119,7 +138,7 @@ class UcdDiskio implements Module
             }
         }
 
-        ModuleModelObserver::observe(\App\Models\DiskIo::class);
+        ModuleModelObserver::observe(DiskIo::class);
         $this->syncModels($os->getDevice(), 'diskIo', $ucddisk);
     }
 
@@ -162,5 +181,95 @@ class UcdDiskio implements Module
         }
 
         return true;
+    }
+
+    private function makeRrdDefinition(): RrdDefinition
+    {
+        $definition = RrdDefinition::make();
+        foreach ($this->rrdDatasetConfig as $name => $config) {
+            $definition->addDataset($name, $config['type'], $config['min'], $config['max']);
+        }
+
+        return $definition;
+    }
+
+    /** @return array<string, array{type: string, heartbeat: int, min: int, max: int}> */
+    private function tuneDatasetConfig(): array
+    {
+        $heartbeat = max((int) LibrenmsConfig::get('rrd.heartbeat', 600), 1);
+        $config = [];
+
+        foreach ($this->rrdDatasetConfig as $name => $dataset) {
+            $config[$name] = [
+                'type' => $dataset['type'],
+                'heartbeat' => $heartbeat,
+                'min' => $dataset['min'],
+                'max' => $dataset['max'],
+            ];
+        }
+
+        return $config;
+    }
+
+    private function syncMissingRrdDatasets(OS $os): void
+    {
+        if (! RrdStore::isEnabled()) {
+            return;
+        }
+
+        /** @var RrdStore $rrd */
+        $rrd = app(RrdStore::class);
+        $device = $os->getDevice();
+        $datasetConfig = $this->tuneDatasetConfig();
+
+        $discoveredCount = 0;
+        foreach ($device->diskIo()->pluck('diskio_descr') as $diskDescr) {
+            if (! $this->valid_disk($os, $diskDescr)) {
+                continue;
+            }
+
+            $rrdFilename = $rrd->name($device->hostname, [$this->rrdName, $diskDescr]);
+            if (! $rrd->checkRrdExists($rrdFilename)) {
+                continue;
+            }
+
+            $existingDatasets = $rrd->listDatasets($rrdFilename);
+            $newDatasets = array_keys(array_diff_key($datasetConfig, array_flip($existingDatasets)));
+            if (empty($newDatasets)) {
+                continue;
+            }
+
+            Log::info("UcdDiskio: Missing datasets for $diskDescr: " . implode(', ', $newDatasets));
+
+            $newConfig = [];
+            foreach ($newDatasets as $ds) {
+                $newConfig[$ds] = $datasetConfig[$ds];
+            }
+            $added = $rrd->addDatasetsFromConfig($rrdFilename, $newConfig);
+            if ($added) {
+                $discoveredCount += count($newDatasets);
+            }
+        }
+
+        if ($discoveredCount > 0) {
+            Log::info("UcdDiskio: Added $discoveredCount missing datasets for device {$device->hostname}");
+        }
+    }
+
+    private function getCounterValue(array $diskData, string $preferredKey, string $fallbackKey): int|float|string|null
+    {
+        $preferred = $diskData[$preferredKey] ?? null;
+        if (is_numeric($preferred)) {
+            return $preferred;
+        }
+
+        $fallback = $diskData[$fallbackKey] ?? null;
+
+        return is_numeric($fallback) ? $fallback : null;
+    }
+
+    private function isPositive(int|float|string|null $value): bool
+    {
+        return is_numeric($value) && (float) $value > 0;
     }
 }

@@ -29,7 +29,7 @@ if ($nototal) {
     $unitlen += '2';
 }
 
-$rrd_options[] = 'COMMENT:' . \LibreNMS\Data\Store\Rrd::fixedSafeDescr($unit_text, $descr_len) . "      Now      Min      Max     Avg\l";
+$rrd_options[] = 'COMMENT:' . LibreNMS\Data\Store\Rrd::fixedSafeDescr($unit_text, $descr_len) . "      Now      Min      Max     Avg\l";
 
 $i = 0;
 $iter = 0;
@@ -39,10 +39,10 @@ foreach ($rrd_list ?? [] as $rrd) {
     if (isset($rrd['colour'])) {
         $colour = $rrd['colour'];
     } else {
-        if (! \App\Facades\LibrenmsConfig::get("graph_colours.$colours.$iter")) {
+        if (! App\Facades\LibrenmsConfig::get("graph_colours.$colours.$iter")) {
             $iter = 0;
         }
-        $colour = \App\Facades\LibrenmsConfig::get("graph_colours.$colours.$iter");
+        $colour = App\Facades\LibrenmsConfig::get("graph_colours.$colours.$iter");
         $iter++;
     }
 
@@ -53,7 +53,7 @@ foreach ($rrd_list ?? [] as $rrd) {
     $ds = $rrd['ds'];
     $filename = $rrd['filename'];
 
-    $descr = \LibreNMS\Data\Store\Rrd::fixedSafeDescr($rrd['descr'], $descr_len);
+    $descr = LibreNMS\Data\Store\Rrd::fixedSafeDescr($rrd['descr'], $descr_len);
 
     $id = 'ds' . $i;
 
@@ -65,6 +65,14 @@ foreach ($rrd_list ?? [] as $rrd) {
     } else {
         $rrd_options[] = 'DEF:' . $id . "min=$filename:$ds:MIN";
         $rrd_options[] = 'DEF:' . $id . "max=$filename:$ds:MAX";
+    }
+
+    if (! empty($rrd['cdef'])) {
+        $cdef_rpn = $rrd['cdef'];
+        $rrd_options[] = 'CDEF:' . $id . 'x=' . $id . ',' . $cdef_rpn;
+        $rrd_options[] = 'CDEF:' . $id . 'xmin=' . $id . 'min,' . $cdef_rpn;
+        $rrd_options[] = 'CDEF:' . $id . 'xmax=' . $id . 'max,' . $cdef_rpn;
+        $id .= 'x';
     }
 
     if (! empty($rrd['invert'])) {

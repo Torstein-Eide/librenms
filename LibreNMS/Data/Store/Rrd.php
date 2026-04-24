@@ -215,6 +215,164 @@ class Rrd extends BaseDatastore
     }
 
     /**
+     * List datasets defined in an RRD file.
+     *
+     * Usage:
+     *   $datasets = Rrd::listDatasets($rrdFilename);
+     *   // ['read', 'written', 'reads', 'writes']
+     *
+     * @return array<string>
+     */
+    public function listDatasets(string $filename): array
+    {
+        // Use a one-shot process to avoid the pipe race condition: the persistent
+        // Proc pipe uses non-blocking reads and stream_select returns as soon as any
+        // data arrives, so large info output is often truncated. A dedicated subprocess
+        // blocks until rrdtool exits and all output is available. Bypassing rrdcached
+        // here is intentional — DS structure lives in the file header, not the write
+        // buffer, so reading directly always returns the current on-disk structure.
+        $process = new Process([$this->rrdtool_executable, 'info', $filename]);
+        $process->setTimeout(10);
+        $process->run();
+        $output = $process->getOutput();
+
+        if ($output === '') {
+            return [];
+        }
+
+        $datasetsByIndex = [];
+        if (preg_match_all('/^ds\[([^\]]+)\]\.index = (\d+)$/m', $output, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $datasetsByIndex[(int) $match[2]] = $match[1];
+            }
+
+            if (! empty($datasetsByIndex)) {
+                ksort($datasetsByIndex);
+
+                return array_values($datasetsByIndex);
+            }
+        }
+
+        if (preg_match_all('/^ds\[([^\]]+)\]\./m', $output, $matches)) {
+            $datasets = [];
+            foreach ($matches[1] as $dataset) {
+                $datasets[$dataset] = true;
+            }
+
+            return array_keys($datasets);
+        }
+
+        return [];
+    }
+
+    /**
+     * Add one or more datasets to an existing RRD file via rrdtool tune.
+     *
+     * Usage:
+     *   Rrd::addDatasets($rrdFilename, [
+     *       ['name' => 'la1', 'type' => 'GAUGE', 'heartbeat' => 600, 'min' => 0, 'max' => 100],
+     *       ['name' => 'busy_usec', 'type' => 'DERIVE', 'heartbeat' => 600, 'min' => 0, 'max' => 'U'],
+     *   ]);
+     *
+     * Dataset names must be 1-19 chars and match [a-zA-Z0-9_].
+     * Existing datasets are skipped.
+     *
+     * @param  array<int, array{name: string, type: string, heartbeat: int, min?: int|float|string|null, max?: int|float|string|null}>  $datasets
+     */
+    public function addDatasets(string $filename, array $datasets): bool
+    {
+        $existing = array_flip($this->listDatasets($filename));
+        $options = [];
+
+        foreach ($datasets as $dataset) {
+            $name = $dataset['name'] ?? '';
+            if (! preg_match('/^[a-zA-Z0-9_]{1,19}$/', (string) $name)) {
+                continue;
+            }
+
+            if (isset($existing[$name])) {
+                continue;
+            }
+
+            $type = strtoupper((string) ($dataset['type'] ?? ''));
+            if (! in_array($type, ['GAUGE', 'COUNTER', 'DERIVE', 'ABSOLUTE'], true)) {
+                continue;
+            }
+
+            $heartbeat = (int) ($dataset['heartbeat'] ?? 0);
+            if ($heartbeat < 1) {
+                continue;
+            }
+
+            $min = $this->normalizeDatasetLimit($dataset['min'] ?? 'U');
+            $max = $this->normalizeDatasetLimit($dataset['max'] ?? 'U');
+
+            $options[] = "DS:$name:$type:$heartbeat:$min:$max";
+        }
+
+        if (empty($options)) {
+            return true;
+        }
+
+        $result = $this->command('tune', $filename, $options);
+        $output = implode('', $result);
+
+        return ! str_contains($output, 'ERROR');
+    }
+
+    /**
+     * Add datasets from a config array keyed by dataset name or listed with `name`.
+     *
+     * Usage:
+     *   Rrd::addDatasetsFromConfig($rrdFilename, [
+     *       'la1' => ['type' => 'GAUGE', 'heartbeat' => 600, 'min' => 0, 'max' => 100],
+     *       'la5' => ['type' => 'GAUGE', 'heartbeat' => 600, 'min' => 0, 'max' => 100],
+     *       'busy_usec' => ['type' => 'DERIVE', 'heartbeat' => 600, 'min' => 0, 'max' => 'U'],
+     *   ]);
+     *
+     * @param  array<int|string, array{name?: string, type: string, heartbeat: int, min?: int|float|string|null, max?: int|float|string|null}>  $config
+     */
+    public function addDatasetsFromConfig(string $filename, array $config): bool
+    {
+        $datasets = [];
+
+        foreach ($config as $name => $dataset) {
+            if (! is_array($dataset)) {
+                continue;
+            }
+
+            if (is_string($name) && ! isset($dataset['name'])) {
+                $dataset['name'] = $name;
+            }
+
+            $datasets[] = $dataset;
+        }
+
+        if (empty($datasets)) {
+            return true;
+        }
+
+        return $this->addDatasets($filename, $datasets);
+    }
+
+    private function normalizeDatasetLimit(int|float|string|null $value): string
+    {
+        if ($value === null) {
+            return 'U';
+        }
+
+        if (is_string($value) && strtoupper($value) === 'U') {
+            return 'U';
+        }
+
+        if (! is_numeric($value)) {
+            return 'U';
+        }
+
+        return (string) $value;
+    }
+
+    /**
      * Get the latest aligned per-second rates for one or more datasets.
      *
      * Usage:
@@ -593,7 +751,9 @@ class Rrd extends BaseDatastore
         }
 
         // send the command!
-        if (in_array($command, ['last', 'list', 'lastupdate']) && $this->init(false)) {
+        // info and tune must be synchronous: info output is required by listDatasets(), and tune
+        // errors must be detectable (async returns null output, masking failures).
+        if (in_array($command, ['last', 'list', 'lastupdate', 'info', 'tune']) && $this->init(false)) {
             // send this to our synchronous process so output is guaranteed
             $output = $this->sync_process->sendCommand(implode(' ', $cmd));
         } elseif ($this->init()) {
