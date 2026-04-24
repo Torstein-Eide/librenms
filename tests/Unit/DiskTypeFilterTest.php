@@ -46,11 +46,19 @@ class DiskTypeFilterTest extends TestCase
             ['view' => 'logical', 'subtype' => 'partitions'],
             $this->classifyUnix('nvme0n1p1')
         );
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'partitions'],
+            $this->classifyUnix('bcache0p1')
+        );
 
         // Logical devices
         $this->assertEquals(
             ['view' => 'logical', 'subtype' => 'dm'],
             $this->classifyUnix('dm-0')
+        );
+        $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'caching'],
+            $this->classifyUnix('bcache0')
         );
 
         // Memory-backed devices
@@ -252,6 +260,10 @@ class DiskTypeFilterTest extends TestCase
             DiskTypeFilter::normalizeSelection('logical', 'loop')
         );
         $this->assertEquals(
+            ['view' => 'logical', 'subtype' => 'caching'],
+            DiskTypeFilter::normalizeSelection('logical', 'caching')
+        );
+        $this->assertEquals(
             ['view' => 'all', 'subtype' => 'all'],
             DiskTypeFilter::normalizeSelection('all', 'something')
         );
@@ -274,7 +286,7 @@ class DiskTypeFilterTest extends TestCase
             DiskTypeFilter::subtypesFor('physical')
         );
         $this->assertEquals(
-            ['all', 'partitions', 'dm', 'sw_raid', 'loop', 'other'],
+            ['all', 'partitions', 'dm', 'sw_raid', 'loop', 'caching', 'other'],
             DiskTypeFilter::subtypesFor('logical')
         );
         $this->assertEquals(
