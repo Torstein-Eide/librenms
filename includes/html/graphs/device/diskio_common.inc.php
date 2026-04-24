@@ -16,10 +16,20 @@ foreach ($query->orderBy('diskio_descr')->get() as $disk) {
         continue;
     }
 
-    $rrd_list[] = [
+    $rrd = [
         'filename' => $rrd_filename,
         'descr' => $disk['diskio_descr'],
     ];
+
+    if (isset($ds_in) && $ds_in !== '') {
+        $rrd['ds_in'] = $ds_in;
+    }
+
+    if (isset($ds_out) && $ds_out !== '') {
+        $rrd['ds_out'] = $ds_out;
+    }
+
+    $rrd_list[] = $rrd;
 }
 
 if (count($rrd_list) === 0) {
