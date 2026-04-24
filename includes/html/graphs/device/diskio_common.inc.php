@@ -3,6 +3,7 @@
 use App\Models\DiskIo;
 
 $query = DiskIo::query()->where('device_id', $device['device_id']);
+$diskioRrdBase = $diskio_rrd_base ?? 'ucd_diskio';
 if (is_numeric($vars['id'] ?? null)) {
     $query->where('diskio_id', (int) $vars['id']);
 } elseif (! empty($vars['ids'])) {
@@ -11,7 +12,7 @@ if (is_numeric($vars['id'] ?? null)) {
 
 $rrd_list = [];
 foreach ($query->orderBy('diskio_descr')->get() as $disk) {
-    $rrd_filename = Rrd::name($disk->device->hostname ?? $device['hostname'], ['ucd_diskio', $disk['diskio_descr']]);
+    $rrd_filename = Rrd::name($disk->device->hostname ?? $device['hostname'], [$diskioRrdBase, $disk['diskio_descr']]);
     if (! Rrd::checkRrdExists($rrd_filename)) {
         continue;
     }
