@@ -6,7 +6,7 @@ $query = DiskIo::query()->where('device_id', $device['device_id']);
 if (is_numeric($vars['id'] ?? null)) {
     $query->where('diskio_id', (int) $vars['id']);
 } elseif (! empty($vars['ids'])) {
-    $query->whereIn('diskio_id', array_filter(array_map('intval', explode(',', $vars['ids']))));
+    $query->whereIn('diskio_id', array_filter(array_map(intval(...), explode(',', (string) $vars['ids']))));
 }
 
 $rrd_list = [];
