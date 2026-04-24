@@ -166,6 +166,35 @@ $filteredDrives = $drives->filter(function ($drive) use ($driveTypes, $selectedD
     return LibreNMS\Util\DiskTypeFilter::matches($driveType, $selectedDiskioView, $selectedDiskioSubtype);
 });
 
+// Aggregate panels: one chart per graph type combining all filtered drives.
+$filteredIds = $filteredDrives->pluck('diskio_id')->all();
+
+if (! empty($filteredIds)) {
+    $idsParam = implode(',', $filteredIds);
+    $aggregateGraphTypes = [
+        'diskio_bits' => 'bps',
+        'diskio_ops'  => 'Ops/sec',
+    ];
+
+    array_walk($aggregateGraphTypes, function (string $unitLabel, string $graph_type) use ($idsParam): void {
+        $graph_array = [
+            'type' => $graph_type,
+            'ids'  => $idsParam,
+        ];
+        $graph_title = "All Drives - $unitLabel";
+
+        echo "<div class='panel panel-default'>
+                <div class='panel-heading'>
+                <h3 class='panel-title'>$graph_title</h3>
+            </div>";
+        echo "<div class='panel-body'>";
+        include 'includes/html/print-graphrow.inc.php';
+        echo '</div></div>';
+    });
+}
+
+echo '<h2>Per Drive</h2>';
+
 $filteredDrives->each(function ($drive) use (&$row, $selectedDiskioView, $selectedDiskioSubtype, $device): void {
     if (is_int($row / 2)) {
         $row_colour = App\Facades\LibrenmsConfig::get('list_colour.even');
@@ -199,11 +228,10 @@ $filteredDrives->each(function ($drive) use (&$row, $selectedDiskioView, $select
         $graph_array = [];
         $graph_array['id'] = $drive['diskio_id'];
         $graph_array['type'] = $graph_type;
-        $graph_type_title = $graph_array['type'] == 'diskio_ops' ? 'Ops/sec' : 'bps';
 
         echo "<div class='panel panel-default'>
                 <div class='panel-heading'>
-                <h3 class='panel-title'>$overlib_link - $graph_type_title</h3>
+                <h3 class='panel-title'>$overlib_link - " . ($graph_type === 'diskio_ops' ? 'Ops/sec' : 'bps') . "</h3>
             </div>";
         echo "<div class='panel-body'>";
         include 'includes/html/print-graphrow.inc.php';
