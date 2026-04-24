@@ -231,8 +231,8 @@ $filteredDrives->each(function ($drive) use (&$row, $selectedDiskioView, $select
 
         echo "<div class='panel panel-default'>
                 <div class='panel-heading'>
-                <h3 class='panel-title'>$overlib_link - " . ($graph_type === 'diskio_ops' ? 'Ops/sec' : 'bps') . "</h3>
-            </div>";
+                <h3 class='panel-title'>$overlib_link - " . ($graph_type === 'diskio_ops' ? 'Ops/sec' : 'bps') . '</h3>
+            </div>';
         echo "<div class='panel-body'>";
         include 'includes/html/print-graphrow.inc.php';
         echo '</div></div>';
