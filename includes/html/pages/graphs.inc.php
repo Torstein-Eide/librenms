@@ -39,7 +39,7 @@ if (! $auth) {
     if (LibrenmsConfig::has("graph_types.$type.$subtype.descr")) {
         $title .= ' :: ' . LibrenmsConfig::get("graph_types.$type.$subtype.descr");
     } elseif ($type == 'device' && $subtype == 'collectd') {
-        $title .= ' :: ' . \LibreNMS\Util\StringHelpers::niceCase($subtype) . ' :: ' . $vars['c_plugin'];
+        $title .= ' :: ' . LibreNMS\Util\StringHelpers::niceCase($subtype) . ' :: ' . $vars['c_plugin'];
         if (isset($vars['c_plugin_instance'])) {
             $title .= ' - ' . $vars['c_plugin_instance'];
         }
@@ -48,7 +48,7 @@ if (! $auth) {
             $title .= ' - ' . $vars['c_type_instance'];
         }
     } else {
-        $title .= ' :: ' . \LibreNMS\Util\StringHelpers::niceCase($subtype);
+        $title .= ' :: ' . LibreNMS\Util\StringHelpers::niceCase($subtype);
     }
 
     $graph_array = $vars;
@@ -69,11 +69,11 @@ if (! $auth) {
             echo "<select name='type' id='type' onchange=\"window.open(this.options[this.selectedIndex].value,'_top')\" class='devices-graphs-select'>";
 
             foreach ($graph_subtypes as $avail_type) {
-                echo "<option value='" . \LibreNMS\Util\Url::generate($vars, ['type' => $type . '_' . $avail_type, 'page' => 'graphs']) . "'";
+                echo "<option value='" . LibreNMS\Util\Url::generate($vars, ['type' => $type . '_' . $avail_type, 'page' => 'graphs']) . "'";
                 if ($avail_type == $subtype) {
                     echo ' selected';
                 }
-                $display_type = \LibreNMS\Util\StringHelpers::niceCase($avail_type);
+                $display_type = LibreNMS\Util\StringHelpers::niceCase($avail_type);
                 echo ">$display_type</option>";
             }
             echo '</select></form></div>';
@@ -95,12 +95,12 @@ if (! $auth) {
             $link_array['from'] = $graph_array['from'];
             $link_array['to'] = $graph_array['to'];
             $link_array['page'] = 'graphs';
-            $link = \LibreNMS\Util\Url::generate($link_array);
+            $link = LibreNMS\Util\Url::generate($link_array);
 
             echo '<td style="text-align: center;">';
             echo '<b>' . $text . '</b>';
             echo '<a href="' . $link . '">';
-            echo \LibreNMS\Util\Url::lazyGraphTag($graph_array);
+            echo LibreNMS\Util\Url::lazyGraphTag($graph_array);
             echo '</a>';
             echo '</td>';
         }
@@ -151,6 +151,13 @@ if (! $auth) {
     //  }
 
     echo ' | ';
+    if (isset($vars['title']) && $vars['title'] === 'yes') {
+        echo generate_link('Hide Graph Title', $vars, ['page' => 'graphs', 'title' => null]);
+    } else {
+        echo generate_link('Show Graph Title', $vars, ['page' => 'graphs', 'title' => 'yes']);
+    }
+
+    echo ' | ';
     if ($show_command) {
         echo generate_link('Hide RRD Command', $vars, ['page' => 'graphs', 'showcommand' => null]);
     } else {
@@ -180,7 +187,7 @@ if (! $auth) {
         echo generate_dynamic_graph_js($graph_array);
         echo generate_dynamic_graph_tag($graph_array);
     } else {
-        echo \LibreNMS\Util\Url::lazyGraphTag($graph_array);
+        echo LibreNMS\Util\Url::lazyGraphTag($graph_array);
     }
     echo '</center></div>';
 
