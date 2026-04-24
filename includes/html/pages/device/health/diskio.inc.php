@@ -1,8 +1,10 @@
 <?php
 
+use App\Facades\Rrd;
 use App\Models\DiskIo;
+use LibreNMS\Util\Number;
 
-/** @var array{device_id: int|string, os_group?: string|null, sysDescr?: string|null} $device */
+/** @var array{device_id: int|string, hostname?: string|null, os_group?: string|null, sysDescr?: string|null} $device */
 
 /*
  * File structure:
@@ -168,26 +170,124 @@ $filteredDrives = $drives->filter(function ($drive) use ($driveTypes, $selectedD
     return LibreNMS\Util\DiskTypeFilter::matches($driveType, $selectedDiskioView, $selectedDiskioSubtype);
 });
 
+// Shared graph metadata keeps DS names, label text, and value formatting in one place.
+$diskioGraphMeta = [
+    'diskio_bits' => [
+        'label' => 'Bytes/sec',
+        'in_ds' => 'read',
+        'out_ds' => 'written',
+        'multiplier' => 1,
+        'suffix' => 'B/s',
+        'format' => 'bi',
+    ],
+    'diskio_ops' => [
+        'label' => 'Ops/sec',
+        'in_ds' => 'reads',
+        'out_ds' => 'writes',
+        'multiplier' => 1,
+        'suffix' => 'ops/s',
+        'format' => 'si',
+    ],
+];
+
+// Format current in/out values for panel headers.
+$formatDiskIoCurrent = static function (array $currentValues, string $graphType) use ($diskioGraphMeta): string {
+    $meta = $diskioGraphMeta[$graphType];
+    $inValue = $currentValues[$meta['in_ds']] ?? null;
+    $outValue = $currentValues[$meta['out_ds']] ?? null;
+
+    $inCurrent = '--';
+    if (is_numeric($inValue)) {
+        $inCurrent = $meta['format'] === 'bi'
+            ? Number::formatBi((float) $inValue * $meta['multiplier'], 2, 0, $meta['suffix'])
+            : Number::formatSi((float) $inValue * $meta['multiplier'], 2, 0, $meta['suffix']);
+    }
+
+    $outCurrent = '--';
+    if (is_numeric($outValue)) {
+        $outCurrent = $meta['format'] === 'bi'
+            ? Number::formatBi((float) $outValue * $meta['multiplier'], 2, 0, $meta['suffix'])
+            : Number::formatSi((float) $outValue * $meta['multiplier'], 2, 0, $meta['suffix']);
+    }
+
+    return "In: $inCurrent | Out: $outCurrent";
+};
+
+$driveCurrentValues = [];
+$aggregateCurrentValues = [];
+
+// Build one DS list and reuse it for every drive RRD lookup.
+$diskioDatasets = array_values(array_unique(array_merge(
+    array_column($diskioGraphMeta, 'in_ds'),
+    array_column($diskioGraphMeta, 'out_ds')
+)));
+
+if (! empty($device['hostname'])) {
+    foreach ($filteredDrives as $drive) {
+        $diskId = (int) $drive['diskio_id'];
+        $rrdFilename = Rrd::name($device['hostname'], ['ucd_diskio', $drive['diskio_descr']]);
+        if (! Rrd::checkRrdExists($rrdFilename)) {
+            continue;
+        }
+
+        // Read aligned rate values (B/s + ops/s DS) once per drive.
+        $point = Rrd::getLastRates($rrdFilename, $diskioDatasets);
+        if ($point === null) {
+            continue;
+        }
+
+        $current = [];
+        foreach ($diskioDatasets as $dataset) {
+            $value = $point->get($dataset);
+            if (is_numeric($value)) {
+                $current[$dataset] = (float) $value;
+            }
+        }
+
+        if (empty($current)) {
+            continue;
+        }
+
+        // Reuse per-drive values for both per-drive and aggregate header totals.
+        foreach ($diskioGraphMeta as $meta) {
+            $inDs = $meta['in_ds'];
+            $outDs = $meta['out_ds'];
+            $inValue = $current[$inDs] ?? null;
+            $outValue = $current[$outDs] ?? null;
+
+            if (is_numeric($inValue)) {
+                $current[$inDs] = (float) $inValue;
+                $aggregateCurrentValues[$inDs] = ($aggregateCurrentValues[$inDs] ?? 0.0) + (float) $inValue;
+            }
+
+            if (is_numeric($outValue)) {
+                $current[$outDs] = (float) $outValue;
+                $aggregateCurrentValues[$outDs] = ($aggregateCurrentValues[$outDs] ?? 0.0) + (float) $outValue;
+            }
+        }
+
+        $driveCurrentValues[$diskId] = $current;
+    }
+}
+
 // Aggregate panels: one chart per graph type combining all filtered drives.
 $filteredIds = $filteredDrives->pluck('diskio_id')->all();
 
 if (! empty($filteredIds)) {
     $idsParam = implode(',', $filteredIds);
-    $aggregateGraphTypes = [
-        'diskio_bits' => 'bps',
-        'diskio_ops' => 'Ops/sec',
-    ];
 
-    array_walk($aggregateGraphTypes, function (string $unitLabel, string $graph_type) use ($idsParam): void {
+    // Render the two aggregate graphs and show live in/out values in heading.
+    array_walk($diskioGraphMeta, function (array $meta, string $graph_type) use ($idsParam, $aggregateCurrentValues, $formatDiskIoCurrent): void {
         $graph_array = [
             'type' => $graph_type,
             'ids' => $idsParam,
         ];
-        $graph_title = "All Drives - $unitLabel";
+        $graph_title = 'All Drives - ' . $meta['label'];
+        $currentText = $formatDiskIoCurrent($aggregateCurrentValues, $graph_type);
 
         echo "<div class='panel panel-default'>
                 <div class='panel-heading'>
-                <h3 class='panel-title'>$graph_title</h3>
+                <h3 class='panel-title'>$graph_title <div class='pull-right'>$currentText</div></h3>
             </div>";
         echo "<div class='panel-body'>";
         include 'includes/html/print-graphrow.inc.php';
@@ -197,7 +297,7 @@ if (! empty($filteredIds)) {
 
 echo '<h2>Per Drive</h2>';
 
-$filteredDrives->each(function ($drive) use (&$row, $selectedDiskioView, $selectedDiskioSubtype, $device): void {
+$filteredDrives->each(function ($drive) use (&$row, $selectedDiskioView, $selectedDiskioSubtype, $device, $diskioGraphMeta, $driveCurrentValues, $formatDiskIoCurrent): void {
     if (is_int($row / 2)) {
         $row_colour = App\Facades\LibrenmsConfig::get('list_colour.even');
     } else {
@@ -224,17 +324,17 @@ $filteredDrives->each(function ($drive) use (&$row, $selectedDiskioView, $select
 
     $overlib_link = LibreNMS\Util\Url::overlibLink($fs_url, $drive['diskio_descr'], LibreNMS\Util\Url::graphTag($graph_array_zoom));
 
-    // Each matching drive renders throughput and operations graph panels.
-    $graphTypes = ['diskio_bits', 'diskio_ops'];
-    array_walk($graphTypes, function (string $graph_type) use ($drive, $overlib_link): void {
+    // Each matching drive renders throughput and operations graph panels with current values.
+    array_walk($diskioGraphMeta, function (array $meta, string $graph_type) use ($drive, $overlib_link, $driveCurrentValues, $formatDiskIoCurrent): void {
         $graph_array = [];
         $graph_array['id'] = $drive['diskio_id'];
         $graph_array['type'] = $graph_type;
+        $currentText = $formatDiskIoCurrent($driveCurrentValues[$drive['diskio_id']] ?? [], $graph_type);
 
         echo "<div class='panel panel-default'>
                 <div class='panel-heading'>
-                <h3 class='panel-title'>$overlib_link - " . ($graph_type === 'diskio_ops' ? 'Ops/sec' : 'bps') . '</h3>
-            </div>';
+                <h3 class='panel-title'>$overlib_link - " . $meta['label'] . " <div class='pull-right'>$currentText</div></h3>
+            </div>";
         echo "<div class='panel-body'>";
         include 'includes/html/print-graphrow.inc.php';
         echo '</div></div>';
