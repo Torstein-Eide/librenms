@@ -37,6 +37,7 @@ $diskioSubtypes = [
         'dm' => 'Device Mapper',
         'sw_raid' => 'Software RAID',
         'loop' => 'Image',
+        'caching' => 'Caching',
         'other' => 'Other',
     ],
 ];
@@ -146,6 +147,7 @@ $subtypeDescriptions = [
         'dm' => 'Device mapper volumes named dm-*.',
         'sw_raid' => 'Software RAID devices (for example md0 on Linux, ccd* on BSD).',
         'loop' => 'Image-backed loop devices such as loop0.',
+        'caching' => 'Caching layers such as bcache0.',
         'other' => 'Logical drives that do not match a known type.',
     ],
 ];

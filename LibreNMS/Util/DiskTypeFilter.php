@@ -70,7 +70,7 @@ final class DiskTypeFilter
     {
         return match ($view) {
             'physical' => ['all', 'sd_family', 'nvme', 'mmcblk', 'memory', 'other'],
-            'logical' => ['all', 'partitions', 'dm', 'sw_raid', 'loop', 'other'],
+            'logical' => ['all', 'partitions', 'dm', 'sw_raid', 'loop', 'caching', 'other'],
             default => ['all'],
         };
     }
@@ -160,10 +160,16 @@ final class DiskTypeFilter
             return ['view' => 'logical', 'subtype' => 'sw_raid'];
         }
 
+        // Linux bcache devices are virtual block layers.
+        if (preg_match('/^bcache\d+$/i', $diskName)) {
+            return ['view' => 'logical', 'subtype' => 'caching'];
+        }
+
         // Partitions and virtual devices: sda1, nvme0n1p1, mmcblk0p1, da0p1, da0s1a, ad0s1e, etc.
         if (preg_match('/^(sd[a-z]+\d+|hd[a-z]+\d+|vd[a-z]+\d+|xvd[a-z]+\d+)$/i', $diskName)
             || preg_match('/^nvme\d+n\d+p\d+$/i', $diskName)
             || preg_match('/^mmcblk\d+p\d+$/i', $diskName)
+            || preg_match('/^bcache\d+p\d+$/i', $diskName)
             || preg_match('/^(da|wd|ad|cd|fd|gm|vn)\d+[sp]\d+/i', $diskName)) {
             return ['view' => 'logical', 'subtype' => 'partitions'];
         }
