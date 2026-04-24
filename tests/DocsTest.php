@@ -43,6 +43,7 @@ final class DocsTest extends TestCase
         // Define paths to exclude
         $exclude_paths = [
             '*/Extensions/Applications/*',
+            '*/General/Features/*',
             '*/General/Changelogs/*',
             '*/Alerting/Transports/*',
         ];

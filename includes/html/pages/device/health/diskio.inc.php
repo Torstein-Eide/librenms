@@ -173,13 +173,13 @@ if (! empty($filteredIds)) {
     $idsParam = implode(',', $filteredIds);
     $aggregateGraphTypes = [
         'diskio_bits' => 'bps',
-        'diskio_ops'  => 'Ops/sec',
+        'diskio_ops' => 'Ops/sec',
     ];
 
     array_walk($aggregateGraphTypes, function (string $unitLabel, string $graph_type) use ($idsParam): void {
         $graph_array = [
             'type' => $graph_type,
-            'ids'  => $idsParam,
+            'ids' => $idsParam,
         ];
         $graph_title = "All Drives - $unitLabel";
 
