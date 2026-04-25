@@ -55,24 +55,51 @@ foreach ($rrd_list ?? [] as $rrd) {
 
     $descr = LibreNMS\Data\Store\Rrd::fixedSafeDescr($rrd['descr'], $descr_len);
 
-    $id = 'ds' . $i;
+$id = 'ds' . $i;
 
-    $rrd_options[] = 'DEF:' . $id . "=$filename:$ds:AVERAGE";
+    if ($multiplier) {
+        if (empty($multiplier_action)) {
+            $multiplier_action = '*';
+        }
 
-    if (! empty($simple_rrd)) {
-        $rrd_options[] = 'CDEF:' . $id . 'min=' . $id;
-        $rrd_options[] = 'CDEF:' . $id . 'max=' . $id;
+        $rrd_options[] = 'DEF:' . $id . "o=$filename:$ds:AVERAGE";
+        $rrd_options[] = 'CDEF:' . $id . '=' . $id . "o,$multiplier,$multiplier_action";
+
+        if (! empty($simple_rrd)) {
+            $rrd_options[] = 'CDEF:' . $id . 'min=' . $id;
+            $rrd_options[] = 'CDEF:' . $id . 'max=' . $id;
+        } else {
+            $rrd_options[] = 'DEF:' . $id . "o_min=$filename:$ds:MIN";
+            $rrd_options[] = 'DEF:' . $id . "o_max=$filename:$ds:MAX";
+            $rrd_options[] = 'CDEF:' . $id . 'min=' . $id . "o_min,$multiplier,$multiplier_action";
+            $rrd_options[] = 'CDEF:' . $id . 'max=' . $id . "o_max,$multiplier,$multiplier_action";
+        }
+
+        if (! empty($rrd['cdef'])) {
+            $cdef_rpn = $rrd['cdef'];
+            $rrd_options[] = 'CDEF:' . $id . 'x=' . $id . ',' . $cdef_rpn;
+            $rrd_options[] = 'CDEF:' . $id . 'xmin=' . $id . 'min,' . $cdef_rpn;
+            $rrd_options[] = 'CDEF:' . $id . 'xmax=' . $id . 'max,' . $cdef_rpn;
+            $id .= 'x';
+        }
     } else {
-        $rrd_options[] = 'DEF:' . $id . "min=$filename:$ds:MIN";
-        $rrd_options[] = 'DEF:' . $id . "max=$filename:$ds:MAX";
-    }
+        $rrd_options[] = 'DEF:' . $id . "=$filename:$ds:AVERAGE";
 
-    if (! empty($rrd['cdef'])) {
-        $cdef_rpn = $rrd['cdef'];
-        $rrd_options[] = 'CDEF:' . $id . 'x=' . $id . ',' . $cdef_rpn;
-        $rrd_options[] = 'CDEF:' . $id . 'xmin=' . $id . 'min,' . $cdef_rpn;
-        $rrd_options[] = 'CDEF:' . $id . 'xmax=' . $id . 'max,' . $cdef_rpn;
-        $id .= 'x';
+        if (! empty($simple_rrd)) {
+            $rrd_options[] = 'CDEF:' . $id . 'min=' . $id;
+            $rrd_options[] = 'CDEF:' . $id . 'max=' . $id;
+        } else {
+            $rrd_options[] = 'DEF:' . $id . "min=$filename:$ds:MIN";
+            $rrd_options[] = 'DEF:' . $id . "max=$filename:$ds:MAX";
+        }
+
+        if (! empty($rrd['cdef'])) {
+            $cdef_rpn = $rrd['cdef'];
+            $rrd_options[] = 'CDEF:' . $id . 'x=' . $id . ',' . $cdef_rpn;
+            $rrd_options[] = 'CDEF:' . $id . 'xmin=' . $id . 'min,' . $cdef_rpn;
+            $rrd_options[] = 'CDEF:' . $id . 'xmax=' . $id . 'max,' . $cdef_rpn;
+            $id .= 'x';
+        }
     }
 
     if (! empty($rrd['invert'])) {
