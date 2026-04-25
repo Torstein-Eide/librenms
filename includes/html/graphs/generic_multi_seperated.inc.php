@@ -19,6 +19,7 @@ use App\Facades\LibrenmsConfig;
 require 'includes/html/graphs/common.inc.php';
 
 $format ??= '';
+$multiplier_action ??= '*';
 $previous = $graph_params->visible('previous');
 $transparency ??= false;
 $stack ??= '';
@@ -51,12 +52,12 @@ $stacked = generate_stacked_graphs();
 $units_descr = \LibreNMS\Data\Store\Rrd::fixedSafeDescr($units_descr ?? '', $rrddescr_len + 5);
 
 if ($format == 'octets' || $format == 'bytes') {
-    $units = 'Bps';
+    $units = $units ?? 'Bps';
     $format = 'bits';
 } else {
     if (isset($total_units) && $total_units == 'pps') {
-        $units = 'pps';
-    } else {
+        $units = $units ?? 'pps';
+    } elseif (! isset($units)) {
         $units = 'bps';
     }
     $format = 'bits';
@@ -103,8 +104,8 @@ foreach ($rrd_list ?? [] as $rrd) {
     $rrd_options[] = 'DEF:inB' . $i . '=' . $rrd['filename'] . ':' . $rrd['ds_in'] . ':AVERAGE';
     $rrd_options[] = 'DEF:outB' . $i . '=' . $rrd['filename'] . ':' . $rrd['ds_out'] . ':AVERAGE';
     $rrd_options[] = 'CDEF:octets' . $i . '=inB' . $i . ',outB' . $i . ',+';
-    $rrd_options[] = 'CDEF:inbits' . $i . '=inB' . $i . ",$multiplier,*";
-    $rrd_options[] = 'CDEF:outbits' . $i . '=outB' . $i . ",$multiplier,*";
+    $rrd_options[] = 'CDEF:inbits' . $i . '=inB' . $i . ',' . $multiplier . ',' . $multiplier_action;
+    $rrd_options[] = 'CDEF:outbits' . $i . '=outB' . $i . ',' . $multiplier . ',' . $multiplier_action;
     $rrd_options[] = 'CDEF:outbits' . $i . '_neg=outbits' . $i . ',' . $stacked['stacked'] . ',*';
     $rrd_options[] = 'CDEF:bits' . $i . '=inbits' . $i . ',outbits' . $i . ',+';
 
@@ -112,8 +113,8 @@ foreach ($rrd_list ?? [] as $rrd) {
         $rrd_options[] = 'DEF:inB' . $i . 'X=' . $rrd['filename'] . ':' . $rrd['ds_in'] . ':AVERAGE:start=' . $prev_from . ':end=' . $from;
         $rrd_options[] = 'DEF:outB' . $i . 'X=' . $rrd['filename'] . ':' . $rrd['ds_out'] . ':AVERAGE:start=' . $prev_from . ':end=' . $from;
         $rrd_options[] = 'CDEF:octets' . $i . 'X=inB' . $i . 'X,outB' . $i . 'X,+';
-        $rrd_options[] = 'CDEF:inbits' . $i . 'X=inB' . $i . 'X' . ",$multiplier,*";
-        $rrd_options[] = 'CDEF:outbits' . $i . 'X=outB' . $i . 'X' . ",$multiplier,*";
+        $rrd_options[] = 'CDEF:inbits' . $i . 'X=inB' . $i . 'X' . ',' . $multiplier . ',' . $multiplier_action;
+        $rrd_options[] = 'CDEF:outbits' . $i . 'X=outB' . $i . 'X' . ',' . $multiplier . ',' . $multiplier_action;
         $rrd_options[] = 'CDEF:outbits' . $i . '_negX=outbits' . $i . 'X,' . $stacked['stacked'] . ',*';
         $rrd_options[] = 'CDEF:bits' . $i . 'X=inbits' . $i . 'X,outbits' . $i . 'X,+';
         $rrd_options[] = 'SHIFT:inB' . $i . "X:$period";
@@ -199,10 +200,10 @@ if ($previous) {
     $rrd_options[] = 'CDEF:outBX=' . $out_thingX . $plusesX;
     $rrd_options[] = 'CDEF:octetsX=inBX,outBX,+';
     $rrd_options[] = 'CDEF:doutBX=outBX,' . $stacked['stacked'] . ',*';
-    $rrd_options[] = 'CDEF:inbitsX=inBX,8,*';
-    $rrd_options[] = 'CDEF:outbitsX=outBX,8,*';
+    $rrd_options[] = 'CDEF:inbitsX=inBX,' . $multiplier . ',' . $multiplier_action;
+    $rrd_options[] = 'CDEF:outbitsX=outBX,' . $multiplier . ',' . $multiplier_action;
     $rrd_options[] = 'CDEF:bitsX=inbitsX,outbitsX,+';
-    $rrd_options[] = 'CDEF:doutbitsX=doutBX,8,*';
+    $rrd_options[] = 'CDEF:doutbitsX=doutBX,' . $multiplier . ',' . $multiplier_action;
     $rrd_options[] = 'VDEF:percentile_inX=inbitsX,' . LibrenmsConfig::get('percentile_value') . ',PERCENT';
     $rrd_options[] = 'VDEF:percentile_outX=outbitsX,' . LibrenmsConfig::get('percentile_value') . ',PERCENT';
     $rrd_options[] = 'CDEF:dpercentile_outXn=doutbitsX,' . $stacked['stacked'] . ',*';
@@ -228,10 +229,11 @@ if (! $nototal && ! empty($rrd_list)) {
     $rrd_options[] = 'CDEF:outB=' . $out_thing . $pluses;
     $rrd_options[] = 'CDEF:octets=inB,outB,+';
     $rrd_options[] = 'CDEF:doutB=outB,' . $stacked['stacked'] . ',*';
-    $rrd_options[] = 'CDEF:inbits=inB,8,*';
-    $rrd_options[] = 'CDEF:outbits=outB,8,*';
+
+    $rrd_options[] = 'CDEF:inbits=inB,' . $multiplier . ',' . $multiplier_action;
+    $rrd_options[] = 'CDEF:outbits=outB,' . $multiplier . ',' . $multiplier_action;
     $rrd_options[] = 'CDEF:bits=inbits,outbits,+';
-    $rrd_options[] = 'CDEF:doutbits=doutB,8,*';
+    $rrd_options[] = 'CDEF:doutbits=doutB,' . $multiplier . ',' . $multiplier_action;
     $rrd_options[] = 'VDEF:percentile_in=inbits,' . LibrenmsConfig::get('percentile_value') . ',PERCENT';
     $rrd_options[] = 'VDEF:percentile_out=outbits,' . LibrenmsConfig::get('percentile_value') . ',PERCENT';
     $rrd_options[] = 'CDEF:dpercentile_outn=doutbits,' . $stacked['stacked'] . ',*';
