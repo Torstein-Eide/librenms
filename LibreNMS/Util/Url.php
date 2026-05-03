@@ -338,7 +338,7 @@ class Url
     public static function getBaseUrl(): string
     {
         if (app()->runningInConsole()) {
-            return rtrim(config('app.url'), '/');
+            return rtrim((string) config('app.url'), '/');
         }
 
         return Request::getSchemeAndHttpHost();
@@ -351,7 +351,7 @@ class Url
      */
     public static function getBasePath(): string
     {
-        return parse_url(config('app.url'), PHP_URL_PATH) ?: '';
+        return parse_url((string) config('app.url'), PHP_URL_PATH) ?: '';
     }
 
     /**
