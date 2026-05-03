@@ -9,6 +9,7 @@
  */
 
 use App\Facades\LibrenmsConfig;
+use LibreNMS\Util\Url;
 
 ini_set('allow_url_fopen', 0);
 
@@ -29,7 +30,7 @@ if (is_numeric($_GET['bill_hist_id'])) {
     $urlargs['to'] = $_GET['to'];
 }
 
-$url = LibrenmsConfig::get('base_url') . 'graph.php?';
+$url = Url::getFullBaseUrl() . 'graph.php?';
 $i = 0;
 foreach ($urlargs as $name => $value) {
     if ($i++ > 0) {

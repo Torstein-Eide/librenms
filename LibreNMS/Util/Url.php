@@ -329,11 +329,49 @@ class Url
         return '<img src="graph-image ' . url('graph.php') . '?type=' . $args['graph_type'] . '&amp;id=' . $args['port_id'] . '&amp;from=' . $args['from'] . '&amp;to=' . $args['to'] . '&amp;width=' . $args['width'] . '&amp;height=' . $args['height'] . '&amp;bg=' . $args['bg'] . '">';
     }
 
+    /**
+     * Get the base URL (scheme + host) from the current request
+     * Ensures we always use the current request URL, not a cached config value
+     *
+     * @return string
+     */
+    public static function getBaseUrl(): string
+    {
+        if (app()->runningInConsole()) {
+            return rtrim(config('app.url'), '/');
+        }
+
+        return Request::getSchemeAndHttpHost();
+    }
+
+    /**
+     * Get the base path (subdirectory) from the Laravel app.url config
+     *
+     * @return string
+     */
+    public static function getBasePath(): string
+    {
+        return parse_url(config('app.url'), PHP_URL_PATH) ?: '';
+    }
+
+    /**
+     * Get the full base URL with path (scheme + host + path)
+     *
+     * @return string
+     */
+    public static function getFullBaseUrl(): string
+    {
+        return self::getBaseUrl() . Str::finish(self::getBasePath(), '/');
+    }
+
+    /**
+     * Generate a URL from page and key/value vars, using the live request host to avoid stale base_url config.
+     */
     public static function generate($vars, $new_vars = [])
     {
         $vars = array_merge($vars, $new_vars);
 
-        $url = url(LibrenmsConfig::get('base_url', true) . $vars['page'] . '');
+        $url = self::getFullBaseUrl() . ltrim($vars['page'] ?? '', '/');
         unset($vars['page']);
 
         return $url . self::urlParams($vars);
@@ -651,9 +689,9 @@ class Url
         }
 
         // don't parse the subdirectory, if there is one in the path
-        $base_url = parse_url(LibrenmsConfig::get('base_url'))['path'] ?? '';
-        if (strlen($base_url) > 1) {
-            $segments = explode('/', trim(str_replace($base_url, '', $path), '/'));
+        $base_path = self::getBasePath();
+        if (strlen($base_path) > 1) {
+            $segments = explode('/', trim(str_replace($base_path, '', $path), '/'));
         } else {
             $segments = explode('/', trim((string) $path, '/'));
         }

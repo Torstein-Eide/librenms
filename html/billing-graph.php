@@ -11,6 +11,7 @@
  */
 
 use App\Facades\LibrenmsConfig;
+use LibreNMS\Util\Url;
 
 ini_set('allow_url_fopen', 0);
 
@@ -39,7 +40,7 @@ if (isset($_GET['ave'])) {
     $urlargs['ave'] = $_GET['ave'];
 }
 
-$url = LibrenmsConfig::get('base_url') . 'graph.php?';
+$url = Url::getFullBaseUrl() . 'graph.php?';
 $i = 0;
 foreach ($urlargs as $name => $value) {
     if ($i++ > 0) {
