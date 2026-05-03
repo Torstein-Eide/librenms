@@ -42,6 +42,7 @@ use LibreNMS\RRD\RrdProcess;
 use LibreNMS\Util\Debug;
 use LibreNMS\Util\Rewrite;
 use Log;
+use SimpleXMLElement;
 use Symfony\Component\Process\Process;
 
 class Rrd extends BaseDatastore
@@ -211,6 +212,176 @@ class Rrd extends BaseDatastore
         }
 
         return null;
+    }
+
+    /**
+     * Get the latest aligned per-second rates for one or more datasets.
+     *
+     * Usage:
+     *   $point = Rrd::getLastRates($rrdFilename, ['read', 'written', 'reads', 'writes']);
+     *   $readBps = $point?->get('read');
+     *   $opsOut = $point?->get('writes');
+     *
+     * This aligns the xport query window to configured rrd.step and returns
+     * float values from the final xport row for the requested datasets.
+     *
+     * @param  string  $filename  Full path to the rrd file
+     * @param  array<string>  $datasets  Dataset names to export
+     * @param  string  $cf  Consolidation function, defaults to AVERAGE
+     */
+    public function getLastRates(string $filename, array $datasets, string $cf = 'AVERAGE'): ?TimeSeriesPoint
+    {
+        $datasets = array_values(array_filter(array_unique($datasets), fn ($dataset): bool => is_string($dataset) && $dataset !== ''));
+        if (empty($datasets)) {
+            return null;
+        }
+
+        $window = $this->getLastRateWindow($filename);
+        if ($window === null) {
+            return null;
+        }
+
+        $xportOutput = $this->runXportRates(
+            $filename,
+            $datasets,
+            strtoupper($cf),
+            $window['start'],
+            $window['end'],
+            $window['step'],
+        );
+        if ($xportOutput === null) {
+            return null;
+        }
+
+        $rates = $this->parseXportRates($xportOutput, $datasets);
+        if (empty($rates)) {
+            return null;
+        }
+
+        return new TimeSeriesPoint($window['end'], $rates);
+    }
+
+    /**
+     * @return array{start: int, end: int, step: int}|null
+     */
+    private function getLastRateWindow(string $filename): ?array
+    {
+        // Align to the latest full PDP interval using configured rrd.step.
+        $output = (string) ($this->command('last', $filename)[0] ?? '');
+        if (! preg_match('/^\s*(\d+)/m', $output, $matches)) {
+            return null;
+        }
+
+        $last = (int) $matches[1];
+        $step = max((int) $this->step, 1);
+        $end = intdiv($last, $step) * $step;
+        $start = max($end - $step, 0);
+
+        return [
+            'start' => $start,
+            'end' => $end,
+            'step' => $step,
+        ];
+    }
+
+    private function runXportRates(string $filename, array $datasets, string $cf, int $start, int $end, int $step): ?string
+    {
+        // Match command() path handling when rrdcached expects relative file paths.
+        $filename = $this->shortenFilenameForReadCommand($filename);
+
+        $options = [
+            '--start',
+            (string) $start,
+            '--end',
+            (string) $end,
+            '--step',
+            (string) $step,
+        ];
+
+        foreach ($datasets as $index => $dataset) {
+            // Keep DEF variable names simple, preserve original DS names in XPORT legend.
+            $varName = 'd' . $index;
+            $options[] = "DEF:$varName=$filename:$dataset:$cf";
+            $options[] = "XPORT:$varName:$dataset";
+        }
+
+        try {
+            $output = app(RrdProcess::class, ['timeout' => 15])->run('xport ' . implode(' ', $options), '</xport>');
+        } catch (RrdException) {
+            return null;
+        }
+
+        $endTagPos = strrpos($output, '</xport>');
+        if ($endTagPos === false) {
+            return null;
+        }
+
+        return substr($output, 0, $endTagPos + 8);
+    }
+
+    private function shortenFilenameForReadCommand(string $filename): string
+    {
+        // rrdcached read operations use paths relative to rrd_dir.
+        if ($this->rrdcached) {
+            return str_replace([$this->rrd_dir . '/', $this->rrd_dir], '', $filename);
+        }
+
+        return $filename;
+    }
+
+    /**
+     * @param  array<string>  $datasets
+     * @return array<string, float>
+     */
+    private function parseXportRates(string $xportOutput, array $datasets): array
+    {
+        // Parse xport XML once and return only requested datasets from the last row.
+        $xml = simplexml_load_string($xportOutput);
+        if (! $xml instanceof SimpleXMLElement) {
+            return [];
+        }
+
+        $legend = [];
+        foreach ($xml->meta->legend->entry ?? [] as $entry) {
+            $legend[] = (string) $entry;
+        }
+
+        $rows = $xml->data->row ?? [];
+        if (count($rows) < 1 || empty($legend)) {
+            return [];
+        }
+
+        $lastRow = $rows[count($rows) - 1];
+        $allowedDatasets = array_flip($datasets);
+        $rates = [];
+        $index = 0;
+
+        foreach ($lastRow->v ?? [] as $value) {
+            if (! isset($legend[$index], $allowedDatasets[$legend[$index]])) {
+                $index++;
+
+                continue;
+            }
+
+            $rawValue = trim((string) $value);
+            if ($rawValue === '' || strcasecmp($rawValue, 'nan') === 0 || strcasecmp($rawValue, '-nan') === 0) {
+                $index++;
+
+                continue;
+            }
+
+            if (! is_numeric($rawValue)) {
+                $index++;
+
+                continue;
+            }
+
+            // Cast to native float so callers do not handle scientific-notation strings.
+            $rates[$legend[$index]] = (float) $rawValue;
+            $index++;
+        }
+
+        return $rates;
     }
 
     /**

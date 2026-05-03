@@ -42,6 +42,7 @@ class Sensor extends DeviceRelatedModel implements Keyable
         'entPhysicalIndex_measured',
         'user_func',
         'group',
+        'sensor_navigation',
         'rrd_type',
     ];
 
@@ -132,7 +133,7 @@ class Sensor extends DeviceRelatedModel implements Keyable
 
     // ---- Define Relationships ----
     /**
-     * @return \Illuminate\Database\Eloquent\Relations\MorphMany<\App\Models\Eventlog, $this>
+     * @return MorphMany<Eventlog, $this>
      */
     public function events(): MorphMany
     {
@@ -140,7 +141,7 @@ class Sensor extends DeviceRelatedModel implements Keyable
     }
 
     /**
-     * @return \Illuminate\Database\Eloquent\Relations\HasOneThrough<\App\Models\StateIndex, \App\Models\SensorToStateIndex, $this>
+     * @return HasOneThrough<StateIndex, SensorToStateIndex, $this>
      */
     public function stateIndex(): HasOneThrough
     {
@@ -148,7 +149,7 @@ class Sensor extends DeviceRelatedModel implements Keyable
     }
 
     /**
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsToMany<\App\Models\StateTranslation, $this>
+     * @return BelongsToMany<StateTranslation, $this>
      */
     public function translations(): BelongsToMany
     {
