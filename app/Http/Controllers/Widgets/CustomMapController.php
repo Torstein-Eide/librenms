@@ -26,7 +26,6 @@
 
 namespace App\Http\Controllers\Widgets;
 
-use App\Facades\LibrenmsConfig;
 use App\Models\CustomMap;
 use Illuminate\Http\Request;
 use Illuminate\View\View;

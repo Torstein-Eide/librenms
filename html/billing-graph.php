@@ -10,7 +10,6 @@
  * @copyright  (C) 2006 - 2012 Adam Armstrong
  */
 
-use App\Facades\LibrenmsConfig;
 use LibreNMS\Util\Url;
 
 ini_set('allow_url_fopen', 0);
