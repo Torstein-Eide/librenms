@@ -29,7 +29,6 @@ namespace App\Http\Controllers\Widgets;
 use App\Models\CustomMap;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
-use LibreNMS\Util\Url;
 
 class CustomMapController extends WidgetController
 {
@@ -53,7 +52,7 @@ class CustomMapController extends WidgetController
         if (! $data['map']) {
             return __('map.custom.widget.not_found');
         }
-        $data['base_url'] = Url::getFullBaseUrl();
+        $data['base_url'] = url('/') . '/';
         $data['background_config'] = $data['map']->getBackgroundConfig();
         $data['map_conf'] = $data['map']->options;
 

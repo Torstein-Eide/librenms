@@ -8,8 +8,6 @@
  * @copyright  (C) 2006 - 2012 Adam Armstrong
  */
 
-use LibreNMS\Util\Url;
-
 ini_set('allow_url_fopen', 0);
 
 $init_modules = ['web', 'auth'];
@@ -29,7 +27,7 @@ if (is_numeric($_GET['bill_hist_id'])) {
     $urlargs['to'] = $_GET['to'];
 }
 
-$url = Url::getFullBaseUrl() . 'graph.php?';
+$url = url('/') . '/graph.php?';
 $i = 0;
 foreach ($urlargs as $name => $value) {
     if ($i++ > 0) {
