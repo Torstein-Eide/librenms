@@ -7,7 +7,6 @@
  *
  * @copyright  (C) 2006 - 2012 Adam Armstrong
  */
-
 ini_set('allow_url_fopen', 0);
 
 $init_modules = ['web', 'auth'];
