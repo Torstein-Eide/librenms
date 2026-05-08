@@ -1154,7 +1154,7 @@
             "type": "array",
             "group": "webui",
             "section": "port-descr",
-            "order": 2
+            "order": 41
         },
         "cpu_details_overview": {
             "default": false,
@@ -1165,7 +1165,7 @@
             "type": "array",
             "group": "webui",
             "section": "port-descr",
-            "order": 4
+            "order": 51
         },
         "custom_map.background_type": {
             "default": "none",
@@ -1390,7 +1390,7 @@
             "type": "array",
             "group": "webui",
             "section": "port-descr",
-            "order": 3
+            "order": 11
         },
         "dateformat.byminute": {
             "default": "Y-m-d H:i",
@@ -5079,16 +5079,16 @@
         "int_core": {
             "default": true,
             "group": "webui",
-            "section": "menu",
+            "section": "port-descr",
             "type": "boolean",
-            "order": 3
+            "order": 40
         },
         "int_customers": {
             "default": true,
             "group": "webui",
-            "section": "menu",
+            "section": "port-descr",
             "type": "boolean",
-            "order": 4
+            "order": 10
         },
         "int_l2tp": {
             "default": false,
@@ -5100,16 +5100,16 @@
         "int_peering": {
             "default": true,
             "group": "webui",
-            "section": "menu",
+            "section": "port-descr",
             "type": "boolean",
-            "order": 6
+            "order": 30
         },
         "int_transit": {
             "default": true,
             "group": "webui",
-            "section": "menu",
+            "section": "port-descr",
             "type": "boolean",
-            "order": 7
+            "order": 20
         },
         "ipmi.type": {
             "default": [
@@ -5893,7 +5893,7 @@
             "type": "array",
             "group": "webui",
             "section": "port-descr",
-            "order": 0
+            "order": 31
         },
         "peeringdb.enabled": {
             "default": false,
@@ -7242,7 +7242,7 @@
             "type": "array",
             "group": "webui",
             "section": "port-descr",
-            "order": 1
+            "order": 21
         },
         "twofactor": {
             "default": false,
