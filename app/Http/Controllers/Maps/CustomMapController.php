@@ -123,7 +123,7 @@ class CustomMapController extends Controller
             'background_config' => $map->getBackgroundConfig(),
             'page_refresh' => LibrenmsConfig::get('page_refresh', 300),
             'map_conf' => $map_conf,
-            'base_url' => url('/') . '/',
+            'base_url' => url('/'),
             'newedge_conf' => $map->newedgeconfig,
             'newnode_conf' => $map->newnodeconfig,
             'vmargin' => 20,
@@ -151,7 +151,7 @@ class CustomMapController extends Controller
             'edit' => true,
             'vmargin' => 20,
             'hmargin' => 20,
-            'base_url' => url('/') . '/',
+            'base_url' => url('/'),
             'images' => $this->listNodeImages(),
             'maps' => CustomMap::orderBy('name')->where('custom_map_id', '<>', $map->custom_map_id)->get(['custom_map_id', 'name']),
         ];

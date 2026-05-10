@@ -26,7 +26,7 @@ if (is_numeric($_GET['bill_hist_id'])) {
     $urlargs['to'] = $_GET['to'];
 }
 
-$url = url('/') . '/graph.php?';
+$url = url('graph.php') . '?';
 $i = 0;
 foreach ($urlargs as $name => $value) {
     if ($i++ > 0) {

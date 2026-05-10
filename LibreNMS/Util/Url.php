@@ -336,7 +336,7 @@ class Url
     {
         $vars = array_merge($vars, $new_vars);
 
-        $url = url('/') . '/' . ltrim($vars['page'] ?? '', '/');
+        $url = url($vars['page'] ?? '');
         unset($vars['page']);
 
         return $url . self::urlParams($vars);
@@ -359,7 +359,7 @@ class Url
             }
         }
 
-        return $url;
+        return rtrim($url, '/');
     }
 
     /**

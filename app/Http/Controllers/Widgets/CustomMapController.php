@@ -52,7 +52,7 @@ class CustomMapController extends WidgetController
         if (! $data['map']) {
             return __('map.custom.widget.not_found');
         }
-        $data['base_url'] = url('/') . '/';
+        $data['base_url'] = url('/');
         $data['background_config'] = $data['map']->getBackgroundConfig();
         $data['map_conf'] = $data['map']->options;
 
