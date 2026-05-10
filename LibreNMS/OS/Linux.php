@@ -29,6 +29,7 @@ namespace LibreNMS\OS;
 use App\Models\EntPhysical;
 use Illuminate\Support\Collection;
 use LibreNMS\Interfaces\Discovery\VminfoDiscovery;
+use LibreNMS\OS\Traits\EntityMib;
 use LibreNMS\OS\Traits\VminfoLibvirt;
 use LibreNMS\OS\Traits\VminfoVmware;
 use LibreNMS\OS\Traits\VminfoXcpNg;
@@ -39,6 +40,9 @@ class Linux extends Shared\Unix implements VminfoDiscovery
 {
     // NOTE: Only Linux specific stuff should go here, most things should be in Unix
 
+    use EntityMib {
+        EntityMib::discoverEntityPhysical as discoverEntityMibInventory;
+    }
     use VminfoLibvirt, VminfoVmware, VminfoXcpNg {
         VminfoLibvirt::discoverVminfo as discoverLibvirtVminfo;
         VminfoVmware::discoverVmInfo as discoverVmwareVminfo;
@@ -62,7 +66,10 @@ class Linux extends Shared\Unix implements VminfoDiscovery
 
     public function discoverEntityPhysical(): Collection
     {
-        return $this->discoverLsiMegaRaidInventory();
+        return $this->discoverEntityMibInventory()
+            ->merge($this->discoverLsiMegaRaidInventory())
+            ->keyBy->getCompositeKey()
+            ->values();
     }
 
     private function discoverLsiMegaRaidInventory(): Collection
