@@ -1,11 +1,35 @@
 <?php
 
 use LibreNMS\Util\Html;
+use Symfony\Component\Yaml\Yaml;
 
-$sensors = DeviceCache::getPrimary()->sensors->where('sensor_class', $sensor_class->value)->where('group', '!=', 'transceiver')->sortBy([
-    ['group', 'asc'],
-    ['sensor_descr', 'asc'],
-]); // cache all sensors on device and exclude transceivers
+// Build a list of sensor_oid prefixes owned by YAML-driven app overview panels
+// so their sensors are not duplicated here.
+$appOverviewOidPrefixes = array_filter(array_map(
+    static function (string $f): ?string {
+        $appType = Yaml::parseFile($f)['app_type'] ?? null;
+
+        return $appType ? 'app:' . $appType . ':' : null;
+    },
+    glob(__DIR__ . '/../apps/*.yaml') ?: []
+));
+
+$sensors = DeviceCache::getPrimary()->sensors
+    ->where('sensor_class', $sensor_class->value)
+    ->where('group', '!=', 'transceiver')
+    ->filter(static function ($sensor) use ($appOverviewOidPrefixes): bool {
+        foreach ($appOverviewOidPrefixes as $prefix) {
+            if (str_starts_with((string) $sensor->sensor_oid, $prefix)) {
+                return false;
+            }
+        }
+
+        return true;
+    })
+    ->sortBy([
+        ['group', 'asc'],
+        ['sensor_descr', 'asc'],
+    ]);
 
 if ($sensors->isNotEmpty()) {
     $sensor_fa_icon = 'fa-' . $sensor_class->icon();
@@ -31,16 +55,16 @@ if ($sensors->isNotEmpty()) {
         $graph_array = [];
         $graph_array['height'] = '100';
         $graph_array['width'] = '210';
-        $graph_array['to'] = \App\Facades\LibrenmsConfig::get('time.now');
+        $graph_array['to'] = App\Facades\LibrenmsConfig::get('time.now');
         $graph_array['id'] = $sensor->sensor_id;
         $graph_array['type'] = 'sensor_' . $sensor_class->value;
-        $graph_array['from'] = \App\Facades\LibrenmsConfig::get('time.day');
+        $graph_array['from'] = App\Facades\LibrenmsConfig::get('time.day');
         $graph_array['legend'] = 'no';
 
         $link_array = $graph_array;
         $link_array['page'] = 'graphs';
         unset($link_array['height'], $link_array['width'], $link_array['legend']);
-        $link = \LibreNMS\Util\Url::generate($link_array);
+        $link = LibreNMS\Util\Url::generate($link_array);
 
         if ($sensor->poller_type == 'ipmi') {
             $sensor->sensor_descr = substr((string) ipmiSensorName($device['hardware'], $sensor->sensor_descr), 0, 48);
@@ -50,8 +74,8 @@ if ($sensors->isNotEmpty()) {
 
         $overlib_content = '<div class=overlib><span class=overlib-text>' . $device['hostname'] . ' - ' . $sensor->sensor_descr . '</span><br />';
         foreach (['day', 'week', 'month', 'year'] as $period) {
-            $graph_array['from'] = \App\Facades\LibrenmsConfig::get("time.$period");
-            $overlib_content .= str_replace('"', "\'", \LibreNMS\Util\Url::graphTag($graph_array));
+            $graph_array['from'] = App\Facades\LibrenmsConfig::get("time.$period");
+            $overlib_content .= str_replace('"', "\'", LibreNMS\Util\Url::graphTag($graph_array));
         }
 
         $overlib_content .= '</div>';
@@ -60,15 +84,15 @@ if ($sensors->isNotEmpty()) {
         $graph_array['height'] = 20;
         $graph_array['bg'] = 'ffffff00';
         // the 00 at the end makes the area transparent.
-        $graph_array['from'] = \App\Facades\LibrenmsConfig::get('time.day');
-        $sensor_minigraph = \LibreNMS\Util\Url::lazyGraphTag($graph_array);
+        $graph_array['from'] = App\Facades\LibrenmsConfig::get('time.day');
+        $sensor_minigraph = LibreNMS\Util\Url::lazyGraphTag($graph_array);
 
         $sensor_current = Html::severityToLabel($sensor->currentStatus(), $sensor->formatValue());
 
         echo '<tr><td><div style="display: grid; grid-gap: 10px; grid-template-columns: 3fr 1fr 1fr;">
-            <div>' . \LibreNMS\Util\Url::overlibLink($link, \LibreNMS\Util\Rewrite::shortenIfName($sensor->sensor_descr), $overlib_content, $sensor_class->value) . '</div>
-            <div>' . \LibreNMS\Util\Url::overlibLink($link, $sensor_minigraph, $overlib_content, $sensor_class->value) . '</div>
-            <div>' . \LibreNMS\Util\Url::overlibLink($link, $sensor_current, $overlib_content, $sensor_class->value) . '</div>
+            <div>' . LibreNMS\Util\Url::overlibLink($link, LibreNMS\Util\Rewrite::shortenIfName($sensor->sensor_descr), $overlib_content, $sensor_class->value) . '</div>
+            <div>' . LibreNMS\Util\Url::overlibLink($link, $sensor_minigraph, $overlib_content, $sensor_class->value) . '</div>
+            <div>' . LibreNMS\Util\Url::overlibLink($link, $sensor_current, $overlib_content, $sensor_class->value) . '</div>
             </div></td></tr>';
     }//end foreach
 
