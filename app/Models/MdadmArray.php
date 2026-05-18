@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $device_id
  * @property int $app_id
  * @property string $uuid
+ * @property string|null $array_name
  * @property string|null $name
  * @property string|null $level
  * @property string|null $state
@@ -47,6 +48,7 @@ class MdadmArray extends Model
         'device_id',
         'app_id',
         'uuid',
+        'array_name',
         'name',
         'level',
         'state',

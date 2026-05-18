@@ -561,6 +561,7 @@ class Common extends Application
                 ['app_id' => $appId, 'uuid' => (string) $uuid],
                 [
                     'device_id'          => $deviceId,
+                    'array_name'         => ($array['array_name'] ?? '') !== '' ? (string) $array['array_name'] : null,
                     'name'               => (string) ($array['name'] ?? ''),
                     'level'              => (string) ($array['raid_level'] ?? ''),
                     'size_bytes'         => isset($array['size_bytes']) ? (int) $array['size_bytes'] : null,
