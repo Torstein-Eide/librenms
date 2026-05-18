@@ -11,6 +11,22 @@ $arrayGraphs = [
 
 $vars['view'] ??= 'arrays';
 
+// Resolve which graph key and display mode the current view corresponds to.
+$graphKey  = null;
+$graphMode = null;
+foreach ($arrayGraphs as $key => $spec) {
+    if ($vars['view'] === $key) {
+        $graphKey  = $key;
+        $graphMode = 'graphrow';
+        break;
+    }
+    if ($vars['view'] === $key . '_mini') {
+        $graphKey  = $key;
+        $graphMode = 'mini';
+        break;
+    }
+}
+
 // =============================================================================
 // Optionbar
 // =============================================================================
@@ -29,14 +45,31 @@ if ($vars['view'] === 'arrays') {
 echo ' | Graphs: ';
 $sep = '';
 foreach ($arrayGraphs as $key => $spec) {
+    $isGraphrow = $vars['view'] === $key;
+    $isMini     = $vars['view'] === $key . '_mini';
+
     echo $sep;
-    if ($vars['view'] === $key) {
+
+    if ($isGraphrow) {
         echo "<span class='pagemenu-selected'>";
     }
-    echo generate_link($spec['title'] . ' (mini)', $vars, ['view' => $key]);
-    if ($vars['view'] === $key) {
+    echo generate_link($spec['title'], $vars, ['view' => $key]);
+    if ($isGraphrow) {
         echo '</span>';
     }
+
+    echo ' (';
+
+    if ($isMini) {
+        echo "<span class='pagemenu-selected'>";
+    }
+    echo generate_link('mini', $vars, ['view' => $key . '_mini']);
+    if ($isMini) {
+        echo '</span>';
+    }
+
+    echo ')';
+
     $sep = ' | ';
 }
 unset($sep);
@@ -49,39 +82,35 @@ print_optionbar_end();
 
 if ($vars['view'] === 'arrays') {
     ?>
-    <table id="mdadm-arrays-table" class="table table-condensed table-responsive table-striped">
+    <table id="mdadm-arrays-table"
+           class="table table-condensed table-responsive table-striped"
+           data-url="<?php echo route('table.mdadm-array'); ?>">
         <thead>
         <tr>
-            <th data-column-id="device">Device</th>
-            <th data-column-id="name">Array</th>
-            <th data-column-id="level">Level</th>
-            <th data-column-id="state">State</th>
-            <th data-column-id="sync_action">Operation</th>
-            <th data-column-id="raid_disks" data-type="numeric">Disks</th>
-            <th data-column-id="active_devices" data-type="numeric">Active</th>
-            <th data-column-id="spare_devices" data-type="numeric">Spare</th>
-            <th data-column-id="failed_devices" data-type="numeric">Failed</th>
-            <th data-column-id="size">Size</th>
-            <th data-column-id="mismatch_cnt" data-type="numeric">Mismatches</th>
+            <th data-column-id="device"         data-sortable="false">Device</th>
+            <th data-column-id="array_name"     data-sortable="true">Array Name</th>
+            <th data-column-id="name"           data-sortable="true">MD Device</th>
+            <th data-column-id="level"          data-sortable="true">Level</th>
+            <th data-column-id="state"          data-sortable="true">State</th>
+            <th data-column-id="sync_action"    data-sortable="true">Operation</th>
+            <th data-column-id="raid_disks"     data-sortable="true" data-type="numeric">Disks</th>
+            <th data-column-id="active_devices" data-sortable="true" data-type="numeric">Active</th>
+            <th data-column-id="spare_devices"  data-sortable="true" data-type="numeric">Spare</th>
+            <th data-column-id="failed_devices" data-sortable="true" data-type="numeric">Failed</th>
+            <th data-column-id="size"           data-sortable="false">Size</th>
+            <th data-column-id="mismatch_cnt"   data-sortable="true" data-type="numeric">Mismatches</th>
         </tr>
         </thead>
     </table>
     <script>
-        $("#mdadm-arrays-table").bootgrid({
-            ajax: true,
-            post: function () {
-                return {
-                    id: "app_mdadm",
-                };
-            },
-            url: "ajax_table.php",
-        });
+        $("#mdadm-arrays-table").bootgrid({ ajax: true });
     </script>
     <?php
-} else {
-    $spec = $arrayGraphs[$vars['view']] ?? null;
-    if ($spec !== null) {
-        $arrays = App\Models\MdadmArray::with(['application.device'])->get();
+} elseif ($graphKey !== null) {
+    $spec    = $arrayGraphs[$graphKey];
+    $arrays  = App\Models\MdadmArray::with(['application.device'])->get();
+
+    if ($graphMode === 'mini') {
         echo '<div style="display:flex;flex-wrap:wrap;gap:12px;padding:8px">';
         foreach ($arrays as $arr) {
             $dev = $arr->application->device ?? null;
@@ -95,7 +124,7 @@ if ($vars['view'] === 'arrays') {
                 'app'    => 'mdadm',
                 'array'  => $arr->name,
             ]);
-            $graphArray = [
+            $graph_array = [
                 'height' => '80',
                 'width'  => '180',
                 'type'   => $spec['type'],
@@ -106,15 +135,37 @@ if ($vars['view'] === 'arrays') {
                 'legend' => 'no',
             ];
             if (isset($spec['metric'])) {
-                $graphArray['metric'] = $spec['metric'];
+                $graph_array['metric'] = $spec['metric'];
             }
-            $label = htmlspecialchars($dev->hostname . ' / ' . ($arr->name ?? $arr->uuid));
-            $graphTag = LibreNMS\Util\Url::lazyGraphTag($graphArray);
+            $label   = htmlspecialchars($dev->hostname . ' / ' . ($arr->name ?? $arr->uuid));
+            $graphTag = LibreNMS\Util\Url::lazyGraphTag($graph_array);
             echo '<div class="pull-left" style="margin-right:8px;margin-bottom:8px">'
                 . '<div class="text-muted" style="font-size:11px;margin-bottom:4px">' . $label . '</div>'
                 . '<a href="' . htmlspecialchars($arrUrl) . '">' . $graphTag . '</a>'
                 . '</div>';
         }
         echo '</div>';
+    } else {
+        foreach ($arrays as $arr) {
+            $dev = $arr->application->device ?? null;
+            if (! $dev) {
+                continue;
+            }
+            $graph_array = [
+                'type'  => $spec['type'],
+                'id'    => $arr->app_id,
+                'array' => $arr->name ?? $arr->uuid,
+                'to'    => App\Facades\LibrenmsConfig::get('time.now'),
+            ];
+            if (isset($spec['metric'])) {
+                $graph_array['metric'] = $spec['metric'];
+            }
+            $label = htmlspecialchars($dev->hostname . ' / ' . ($arr->name ?? $arr->uuid));
+            echo '<div class="panel panel-default">'
+                . '<div class="panel-heading"><h3 class="panel-title">' . $label . '</h3></div>'
+                . '<div class="panel-body"><div class="row">';
+            include 'includes/html/print-graphrow.inc.php';
+            echo '</div></div></div>';
+        }
     }
 }
