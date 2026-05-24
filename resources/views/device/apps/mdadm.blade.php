@@ -21,19 +21,6 @@ $arrayGraphs = [
     'diskio_bits' => ['type' => 'mdadm_diskio_bits',                            'title' => 'Disk I/O Bytes'],
 ];
 
-$overviewHeaders = [
-    'Array'      => ['tip' => '',                                                                                               'style' => ''],
-    'Level'      => ['tip' => 'RAID level (e.g. raid1, raid5). Determines redundancy and performance.',                        'style' => ''],
-    'Health'     => ['tip' => 'Overall array health derived from state flags and device counts.',                               'style' => ''],
-    'Operation'  => ['tip' => 'Current sync operation: idle, check, resync, recover, or repair.',                              'style' => ''],
-    'Disks'      => ['tip' => 'Number of member devices the array is configured to use (raid_disks).',                         'style' => ''],
-    'Active'     => ['tip' => 'Number of devices currently active and contributing to the array.',                             'style' => ''],
-    'Spare'      => ['tip' => 'Number of hot-spare devices ready to replace a failed member.',                                 'style' => ''],
-    'Size'       => ['tip' => 'Total usable size of the array after RAID overhead.',                                           'style' => 'white-space:nowrap'],
-    'Errors'     => ['tip' => 'Total read errors across all member devices.',                                                  'style' => ''],
-    'Mismatches' => ['tip' => 'Sectors found inconsistent during last check.',                                                 'style' => ''],
-];
-
 $statusFields = [
     'Array Name'         => ['key' => 'array_name',         'tooltip' => 'Human-readable name assigned with --name when creating or assembling the array.'],
     'RAID Level'         => ['key' => 'raid_level',         'tooltip' => 'The RAID level (e.g. raid0, raid1, raid5, raid6, raid10, linear).'],
@@ -153,62 +140,32 @@ $linkArray = [
     @endphp
 
     @if(!empty($data->arrayData))
-        @php
-            $panelStart('Arrays');
-            $ths = '';
-            foreach ($overviewHeaders as $h => $spec) {
-                $tipAttr   = $spec['tip']   !== '' ? ' title="' . htmlspecialchars($spec['tip'])   . '"' : '';
-                $styleAttr = $spec['style'] !== '' ? ' style="' . $spec['style'] . '"'             : '';
-                $ths .= "<th{$tipAttr}{$styleAttr}>" . htmlspecialchars($h) . '</th>';
-            }
-            echo "<table class=\"table table-condensed table-hover\"><thead><tr>{$ths}</tr></thead><tbody>";
-        @endphp
-
-        @foreach($data->arrayNames() as $name)
-            @php
-                $arrData  = $data->array($name);
-                $meta     = $data->arraysMeta[$name] ?? [];
-                $hEntry   = $arrData['mdadm_array_health_status']    ?? [];
-                $opEntry  = $arrData['mdadm_array_operation_status'] ?? [];
-                $mmVal    = $arrData['mdadm_array_mismatch']['val']  ?? null;
-
-                $errors = 0;
-                foreach (($arrData['devices'] ?? []) as $dev) {
-                    $errors += $dev['mdadm_device_error']['val'] ?? $dev['mdadm_device_errors']['val'] ?? 0;
-                }
-
-                $hBadge  = mdadm_badge($hEntry['label']  ?? 'Unknown', $hEntry['class']  ?? 'default', $hEntry['info']  ?? '');
-                $opBadge = mdadm_badge($opEntry['label'] ?? 'Unknown', $opEntry['class'] ?? 'default', $opEntry['info'] ?? '');
-
-                $sizeStr = isset($meta['size_bytes']) && $meta['size_bytes'] > 0
-                    ? LibreNMS\Util\Number::formatBi($meta['size_bytes'])
-                    : '&mdash;';
-                $mmCell  = $mmVal !== null
-                    ? '<span class="' . ($mmVal > 0 ? 'text-warning' : '') . '">' . (int) $mmVal . '</span>'
-                    : '&mdash;';
-                $errCell = $errors > 0
-                    ? '<span class="text-warning">' . $errors . '</span>'
-                    : (string) $errors;
-
-                $arrLink = generate_link(htmlspecialchars($name), $linkArray, ['array' => $name]);
-
-                $cells = [
-                    $arrLink,
-                    htmlspecialchars((string) ($meta['raid_level']      ?? '-')),
-                    $hBadge,
-                    $opBadge,
-                    (string) ($meta['raid_disks']       ?? '-'),
-                    (string) ($meta['active_devices']   ?? '-'),
-                    (string) ($meta['spare_devices']    ?? '-'),
-                    $sizeStr,
-                    $errCell,
-                    $mmCell,
-                ];
-                echo '<tr><td>' . implode('</td><td>', $cells) . '</td></tr>';
-            @endphp
-        @endforeach
-
-        @php echo '</tbody></table>'; $panelEnd(); @endphp
+        <table id="mdadm-arrays-table"
+               class="table table-condensed table-responsive table-striped"
+               data-url="{{ route('table.mdadm-array') }}"
+               data-app-id="{{ $app->app_id }}">
+            <thead>
+            <tr>
+                <th data-column-id="array_name"     data-sortable="true">Array Name</th>
+                <th data-column-id="name"           data-sortable="true">MD Device</th>
+                <th data-column-id="level"          data-sortable="true">Level</th>
+                <th data-column-id="state"          data-sortable="true">State</th>
+                <th data-column-id="sync_action"    data-sortable="true">Operation</th>
+                <th data-column-id="raid_disks"     data-sortable="true" data-type="numeric">Disks</th>
+                <th data-column-id="active_devices" data-sortable="true" data-type="numeric">Active</th>
+                <th data-column-id="spare_devices"  data-sortable="true" data-type="numeric">Spare</th>
+                <th data-column-id="failed_devices" data-sortable="true" data-type="numeric">Failed</th>
+                <th data-column-id="size"           data-sortable="false">Size</th>
+                <th data-column-id="mismatch_cnt"   data-sortable="true" data-type="numeric">Mismatches</th>
+            </tr>
+            </thead>
+        </table>
+        <script>
+            $("#mdadm-arrays-table").bootgrid({
+                ajax: true,
+                post: function() { return { app_id: {{ $app->app_id }} }; },
+            });
+        </script>
 
         {{-- Per-array graph panels (v3) or legacy graphs --}}
         @if($data->isLegacy)
