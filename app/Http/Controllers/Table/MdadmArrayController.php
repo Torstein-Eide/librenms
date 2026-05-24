@@ -56,7 +56,9 @@ class MdadmArrayController extends TableController
 
     protected function baseQuery(Request $request): Builder
     {
-        return MdadmArray::query()->with(['application.device']);
+        return MdadmArray::query()
+            ->with(['application.device'])
+            ->when($request->input('app_id'), fn ($q, $id) => $q->where('app_id', $id));
     }
 
     /**
