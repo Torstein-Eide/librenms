@@ -388,9 +388,12 @@ class HtmlData
             }
         }
 
-        // Legacy fallback: populate from RRD file names when no sensors exist
-        $isLegacy = $sensors->isEmpty();
-        if ($isLegacy && empty($arrayData)) {
+        // v2 arrays carry sensors but still use legacy RRD graphs (no v3 RRD data)
+        $isV2 = $this->dbArrays->isNotEmpty()
+            && $this->dbArrays->every(fn ($r) => str_starts_with((string) ($r->uuid ?? ''), 'v2:'));
+
+        $isLegacy = $sensors->isEmpty() || $isV2;
+        if ($sensors->isEmpty() && empty($arrayData)) {
             foreach (Rrd::getRrdApplicationArrays($this->device, $this->app->app_id, 'mdadm') as $name) {
                 $arrayData[$name] = [];
             }

@@ -240,7 +240,8 @@ $linkArray = [
                 $sizeStr     = isset($meta['size_bytes']) && $meta['size_bytes'] > 0
                     ? LibreNMS\Util\Number::formatBi($meta['size_bytes'])
                     : '-';
-                $mismatchVal = (int) ($arrData['mdadm_array_mismatch']['val'] ?? 0);
+                $mismatchRaw = $arrData['mdadm_array_mismatch']['val'] ?? '-';
+                $mismatchVal = is_numeric($mismatchRaw) ? (int) $mismatchRaw : null;
                 $chunkSize   = (int) ($meta['chunk_size'] ?? 0);
 
                 $panelStart(htmlspecialchars($name) . ' Status', $hBadge);
@@ -254,7 +255,9 @@ $linkArray = [
                     'Stripe unit for raid0/4/5/6/10. Larger chunks improve sequential I/O; smaller chunks improve random I/O parallelism.');
                 echo $tableRow(
                     'Mismatches',
-                    '<span' . ($mismatchVal > 0 ? ' class="text-warning"' : '') . '>' . $mismatchVal . '</span>',
+                    $mismatchVal !== null
+                        ? '<span' . ($mismatchVal > 0 ? ' class="text-warning"' : '') . '>' . $mismatchVal . '</span>'
+                        : '-',
                     'Number of sectors found inconsistent during the last check or repair operation.'
                 );
                 echo '</table>';
@@ -341,7 +344,8 @@ $linkArray = [
                 $path  = (string) ($metaDev['path'] ?? $devKey);
 
                 $dhEntry  = $dev['mdadm_device_health_status'] ?? [];
-                $errVal   = (int) ($dev['mdadm_device_error']['val'] ?? $dev['mdadm_device_errors']['val'] ?? 0);
+                $errRaw   = $dev['mdadm_device_error']['val'] ?? $dev['mdadm_device_errors']['val'] ?? '-';
+                $errVal   = is_numeric($errRaw) ? (int) $errRaw : null;
                 $sizeBytes = (int) ($metaDev['size_bytes'] ?? 0);
 
                 $cells = [
@@ -349,7 +353,7 @@ $linkArray = [
                     htmlspecialchars((string) ($metaDev['device_role']     ?? '-')),
                     mdadm_badge($dhEntry['label'] ?? 'Unknown', $dhEntry['class'] ?? 'default', $dhEntry['info'] ?? ''),
                     htmlspecialchars((string) ($metaDev['slot']            ?? '-')),
-                    $errVal > 0 ? '<span class="text-warning">' . $errVal . '</span>' : (string) $errVal,
+                    $errVal !== null ? ($errVal > 0 ? '<span class="text-warning">' . $errVal . '</span>' : (string) $errVal) : '-',
                     htmlspecialchars((string) ($metaDev['id_model']        ?? '-')),
                     htmlspecialchars((string) ($metaDev['id_serial_short'] ?? '-')),
                     $sizeBytes > 0 ? LibreNMS\Util\Number::formatBi($sizeBytes) : '-',
@@ -389,7 +393,7 @@ $linkArray = [
                     . ' S:' . (int) ($meta['spare_devices'] ?? 0)
                     . ' F:' . (int) ($meta['failed_devices'] ?? 0)
                     . ' D:' . (int) ($meta['degraded'] ?? 0),
-                'mismatch'    => (string) ((int) ($arrData['mdadm_array_mismatch']['val'] ?? 0)),
+                'mismatch'    => isset($arrData['mdadm_array_mismatch']['val']) ? (string) (int) $arrData['mdadm_array_mismatch']['val'] : '-',
                 'sync_bps'    => $syncData['speed_bps'] > 0
                     ? LibreNMS\Util\Number::formatBi($syncData['speed_bps'], suffix: 'B/s')
                     : '-',
