@@ -13,6 +13,7 @@ use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\Exceptions\JsonAppMissingKeysException;
 use LibreNMS\OS;
 use LibreNMS\RRD\RrdDefinition;
+use LibreNMS\Util\Debug;
 use LibreNMS\Util\Number;
 
 abstract class Application
@@ -245,7 +246,9 @@ abstract class Application
 
             $prevValue = $sensor->sensor_current;
 
-            Log::info("$value $unit");
+            if (Debug::isVerbose()) {
+                Log::info("$value $unit");
+            }
 
             app('Datastore')->put($device, 'sensor', [
                 'sensor_class' => $sensor->sensor_class,
