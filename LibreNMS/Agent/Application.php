@@ -158,6 +158,26 @@ abstract class Application
     }
 
     /**
+     * Log sensors with $oidPrefix that are absent from $expectedOids, then return their IDs.
+     * Call this before syncSensors() so the rows still exist when we read their descriptions.
+     *
+     * @return list<int>  sensor_ids that were logged (pass to deleteStaleAgentSensors if needed)
+     */
+    protected function logStaleSensorRemovals(string $oidPrefix, array $expectedOids): array
+    {
+        $stale = Sensor::where('device_id', $this->os->getDeviceId())
+            ->where('sensor_oid', 'like', $oidPrefix . '%')
+            ->when($expectedOids !== [], fn ($q) => $q->whereNotIn('sensor_oid', $expectedOids))
+            ->get(['sensor_id', 'sensor_descr']);
+
+        foreach ($stale as $sensor) {
+            $this->logEvent('notice', 'Removed sensor: ' . ($sensor->sensor_descr ?? $sensor->sensor_id));
+        }
+
+        return $stale->pluck('sensor_id')->all();
+    }
+
+    /**
      * Delete sensors whose OID starts with $oidPrefix but are no longer expected.
      * Removes rows where the OID is not in $expectedOids OR the type is not in $knownTypes.
      */
@@ -173,10 +193,6 @@ abstract class Application
                   ->orWhereNotIn('sensor_type', $knownTypes);
             })
             ->delete();
-
-        if ($deleted > 0) {
-            $this->logEvent('notice', "Removed $deleted stale sensor(s)");
-        }
 
         return $deleted;
     }
