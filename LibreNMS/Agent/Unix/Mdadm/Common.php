@@ -164,19 +164,32 @@ class Common extends Application
             'active-idle' => 12,
         ];
 
-        return $operationMap[$operation] ?? -1;
+        if (isset($operationMap[$operation])) {
+            return $operationMap[$operation];
+        }
+
+        // Inactive/readonly arrays have no sync action; reflect array state instead.
+        $state = str_replace('_', '-', strtolower(trim((string) ($array['state'] ?? ''))));
+        if ($state === 'inactive') {
+            return 7;
+        }
+        if (in_array($state, ['readonly', 'read-only'], true)) {
+            return 8;
+        }
+
+        return -1;
     }
 
     private function mapDeviceHealth(array $device): int
     {
         if (($device['is_missing'] ?? null) === true) {
-            return 7;
+            return 10;
         }
 
         $flags = array_map('strtolower', $device['state_flags'] ?? []);
         $state = strtolower(trim((string) ($device['state'] ?? '')));
 
-        foreach (['faulty' => 8, 'blocked' => 9, 'write_error' => 10, 'want_replacement' => 5, 'replacement' => 6] as $flag => $val) {
+        foreach (['faulty' => 9, 'blocked' => 8, 'write_error' => 7, 'want_replacement' => 5, 'replacement' => 6] as $flag => $val) {
             if (in_array($flag, $flags, true)) {
                 return $val;
             }
@@ -200,7 +213,16 @@ class Common extends Application
     public function discover(): void
     {
         $payload = $this->fetchPayload('mdadm', 1);
-        if ($payload === null || ($payload['version'] ?? 0) < 3) {
+        if ($payload === null) {
+            return;
+        }
+        $version = (int) ($payload['version'] ?? 0);
+        if ($version >= 1 && $version < 3) {
+            (new V2($this->os, $this->app, $this->agent_data))->discoverLegacy($payload);
+
+            return;
+        }
+        if ($version < 1) {
             return;
         }
         $this->initState($payload);
@@ -221,13 +243,10 @@ class Common extends Application
             return;
         }
         $version = $payload['version'] ?? 0;
-        if ($version < 2) {
-            (new V1($this->os, $this->app, $this->agent_data))->pollLegacy($payload);
-
-            return;
-        }
         if ($version < 3) {
-            (new V2($this->os, $this->app, $this->agent_data))->pollLegacy($payload);
+            $v2 = new V2($this->os, $this->app, $this->agent_data);
+            $v2->pollLegacy($payload);
+            $v2->pollDbLegacy($payload);
 
             return;
         }
@@ -637,7 +656,6 @@ class Common extends Application
 
     private function runPollDb(): void
     {
-
         foreach ($this->plarray as $uuid => $entry) {
             $array = $entry['array'] ?? [];
             $devices = is_array($entry['devices'] ?? null) ? $entry['devices'] : [];
@@ -683,7 +701,6 @@ class Common extends Application
                 ]);
             }
         }
-
     }
 
     private function collectMetrics(): array
