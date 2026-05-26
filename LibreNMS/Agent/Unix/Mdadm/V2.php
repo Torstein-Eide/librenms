@@ -8,6 +8,7 @@ use App\Models\StateTranslation;
 use LibreNMS\Agent\Application;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
+use LibreNMS\Util\Debug;
 
 /**
  * Handles agent script versions 1 and 2 (legacy payload format).
@@ -48,9 +49,18 @@ class V2 extends Application
     public function discoverLegacy(array $payload): void
     {
         $payload = self::normalize($payload);
-        if (self::agentError($payload) !== null) {
+        $errorCode = (int) ($payload['error'] ?? 0);
+        if ($errorCode !== 0 && $errorCode !== 2) {
+            if (Debug::isVerbose()) {
+                echo '  mdadm: skipping discovery — tool error ' . $errorCode . ': ' . ($payload['errorString'] ?? '') . PHP_EOL;
+            }
+
             return;
         }
+        if ($errorCode === 2 && Debug::isVerbose()) {
+            echo '  mdadm: no arrays found (' . ($payload['errorString'] ?? '') . ') — cleaning up stale records' . PHP_EOL;
+        }
+
         $deviceId = $this->os->getDeviceId();
         $appId = $this->app->app_id;
         $seenArrayIds = [];
@@ -68,6 +78,19 @@ class V2 extends Application
             }
 
             [$discCount, $hotspare, $failedTotal, $missingExplicit, $action, $isSyncing] = self::parseCounters($data);
+
+            if (Debug::isVerbose()) {
+                echo sprintf(
+                    '  mdadm: array %-12s  level=%-6s state=%-12s  disks=%d active=%d spare=%d failed=%d' . PHP_EOL,
+                    $arrayName,
+                    (string) ($data['level'] ?? ''),
+                    (string) ($data['state'] ?? ''),
+                    $discCount,
+                    max(0, $discCount - $hotspare - $failedTotal),
+                    $hotspare,
+                    $failedTotal
+                );
+            }
 
             $arrayRow = MdadmArray::updateOrCreate(
                 ['app_id' => $appId, 'uuid' => 'v2:' . $arrayName],
@@ -160,6 +183,9 @@ class V2 extends Application
                 }
                 $devIdx = $uuid . '_' . $devName . '_health';
                 $expectedOids[] = "app:mdadm:$devIdx";
+                if (Debug::isVerbose()) {
+                    echo "    mdadm: device $arrayName/$devName  Present" . PHP_EOL;
+                }
                 $this->discoverSensor(
                     class: 'state',
                     type: 'mdadm_device_health_status',
@@ -178,6 +204,9 @@ class V2 extends Application
                 }
                 $devIdx = $uuid . '_' . $devName . '_health';
                 $expectedOids[] = "app:mdadm:$devIdx";
+                if (Debug::isVerbose()) {
+                    echo "    mdadm: device $arrayName/$devName  Missing" . PHP_EOL;
+                }
                 $this->discoverSensor(
                     class: 'state',
                     type: 'mdadm_device_health_status',
@@ -191,10 +220,15 @@ class V2 extends Application
             }
         }
 
+        $staleCount = MdadmArray::where('app_id', $appId)->whereNotIn('id', $seenArrayIds)->count();
+        if ($staleCount > 0 && Debug::isVerbose()) {
+            echo "  mdadm: removing $staleCount stale array(s)" . PHP_EOL;
+        }
         MdadmArray::where('app_id', $appId)
             ->whereNotIn('id', $seenArrayIds)
             ->delete();
 
+        $this->logStaleSensorRemovals('app:mdadm:', $expectedOids);
         $this->syncSensors('mdadm_array_health_status', 'mdadm_array_operation_status', 'mdadm_device_health_status');
         $this->deleteStaleAgentSensors(
             oidPrefix: 'app:mdadm:',
@@ -258,6 +292,22 @@ class V2 extends Application
             ];
             app('Datastore')->put($this->os->getDeviceArray(), 'app', $tags, $fields);
         }
+
+        $degradedCount = 0;
+        $syncingCount = 0;
+        foreach ($metrics as $m) {
+            if ($m['degraded'] > 0) {
+                $degradedCount++;
+            }
+            if ($m['sync_speed'] > 0) {
+                $syncingCount++;
+            }
+        }
+        $metrics['arrays'] = count($metrics);
+        $metrics['devices_total'] = (int) array_sum(array_column($metrics, 'disc_count'));
+        $metrics['degraded_arrays'] = $degradedCount;
+        $metrics['arrays_syncing'] = $syncingCount;
+
         \update_application($this->app, 'OK', $metrics);
     }
 
@@ -265,7 +315,11 @@ class V2 extends Application
     public function pollDbLegacy(array $payload): void
     {
         $payload = self::normalize($payload);
-        if (self::agentError($payload) !== null) {
+        if (($err = self::agentError($payload)) !== null) {
+            if (Debug::isVerbose()) {
+                echo '  mdadm: skipping poll — ' . $err . PHP_EOL;
+            }
+
             return;
         }
         $appId = $this->app->app_id;
@@ -314,11 +368,20 @@ class V2 extends Application
                 $devName = (string) $devName;
                 if (in_array($devName, $missingDevs, true)) {
                     $sensorValues[$uuid . '_' . $devName . '_health'] = 10;
+                    if (Debug::isVerbose()) {
+                        echo "    mdadm: device $arrayName/$devName  Missing" . PHP_EOL;
+                    }
                 } elseif (in_array($devName, $presentDevs, true)) {
                     $sensorValues[$uuid . '_' . $devName . '_health'] = 0;
+                    if (Debug::isVerbose()) {
+                        echo "    mdadm: device $arrayName/$devName  Present" . PHP_EOL;
+                    }
                 } else {
                     // Physically removed from sysfs — not in either list; mark Unknown until next discovery
                     $sensorValues[$uuid . '_' . $devName . '_health'] = -1;
+                    if (Debug::isVerbose()) {
+                        echo "    mdadm: device $arrayName/$devName  removed from sysfs — marking Unknown" . PHP_EOL;
+                    }
                 }
             }
         }

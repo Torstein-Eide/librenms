@@ -8,6 +8,8 @@ use App\Models\StateTranslation;
 use Illuminate\Database\Eloquent\Collection;
 use LibreNMS\Agent\Application;
 use LibreNMS\Enum\Severity;
+use LibreNMS\Exceptions\JsonAppExtendErroredException;
+use LibreNMS\Exceptions\JsonAppMissingKeysException;
 use LibreNMS\RRD\RrdDefinition;
 use LibreNMS\Util\Debug;
 
@@ -212,7 +214,7 @@ class Common extends Application
 
     public function discover(): void
     {
-        $payload = $this->fetchPayload('mdadm', 1);
+        $payload = $this->fetchMdadmPayload();
         if ($payload === null) {
             return;
         }
@@ -238,7 +240,7 @@ class Common extends Application
 
     public function poll(): void
     {
-        $payload = $this->fetchPayload('mdadm', 1);
+        $payload = $this->fetchMdadmPayload();
         if ($payload === null) {
             return;
         }
@@ -255,6 +257,28 @@ class Common extends Application
         $this->runPollRrd();
         $this->runPollDb();
         \update_application($this->app, 'ok', $this->collectMetrics());
+    }
+
+    /**
+     * Like fetchPayload() but returns the parsed JSON even when the agent sets error != 0,
+     * so callers can act on error codes (e.g. error=2 "no arrays" triggers DB cleanup).
+     * Tool errors that produce no parseable JSON still return null.
+     */
+    private function fetchMdadmPayload(): ?array
+    {
+        try {
+            return \json_app_get($this->os->getDeviceArray(), 'mdadm', 1);
+        } catch (JsonAppExtendErroredException $e) {
+            if (Debug::isVerbose()) {
+                echo '  mdadm: agent error ' . $e->getCode() . ': ' . $e->getMessage() . PHP_EOL;
+            }
+
+            return $e->getParsedJson() ?: null;
+        } catch (JsonAppMissingKeysException $e) {
+            return $e->getParsedJson() ?: null;
+        } catch (\Exception $e) {
+            return null;
+        }
     }
 
     private function initState(array $payload): void
@@ -323,14 +347,6 @@ class Common extends Application
             $this->discoveryArray((string) $uuid);
         }
 
-        $this->syncSensors(
-            'mdadm_array_health_status',
-            'mdadm_array_operation_status',
-            'mdadm_array_mismatch',
-            'mdadm_device_health_status',
-            'mdadm_device_error',
-        );
-
         $expectedOids = [];
         foreach (array_keys($this->plarray) as $uuid) {
             $expectedOids[] = "app:mdadm:{$uuid}_health";
@@ -341,6 +357,15 @@ class Common extends Application
                 $expectedOids[] = "app:mdadm:{$uuid}_{$devId}_errors";
             }
         }
+
+        $this->logStaleSensorRemovals('app:mdadm:', $expectedOids);
+        $this->syncSensors(
+            'mdadm_array_health_status',
+            'mdadm_array_operation_status',
+            'mdadm_array_mismatch',
+            'mdadm_device_health_status',
+            'mdadm_device_error',
+        );
 
         $this->deleteStaleAgentSensors(
             oidPrefix: 'app:mdadm:',
