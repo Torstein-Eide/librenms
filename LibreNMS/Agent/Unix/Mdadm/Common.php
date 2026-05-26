@@ -331,6 +331,31 @@ class Common extends Application
         }
     }
 
+    /**
+     * Append any v3 datasets missing from a legacy v1/v2 RRD file.
+     *
+     * Old files contain: level, size, disc_count, hotspare_count, degraded, sync_speed, sync_completed
+     * This adds the v3-only datasets that are absent; existing datasets (including legacy ones) are untouched.
+     * `degraded` is present in both layouts under the same name and is therefore skipped automatically.
+     */
+    private function migrateLegacyArrayRrd(string $hostname, string $arrayName): void
+    {
+        $rrdFile = \App\Facades\Rrd::name($hostname, ['app', 'mdadm', $this->app->app_id, $arrayName]);
+        if (! \App\Facades\Rrd::checkRrdExists($rrdFile)) {
+            return;
+        }
+
+        \App\Facades\Rrd::addDatasets($rrdFile, [
+            ['name' => 'active',        'type' => 'GAUGE',  'heartbeat' => 600, 'min' => 0, 'max' => null],
+            ['name' => 'spare',         'type' => 'GAUGE',  'heartbeat' => 600, 'min' => 0, 'max' => null],
+            ['name' => 'failed',        'type' => 'GAUGE',  'heartbeat' => 600, 'min' => 0, 'max' => null],
+            ['name' => 'mismatch',      'type' => 'GAUGE',  'heartbeat' => 600, 'min' => 0, 'max' => null],
+            ['name' => 'done_sectors',  'type' => 'DERIVE', 'heartbeat' => 600, 'min' => 0, 'max' => null],
+            ['name' => 'completed_pct', 'type' => 'GAUGE',  'heartbeat' => 600, 'min' => 0, 'max' => 100],
+            ['name' => 'speed_bps',     'type' => 'GAUGE',  'heartbeat' => 600, 'min' => 0, 'max' => null],
+        ]);
+    }
+
     private function runDiscovery(): void
     {
         $this->discovery = [];
@@ -339,7 +364,14 @@ class Common extends Application
 
         app()->forgetInstance('sensor-discovery');
 
+        $hostname = $this->os->getDeviceArray()['hostname'] ?? '';
+
         foreach (array_keys($this->plarray) as $uuid) {
+            $arrayName = (string) ($this->plarray[$uuid]['array']['name'] ?? '');
+            if ($arrayName !== '' && $hostname !== '') {
+                $this->migrateLegacyArrayRrd($hostname, $arrayName);
+            }
+
             $this->discovery['arrays'][(string) $uuid] = [
                 'devices_count' => count($this->plarray[$uuid]['devices']),
                 'devices'       => [],
