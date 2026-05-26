@@ -393,7 +393,7 @@ class HtmlData
             && $this->dbArrays->every(fn ($r) => str_starts_with((string) ($r->uuid ?? ''), 'v2:'));
 
         $isLegacy = $sensors->isEmpty() || $isV2;
-        if ($sensors->isEmpty() && empty($arrayData)) {
+        if ($sensors->isEmpty() && empty($arrayData) && $this->dbArrays->isNotEmpty()) {
             foreach (Rrd::getRrdApplicationArrays($this->device, $this->app->app_id, 'mdadm') as $name) {
                 $arrayData[$name] = [];
             }
