@@ -538,6 +538,7 @@ class SmartPage
                         <th>Type</th>
                         <th>Temp (°C)</th>
                         <th>Health</th>
+                        <th>Self-test Status</th>
                         <th>Wear</th>
                         <th>Last Short Self-test</th>
                         <th>Last Long Self-test</th>
@@ -556,11 +557,12 @@ class SmartPage
             $type = htmlspecialchars($this->overviewType($disk));
             $temp = $this->overviewTempBadge($disk, (string) $key, $sensors);
             $health = $this->overviewHealthBadge($disk, (string) $key, $sensors);
+            $status = $this->overviewSelftestStatusBadge((string) $key, $sensors);
             $wear = $this->overviewWearBadge($disk, (string) $key, $sensors);
             $short = $this->overviewSelftestBadge($disk, (string) $key, 'short', $sensors);
             $long = $this->overviewSelftestBadge($disk, (string) $key, 'extended', $sensors);
 
-            echo "<tr><td>{$diskLink}</td><td>{$model}</td><td>{$serial}</td><td>{$type}</td><td>{$temp}</td><td>{$health}</td><td>{$wear}</td><td>{$short}</td><td>{$long}</td></tr>\n";
+            echo "<tr><td>{$diskLink}</td><td>{$model}</td><td>{$serial}</td><td>{$type}</td><td>{$temp}</td><td>{$health}</td><td>{$status}</td><td>{$wear}</td><td>{$short}</td><td>{$long}</td></tr>\n";
         }
 
         echo <<<'HTML'
@@ -582,34 +584,70 @@ class SmartPage
             'to'   => App\Facades\LibrenmsConfig::get('time.now'),
         ];
 
-        // ── All temperatures ──────────────────────────────────────────────────
-        $graph_array = $baseGraph + ['height' => '100', 'width' => '215', 'type' => 'application_smart_v2_all_temp', 'page_title' => 'All Drives — Temperatures'];
-        $this->panelStart('All Temperatures');
-        echo '<div class="row">';
-        include 'includes/html/print-graphrow.inc.php';
-        echo '</div>';
-        $this->panelEnd();
+        $sections = [
+            [
+                'id' => 'smart-overview-graph-all-temp',
+                'title' => 'All Temperatures',
+                'graph' => [
+                    'height' => '100',
+                    'width' => '215',
+                    'type' => 'application_smart_v2_all_temp',
+                    'page_title' => 'All Drives — Temperatures',
+                ],
+            ],
+            [
+                'id' => 'smart-overview-graph-all-wear',
+                'title' => 'Wear Remaining',
+                'graph' => [
+                    'height' => '100',
+                    'width' => '215',
+                    'type' => 'application_smart_v2_all_wear',
+                    'page_title' => 'All Drives — Wear Remaining',
+                ],
+            ],
+        ];
 
-        // ── All wear ──────────────────────────────────────────────────────────
-        $graph_array = $baseGraph + ['height' => '100', 'width' => '215', 'type' => 'application_smart_v2_all_wear', 'page_title' => 'All Drives — Wear Remaining'];
-        $this->panelStart('Wear Remaining');
-        echo '<div class="row">';
-        include 'includes/html/print-graphrow.inc.php';
-        echo '</div>';
-        $this->panelEnd();
-
-        // ── Per-attribute-ID multiline graphs ─────────────────────────────────
         $attrIds = $this->collectOverviewAttrIds($disks);
         foreach ($attrIds as $id => $name) {
             $title = 'ID# ' . $id . ', ' . $name;
-            $graph_array = $baseGraph + [
-                'height'     => '100',
-                'width'      => '215',
-                'type'       => 'application_smart_v2_attr_multi',
-                'attr_id'    => $id,
-                'page_title' => 'All Drives — ' . $title,
+            $sections[] = [
+                'id' => 'smart-overview-graph-attr-' . (int) $id,
+                'title' => $title,
+                'graph' => [
+                    'height' => '100',
+                    'width' => '215',
+                    'type' => 'application_smart_v2_attr_multi',
+                    'attr_id' => $id,
+                    'page_title' => 'All Drives — ' . $title,
+                ],
             ];
-            $this->panelStart(htmlspecialchars($title));
+        }
+
+        if ($sections !== []) {
+            $jumpBaseUrl = $this->currentSmartUrl();
+            $jumpItems = [];
+            foreach ($sections as $section) {
+                $sectionId = htmlspecialchars((string) $section['id']);
+                $title = htmlspecialchars((string) $section['title']);
+                $jumpItems[] = '<div style="break-inside:avoid-column;-webkit-column-break-inside:avoid;padding:1px 0">'
+                    . '<a href="' . htmlspecialchars($jumpBaseUrl . '#' . $sectionId, ENT_QUOTES) . '">' . $title . '</a>'
+                    . '</div>';
+            }
+
+            echo '<div class="panel panel-default">'
+                . '<div class="panel-body" style="padding:10px 15px">'
+                . '<strong>Jump to graph:</strong>'
+                . '<div style="column-width:260px;column-gap:18px;margin-top:6px">' . implode('', $jumpItems) . '</div>'
+                . '</div></div>';
+        }
+
+        foreach ($sections as $section) {
+            $sectionId = htmlspecialchars((string) $section['id']);
+            $title = htmlspecialchars((string) $section['title']);
+            $graph_array = $baseGraph + $section['graph'];
+
+            echo '<a id="' . $sectionId . '" style="position:relative;top:-70px;display:block;visibility:hidden"></a>';
+            $this->panelStart($title);
             echo '<div class="row">';
             include 'includes/html/print-graphrow.inc.php';
             echo '</div>';
@@ -755,7 +793,25 @@ class SmartPage
         $diskIdx = $this->diskIndex($diskKey);
 
         $sensor = $sensors->get("{$diskIdx}_nvme_crit_warn") ?? $sensors->get("{$diskIdx}_health");
+
+        return $this->stateSensorBadge($sensor);
+    }
+
+    private function overviewSelftestStatusBadge(string $diskKey, mixed $sensors): string
+    {
+        $diskIdx = $this->diskIndex($diskKey);
+        $sensor = $sensors->get("{$diskIdx}_selftest_status");
+
+        return $this->stateSensorBadge($sensor);
+    }
+
+    private function stateSensorBadge(mixed $sensor): string
+    {
         if (! $sensor) {
+            return '<span class="text-muted">-</span>';
+        }
+
+        if ($sensor->sensor_current === null || (int) $sensor->sensor_current < 0) {
             return '<span class="text-muted">-</span>';
         }
 
@@ -763,9 +819,9 @@ class SmartPage
         $descr = $translation ? htmlspecialchars($translation->state_descr) : (string) (int) $sensor->sensor_current;
 
         $class = match ($translation?->severity()) {
-            \LibreNMS\Enum\Severity::Ok      => 'default',
-            \LibreNMS\Enum\Severity::Warning => 'warning',
-            \LibreNMS\Enum\Severity::Error   => 'danger',
+            LibreNMS\Enum\Severity::Ok      => 'default',
+            LibreNMS\Enum\Severity::Warning => 'warning',
+            LibreNMS\Enum\Severity::Error   => 'danger',
             default                          => 'default',
         };
 
@@ -959,6 +1015,7 @@ class SmartPage
     private function renderNvmeGraphs(string $key): void
     {
         $diskIdx = $this->diskIndex($key);
+        $anchorPrefix = 'smart-device-' . $diskIdx . '-graph-';
         $sensors = Sensor::where('device_id', $this->device['device_id'])
             ->where('sensor_oid', 'like', "app:smart:{$diskIdx}_%")
             ->get()
@@ -976,6 +1033,26 @@ class SmartPage
             $wearHeader[] = 'Used: ' . (int) $nvmeLog['percentage_used'] . '%';
         }
 
+        $sections = [
+            ['id' => $anchorPrefix . 'wear', 'title' => 'Wear'],
+            ['id' => $anchorPrefix . 'media-errors', 'title' => 'Media Errors'],
+            ['id' => $anchorPrefix . 'data-units', 'title' => 'Data Units Read/Write'],
+            ['id' => $anchorPrefix . 'host-io', 'title' => 'Host Reads/Writes'],
+            ['id' => $anchorPrefix . 'controller-busy', 'title' => 'Controller Busy Time'],
+        ];
+
+        $tempSensor = $sensors->get("{$diskIdx}_temp");
+        if ($tempSensor) {
+            $sections[] = ['id' => $anchorPrefix . 'temperature', 'title' => 'Sensor Temperature'];
+        }
+
+        $wearSensor = $sensors->get("{$diskIdx}_wear");
+        if ($wearSensor) {
+            $sections[] = ['id' => $anchorPrefix . 'remaining', 'title' => 'Remaining'];
+        }
+
+        $this->renderDeviceGraphJumpNav($sections);
+
         $this->renderAppRrdGraph(
             'smart_v2_nvme_wear',
             'Wear',
@@ -985,22 +1062,21 @@ class SmartPage
                 'avail_spare_threshold' => is_numeric($nvmeLog['available_spare_threshold'] ?? null)
                     ? (string) (int) $nvmeLog['available_spare_threshold']
                     : '',
-            ]
+            ],
+            $anchorPrefix . 'wear'
         );
 
-        $tempSensor = $sensors->get("{$diskIdx}_temp");
         if ($tempSensor) {
-            $this->renderSensorGraph($tempSensor, 'Sensor Temperature');
+            $this->renderSensorGraph($tempSensor, 'Sensor Temperature', '', $anchorPrefix . 'temperature');
         }
 
-        $this->renderAppRrdGraph('smart_v2_nvme', 'Media Errors', $diskIdx, null, ['metric' => 'media_errors']);
-        $this->renderAppRrdGraph('smart_v2_nvme', 'Data Units Read/Write', $diskIdx, null, ['metric' => 'data_units']);
-        $this->renderAppRrdGraph('smart_v2_nvme', 'Host Reads/Writes', $diskIdx, null, ['metric' => 'host_io']);
-        $this->renderAppRrdGraph('smart_v2_nvme', 'Controller Busy Time', $diskIdx, null, ['metric' => 'controller_busy']);
+        $this->renderAppRrdGraph('smart_v2_nvme', 'Media Errors', $diskIdx, null, ['metric' => 'media_errors'], $anchorPrefix . 'media-errors');
+        $this->renderAppRrdGraph('smart_v2_nvme', 'Data Units Read/Write', $diskIdx, null, ['metric' => 'data_units'], $anchorPrefix . 'data-units');
+        $this->renderAppRrdGraph('smart_v2_nvme', 'Host Reads/Writes', $diskIdx, null, ['metric' => 'host_io'], $anchorPrefix . 'host-io');
+        $this->renderAppRrdGraph('smart_v2_nvme', 'Controller Busy Time', $diskIdx, null, ['metric' => 'controller_busy'], $anchorPrefix . 'controller-busy');
 
-        $wearSensor = $sensors->get("{$diskIdx}_wear");
         if ($wearSensor) {
-            $this->renderSensorGraph($wearSensor, 'Remaining');
+            $this->renderSensorGraph($wearSensor, 'Remaining', '', $anchorPrefix . 'remaining');
         }
     }
 
@@ -1093,7 +1169,7 @@ class SmartPage
             $this->renderIdentity();
         }
         if (isset($this->disk['selftest'])) {
-            $this->renderSelftest();
+            $this->renderSelftest($key);
         }
         $this->panelsRowEnd();
         if (isset($this->disk['attributes'])) {
@@ -1122,7 +1198,7 @@ class SmartPage
         }
 
         if (isset($this->disk['selftest'])) {
-            $this->renderSelftest();
+            $this->renderSelftest($key);
         }
 
         if (isset($this->disk['stats'])) {
@@ -1182,7 +1258,7 @@ class SmartPage
         return in_array($protocol, ['ata', 'sata'], true) || $deviceType === 'sat';
     }
 
-    private function renderSensorGraph(mixed $sensor, string $title, string $badge = ''): void
+    private function renderSensorGraph(mixed $sensor, string $title, string $badge = '', ?string $anchorId = null): void
     {
         $graph_array = [
             'height' => '100',
@@ -1200,6 +1276,8 @@ class SmartPage
             $badge = '<span class="text-muted">' . $value . '</span>';
         }
 
+        $this->renderGraphAnchor($anchorId);
+
         $this->panelStart(htmlspecialchars($title), $badge);
         echo '<div class="row">';
 
@@ -1209,7 +1287,7 @@ class SmartPage
         $this->panelEnd();
     }
 
-    private function renderAppRrdGraph(string $graphType, string $graphTitle, string $diskIdx, ?string $headerValue = null, array $extraVars = []): void
+    private function renderAppRrdGraph(string $graphType, string $graphTitle, string $diskIdx, ?string $headerValue = null, array $extraVars = [], ?string $anchorId = null): void
     {
         $graph_array = [
             'height'    => '100',
@@ -1228,6 +1306,8 @@ class SmartPage
         $badge = $headerValue !== null && $headerValue !== ''
             ? '<span class="text-muted">' . htmlspecialchars($headerValue) . '</span>'
             : '';
+
+        $this->renderGraphAnchor($anchorId);
 
         $this->panelStart(htmlspecialchars($graphTitle), $badge);
         echo '<div class="row">';
@@ -1266,6 +1346,7 @@ JS;
     private function renderDriveGraphs(string $diskKey, array $disk): void
     {
         $diskIdx = $this->diskIndex($diskKey);
+        $anchorPrefix = 'smart-device-' . $diskIdx . '-graph-';
         $this->diskLabel = trim(($disk['identity']['dev_name'] ?? $diskKey) . ' ' . ($disk['identity']['model_name'] ?? ''));
         $isAta = $this->diskIsAta();
         $attributeSpecs = $this->ataAttributeGraphSpecs($diskIdx, $disk);
@@ -1275,16 +1356,49 @@ JS;
             ->get()
             ->keyBy('sensor_index');
 
+        $tempSensor = $sensors->get("{$diskIdx}_temp");
+        $healthSensor = $sensors->get("{$diskIdx}_health");
+        $wearSensor = $sensors->get("{$diskIdx}_wear");
+        $hasSelftest = $sensors->has("{$diskIdx}_selftest_short") || $sensors->has("{$diskIdx}_selftest_long");
+        $hasBig5 = $isAta && $this->hasBig5DatasetInRrd($diskIdx);
+        $hasOther = $isAta && $this->hasOtherDatasetInRrd($diskIdx);
+
+        $sections = [];
+        if ($tempSensor) {
+            $sections[] = ['id' => $anchorPrefix . 'temperature', 'title' => 'Temperature'];
+        }
+        if ($healthSensor) {
+            $sections[] = ['id' => $anchorPrefix . 'health', 'title' => 'Health'];
+        }
+        if ($wearSensor) {
+            $sections[] = ['id' => $anchorPrefix . 'wear', 'title' => 'Wear Remaining'];
+        }
+        if ($hasSelftest) {
+            $sections[] = ['id' => $anchorPrefix . 'selftest', 'title' => 'Self-test Age'];
+        }
+        if ($hasBig5) {
+            $sections[] = ['id' => $anchorPrefix . 'big5', 'title' => 'Reliability / Age (Big 5 ATA Attributes)'];
+        }
+        if ($hasOther) {
+            $sections[] = ['id' => $anchorPrefix . 'other', 'title' => 'Other'];
+        }
+        if ($isAta) {
+            $sections[] = ['id' => $anchorPrefix . 'power', 'title' => 'Power-on Hours'];
+        }
+        foreach ($attributeSpecs as $attr) {
+            $sections[] = ['id' => $anchorPrefix . 'attr-' . (int) $attr['id'], 'title' => $attr['title']];
+        }
+
+        $this->renderDeviceGraphJumpNav($sections);
+
         // ── Basic graphs ─────────────────────────────────────────────
 
         // Temperature
-        $tempSensor = $sensors->get("{$diskIdx}_temp");
         if ($tempSensor) {
-            $this->renderSensorGraph($tempSensor, 'Temperature');
+            $this->renderSensorGraph($tempSensor, 'Temperature', '', $anchorPrefix . 'temperature');
         }
 
         // Health - colored Passed/Failed badge
-        $healthSensor = $sensors->get("{$diskIdx}_health");
         if ($healthSensor) {
             $passed = $disk['health']['smart_passed'] ?? null;
             $healthBadge = match ($passed) {
@@ -1292,29 +1406,28 @@ JS;
                 false   => '<span class="label label-danger">Failed</span>',
                 default => '',
             };
-            $this->renderSensorGraph($healthSensor, 'Health', $healthBadge);
+            $this->renderSensorGraph($healthSensor, 'Health', $healthBadge, $anchorPrefix . 'health');
         }
 
         // Wear
-        $wearSensor = $sensors->get("{$diskIdx}_wear");
         if ($wearSensor) {
-            $this->renderSensorGraph($wearSensor, 'Wear Remaining');
+            $this->renderSensorGraph($wearSensor, 'Wear Remaining', '', $anchorPrefix . 'wear');
         }
 
         // Self-test age
-        if ($sensors->has("{$diskIdx}_selftest_short") || $sensors->has("{$diskIdx}_selftest_long")) {
-            $this->renderAppRrdGraph('smart_v2_selftest', 'Self-test Age', $diskIdx, $this->selftestHeaderValue($sensors, $diskIdx));
+        if ($hasSelftest) {
+            $this->renderAppRrdGraph('smart_v2_selftest', 'Self-test Age', $diskIdx, $this->selftestHeaderValue($sensors, $diskIdx), [], $anchorPrefix . 'selftest');
         }
 
         // ATA-only RRD graphs
         if ($isAta) {
-            if ($this->hasBig5DatasetInRrd($diskIdx)) {
-                $this->renderAppRrdGraph('smart_v2_big5', 'Reliability / Age (Big 5 ATA Attributes)', $diskIdx, $this->reliabilityHeaderValue($disk));
+            if ($hasBig5) {
+                $this->renderAppRrdGraph('smart_v2_big5', 'Reliability / Age (Big 5 ATA Attributes)', $diskIdx, $this->reliabilityHeaderValue($disk), [], $anchorPrefix . 'big5');
             }
-            if ($this->hasOtherDatasetInRrd($diskIdx)) {
-                $this->renderAppRrdGraph('smart_v2_other', 'Other', $diskIdx);
+            if ($hasOther) {
+                $this->renderAppRrdGraph('smart_v2_other', 'Other', $diskIdx, null, [], $anchorPrefix . 'other');
             }
-            $this->renderAppRrdGraph('smart_v2_power', 'Power-on Hours', $diskIdx, $this->powerHeaderValue($disk));
+            $this->renderAppRrdGraph('smart_v2_power', 'Power-on Hours', $diskIdx, $this->powerHeaderValue($disk), [], $anchorPrefix . 'power');
         }
 
         // ── Attribute graphs ─────────────────────────────────────────
@@ -1322,7 +1435,7 @@ JS;
         if ($attributeSpecs !== []) {
             $this->emitAttrScaleScript();
             $wrapperId = 'smart-attr-graphs-' . htmlspecialchars($diskIdx);
-            $toggleId  = 'smart-attr-scale-' . htmlspecialchars($diskIdx);
+            $toggleId = 'smart-attr-scale-' . htmlspecialchars($diskIdx);
             echo '<h4 style="margin:20px 0 8px;border-bottom:1px solid #ddd;padding-bottom:6px">'
                 . 'Attributes'
                 . '<label style="float:right;font-size:13px;font-weight:normal;margin-bottom:0;cursor:pointer">'
@@ -1341,11 +1454,63 @@ JS;
                         'attr_thresh' => $attr['thresh'] !== null ? (string) $attr['thresh'] : '',
                         'has_raw'     => $attr['has_raw'] ? '1' : '0',
                         'has_norm'    => $attr['has_norm'] ? '1' : '0',
-                    ]
+                    ],
+                    $anchorPrefix . 'attr-' . (int) $attr['id']
                 );
             }
             echo '</div>';
         }
+    }
+
+    private function renderDeviceGraphJumpNav(array $sections): void
+    {
+        if ($sections === []) {
+            return;
+        }
+
+        $jumpBaseUrl = $this->currentSmartUrl();
+
+        $jumpItems = [];
+        foreach ($sections as $section) {
+            $sectionId = htmlspecialchars((string) ($section['id'] ?? ''));
+            $title = htmlspecialchars((string) ($section['title'] ?? ''));
+            if ($sectionId === '' || $title === '') {
+                continue;
+            }
+
+            $jumpItems[] = '<div style="break-inside:avoid-column;-webkit-column-break-inside:avoid;padding:1px 0">'
+                . '<a href="' . htmlspecialchars($jumpBaseUrl . '#' . $sectionId, ENT_QUOTES) . '">' . $title . '</a>'
+                . '</div>';
+        }
+
+        if ($jumpItems === []) {
+            return;
+        }
+
+        echo '<div class="panel panel-default">'
+            . '<div class="panel-body" style="padding:10px 15px">'
+            . '<strong>Jump to graph:</strong>'
+            . '<div style="column-width:260px;column-gap:18px;margin-top:6px">' . implode('', $jumpItems) . '</div>'
+            . '</div></div>';
+    }
+
+    private function currentSmartUrl(): string
+    {
+        if (isset($this->vars['disk'])) {
+            return LibreNMS\Util\Url::generate($this->baseLink + ['disk' => (string) $this->vars['disk']]);
+        }
+
+        return LibreNMS\Util\Url::generate($this->baseLink);
+    }
+
+    private function renderGraphAnchor(?string $anchorId): void
+    {
+        if (! is_string($anchorId) || $anchorId === '') {
+            return;
+        }
+
+        $anchorId = htmlspecialchars($anchorId);
+        echo '<a id="' . $anchorId . '" style="position:relative;top:-70px;display:block;visibility:hidden"></a>';
     }
 
     private function selftestHeaderValue(mixed $sensors, string $diskIdx): string
@@ -1677,6 +1842,8 @@ JS;
                 $flat[$key] = LibreNMS\Util\Number::formatBi($value);
             } elseif (in_array($key, ['logical_block_size', 'physical_block_size'], true) && is_int($value)) {
                 $flat[$key] = LibreNMS\Util\Number::formatSi($value, 0, 0, 'B');
+            } elseif ($key === 'power_on_hours' && is_numeric($value)) {
+                $flat[$key] = number_format((int) $value, 0, '.', ' ');
             } elseif ($key === 'rotation_rate' && is_int($value)) {
                 $flat[$key] = $value . ' RPM';
             } else {
@@ -1714,6 +1881,9 @@ JS;
         // 5. Size
         $add('capacity_bytes', $data['capacity_bytes'] ?? null);
 
+        // 5b. Power-on hours (from power section)
+        $add('power_on_hours', $this->disk['power']['power_on_time']['hours'] ?? null);
+
         // 6. Firmware
         $add('firmware_version', $data['firmware_version'] ?? null);
 
@@ -1748,7 +1918,7 @@ JS;
         $this->panelEnd();
     }
 
-    private function renderSelftest(): void
+    private function renderSelftest(string $diskKey): void
     {
         $data = $this->disk['selftest'];
         $dst = isset($data['ata_smart_data_self_test']) && is_array($data['ata_smart_data_self_test'])
@@ -1783,7 +1953,7 @@ JS;
                     'conveyance' => 'Est. Conveyance Test',
                 ];
                 $flat = [];
-                $statusStr = $dst['status']['string'] ?? null;
+                $statusStr = $this->selftestStatusText($diskKey);
                 if ($statusStr !== null) {
                     $flat['Status'] = $statusStr;
                 }
@@ -1824,6 +1994,23 @@ JS;
             echo '</div>';
             $this->panelEnd();
         }
+    }
+
+    private function selftestStatusText(string $diskKey): ?string
+    {
+        $diskIdx = $this->diskIndex($diskKey);
+        $sensor = Sensor::where('device_id', $this->device['device_id'])
+            ->where('sensor_index', "{$diskIdx}_selftest_status")
+            ->with('translations')
+            ->first();
+
+        if (! $sensor || $sensor->sensor_current === null || (int) $sensor->sensor_current < 0) {
+            return null;
+        }
+
+        $translation = $sensor->currentTranslation();
+
+        return $translation ? (string) $translation->state_descr : (string) (int) $sensor->sensor_current;
     }
 
     private function renderStats(): void
