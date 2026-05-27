@@ -2,8 +2,20 @@
 
 use App\Facades\LibrenmsConfig;
 use LibreNMS\Enum\Sensor;
+use LibreNMS\Util\Clean;
 use LibreNMS\Util\Rewrite;
 use LibreNMS\Util\Url;
+
+// Sensors owned by app-specific overview panels are rendered there instead.
+$appOverviewOidPrefixes = DeviceCache::getPrimary()->applications
+    ->filter(static function ($app): bool {
+        return is_file('includes/html/pages/device/overview/apps/' . Clean::fileName($app->app_type) . '.inc.php');
+    })
+    ->map(static function ($app): string {
+        return 'app:' . $app->app_type . ':';
+    })
+    ->values()
+    ->all();
 
 // Sensor overview panels, rendered in this order. Each empty class is skipped below.
 $sensor_overview_order = [
@@ -41,10 +53,22 @@ $sensor_overview_order = [
 ];
 
 foreach ($sensor_overview_order as $sensor_class) {
-    $sensors = DeviceCache::getPrimary()->sensors->where('sensor_class', $sensor_class->value)->where('group', '!=', 'transceiver')->sortBy([
-        ['group', 'asc'],
-        ['sensor_descr', 'asc'],
-    ]); // cache all sensors on device and exclude transceivers
+    $sensors = DeviceCache::getPrimary()->sensors
+        ->where('sensor_class', $sensor_class->value)
+        ->where('group', '!=', 'transceiver')
+        ->filter(static function ($sensor) use ($appOverviewOidPrefixes): bool {
+            foreach ($appOverviewOidPrefixes as $prefix) {
+                if (str_starts_with((string) $sensor->sensor_oid, $prefix)) {
+                    return false;
+                }
+            }
+
+            return true;
+        })
+        ->sortBy([
+            ['group', 'asc'],
+            ['sensor_descr', 'asc'],
+        ]); // cache all sensors on device and exclude transceivers
 
     if ($sensors->isNotEmpty()) {
         // prepare each sensor for display: normalise the description (ipmi sensors get a
@@ -71,3 +95,5 @@ foreach ($sensor_overview_order as $sensor_class) {
         ]);
     }
 }
+
+unset($appOverviewOidPrefixes);
