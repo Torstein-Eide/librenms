@@ -120,6 +120,11 @@ class Rrd extends BaseDatastore
             self::renameFile($device_model, $meta['rrd_oldname'], $rrd_name);
         }
 
+        if (! empty($meta['rrd_ds_renames'])) {
+            $rrd = self::name($device_model->hostname, $rrd_name);
+            self::renameDatasets($rrd, $meta['rrd_ds_renames']);
+        }
+
         if (isset($meta['rrd_proxmox_name'])) {
             $pmxvars = $meta['rrd_proxmox_name'];
             $rrd = self::proxmoxName($pmxvars['pmxcluster'], $pmxvars['vmid'], $pmxvars['vmport']);
@@ -611,6 +616,44 @@ class Rrd extends BaseDatastore
     public function portName($port_id, $suffix = null): string
     {
         return "port-id$port_id" . (empty($suffix) ? '' : '-' . $suffix);
+    }
+
+    /**
+     * Rename one or more datasets inside an existing RRD file via rrdtool tune.
+     *
+     * Only renames datasets that exist under their old name and do not yet exist
+     * under their new name, so it is safe to call on every poll cycle.
+     *
+     * Usage:
+     *   Rrd::renameDatasets($rrdFilename, ['id194N' => 'id194Normalized', ...]);
+     *
+     * @param  string  $filename  Absolute path to the RRD file
+     * @param  array<string, string>  $renames  ['oldDsName' => 'newDsName', ...]
+     * @return bool false if any rename command returned an error
+     */
+    public function renameDatasets(string $filename, array $renames): bool
+    {
+        if (! is_file($filename) || empty($renames)) {
+            return true;
+        }
+
+        $existing = array_flip($this->listDatasets($filename));
+        $options  = [];
+
+        foreach ($renames as $old => $new) {
+            if (isset($existing[$old]) && ! isset($existing[$new])) {
+                $options[] = "--data-source-rename $old:$new";
+            }
+        }
+
+        if (empty($options)) {
+            return true;
+        }
+
+        $result = $this->command('tune', $filename, $options);
+        $output = implode('', $result);
+
+        return ! str_contains($output, 'ERROR');
     }
 
     /**
