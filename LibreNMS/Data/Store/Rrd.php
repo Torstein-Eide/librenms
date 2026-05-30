@@ -120,9 +120,14 @@ class Rrd extends BaseDatastore
             self::renameFile($device_model, $meta['rrd_oldname'], $rrd_name);
         }
 
-        if (! empty($meta['rrd_ds_renames'])) {
+        if (! empty($meta['rrd_ds_renames']) || ! empty($meta['rrd_ds_discard'])) {
             $rrd = self::name($device_model->hostname, $rrd_name);
-            self::renameDatasets($rrd, $meta['rrd_ds_renames']);
+            if (! empty($meta['rrd_ds_renames'])) {
+                self::renameDatasets($rrd, $meta['rrd_ds_renames']);
+            }
+            if (! empty($meta['rrd_ds_discard'])) {
+                self::discardDatasets($rrd, $meta['rrd_ds_discard']);
+            }
         }
 
         if (isset($meta['rrd_proxmox_name'])) {
@@ -654,6 +659,109 @@ class Rrd extends BaseDatastore
         $output = implode('', $result);
 
         return ! str_contains($output, 'ERROR');
+    }
+
+    /**
+     * Remove one or more datasets from an RRD file.
+     *
+     * rrdtool has no native "remove DS" command, so this uses dump → DOM
+     * manipulation → restore into a temp file → atomic rename.  Only acts
+     * on DS names that actually exist in the file, making it safe to call
+     * unconditionally (e.g. on every first write after a V1→V2 upgrade).
+     *
+     * Usage:
+     *   Rrd::discardDatasets($rrdFilename, ['completed', 'interrupted', 'readfailure']);
+     *
+     * @param  string  $filename  Absolute path to the RRD file
+     * @param  array<string>  $dsNames  DS names to remove
+     * @return bool false if the operation failed
+     */
+    public function discardDatasets(string $filename, array $dsNames): bool
+    {
+        if (! is_file($filename) || empty($dsNames)) {
+            return true;
+        }
+
+        $existing  = $this->listDatasets($filename);
+        $toRemove  = array_values(array_intersect($existing, $dsNames));
+
+        if (empty($toRemove)) {
+            return true;
+        }
+
+        // Build a map of DS name → 0-based index so we know which positional
+        // slots to strip from cdp_prep and row elements.
+        $indexByName = array_flip($existing);
+        $removeIdx   = array_map(fn ($ds) => $indexByName[$ds], $toRemove);
+        rsort($removeIdx); // descending so later removals don't shift earlier positions
+
+        // Dump the RRD to XML using a one-shot process (avoids pipe truncation).
+        $dump = new Process([$this->rrdtool_executable, 'dump', $filename]);
+        $dump->setTimeout(60);
+        $dump->run();
+
+        if (! $dump->isSuccessful()) {
+            Log::error("rrdtool dump failed for {$filename}: " . $dump->getErrorOutput());
+
+            return false;
+        }
+
+        $dom = new \DOMDocument();
+        if (! $dom->loadXML($dump->getOutput())) {
+            return false;
+        }
+
+        $xpath = new \DOMXPath($dom);
+
+        // Remove top-level <ds> definitions for the named datasets.
+        foreach ($toRemove as $dsName) {
+            foreach ($xpath->query("/rrd/ds[name = '$dsName']") as $node) {
+                $node->parentNode->removeChild($node);
+            }
+        }
+
+        // Remove positional slots from <cdp_prep> and <row> elements.
+        // Process in descending index order so earlier positions are not shifted.
+        foreach ($removeIdx as $idx) {
+            $pos = $idx + 1; // XPath position() is 1-based
+            foreach ($xpath->query("//rra/cdp_prep/ds[$pos]") as $node) {
+                $node->parentNode->removeChild($node);
+            }
+            foreach ($xpath->query("//rra/database/row/v[$pos]") as $node) {
+                $node->parentNode->removeChild($node);
+            }
+        }
+
+        // Write modified XML to a temp file and restore to a sibling RRD.
+        $tmpXml = $filename . '.discard.xml';
+        $tmpRrd = $filename . '.discard.rrd';
+
+        if (file_put_contents($tmpXml, $dom->saveXML()) === false) {
+            return false;
+        }
+
+        $restore = new Process([$this->rrdtool_executable, 'restore', $tmpXml, $tmpRrd]);
+        $restore->setTimeout(60);
+        $restore->run();
+        unlink($tmpXml);
+
+        if (! $restore->isSuccessful() || ! is_file($tmpRrd)) {
+            @unlink($tmpRrd);
+            Log::error("rrdtool restore failed for {$filename}: " . $restore->getErrorOutput());
+
+            return false;
+        }
+
+        // Atomic replace — both files are on the same filesystem.
+        if (! rename($tmpRrd, $filename)) {
+            @unlink($tmpRrd);
+
+            return false;
+        }
+
+        Log::info("RRD: discarded DS [" . implode(', ', $toRemove) . "] from $filename");
+
+        return true;
     }
 
     /**
