@@ -52,8 +52,6 @@ class Common extends Application
         10 => ['percent',     'smart_mib_percent',     'pct'],
     ];
 
-    private const SENSOR_TYPE_CELSIUS = 3;
-
     // SmartmonSensorDataScale enum → power of 10 exponent
     private const SENSOR_SCALE_EXP = [
         1 => -24, 2 => -21, 3 => -18, 4 => -15, 5 => -12,
@@ -532,7 +530,7 @@ class Common extends Application
             $health     = $healthTable[$devIdx] ?? [];
             $attrRows   = $attrTable[$devIdx]   ?? [];
             $this->pollSataDeviceSensors($dev, $sensorRows, $health, $attrRows);
-            $this->pollSataDeviceRrd($dev, $sensorRows, $health, $attrRows);
+            $this->pollSataDeviceRrd($dev, $attrRows);
         }
 
         // Table: PhyEvent (always)
@@ -639,12 +637,8 @@ class Common extends Application
     }
 
     /** Write per-disk RRDs for one SATA device. */
-    private function pollSataDeviceRrd(
-        array $dev,
-        array $sensorRows,
-        array $health,
-        array $attrRows
-    ): void {
+    private function pollSataDeviceRrd(array $dev, array $attrRows): void
+    {
         $device  = $this->os->getDevice();
         $diskKey = $dev['disk_key'];
         $idx     = $this->mibDiskIndex($diskKey);
@@ -676,26 +670,6 @@ class Common extends Application
             }
         }
 
-        // Power/temperature RRD — same filename as V2 smart_power.
-        $tempC  = $this->extractSensorTemperature($sensorRows, $attrRows);
-        $hours  = $this->intValue($health['smartmonSataPowerOnHours'] ?? null);
-        $cycles = $this->intValue($health['smartmonSataPowerCycles']  ?? null);
-
-        if ($tempC !== null || $hours !== null || $cycles !== null) {
-            app('Datastore')->put($device, 'app', [
-                'name'     => 'smart',
-                'app_id'   => $this->app->app_id,
-                'rrd_def'  => RrdDefinition::make()
-                    ->addDataset('temp',   'GAUGE', 0, 200)
-                    ->addDataset('hours',  'GAUGE', 0)
-                    ->addDataset('cycles', 'GAUGE', 0),
-                'rrd_name' => ['app', 'smart_power', $this->app->app_id, $idx],
-            ], [
-                'temp'   => $tempC,
-                'hours'  => $hours,
-                'cycles' => $cycles,
-            ]);
-        }
     }
 
     private function updateMibSensor(array $device, Sensor $sensor, ?float $value): void
@@ -1287,42 +1261,6 @@ class Common extends Application
     private function mibDiskNavigation(string $diskKey): string
     {
         return 'tab=apps/app=smart/disk=' . rawurlencode($diskKey) . '/';
-    }
-
-    /**
-     * Extract temperature in Celsius for a device.
-     * Prefers SENSOR-MIB celsius rows; falls back to ATA attribute 194 (or 190).
-     */
-    private function extractSensorTemperature(array $sensorRows, array $attrRows): ?float
-    {
-        foreach ($sensorRows as $row) {
-            if ($this->intValue($row['smartmonSensorType'] ?? null) === self::SENSOR_TYPE_CELSIUS) {
-                $scaled = $this->applySensorScale($row);
-                if ($scaled !== null) {
-                    return $scaled;
-                }
-            }
-        }
-
-        foreach ([194, 190] as $attrId) {
-            $row = $attrRows[$attrId] ?? $attrRows[(string) $attrId] ?? null;
-            if ($row === null) {
-                foreach ($attrRows as $candidate) {
-                    if (is_array($candidate) && (int) ($candidate['smartmonSataAttrId'] ?? -1) === $attrId) {
-                        $row = $candidate;
-                        break;
-                    }
-                }
-            }
-            if ($row !== null) {
-                $raw = $this->intValue($row['smartmonSataAttrRawValue'] ?? null);
-                if ($raw !== null) {
-                    return (float) ($raw & 0xFF);
-                }
-            }
-        }
-
-        return null;
     }
 
     /**
