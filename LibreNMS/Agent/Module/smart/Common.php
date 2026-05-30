@@ -649,14 +649,15 @@ class Common extends Application
         $diskKey = $dev['disk_key'];
         $idx     = $this->mibDiskIndex($diskKey);
 
-        // Attribute RRD
+        // Attribute RRD — same filename/DS names as V2 so history survives a V2→MIB upgrade.
+        // V2 uses ['app','smart',app_id,idx] with DS id{N} / id{N}Normalized.
         if (! empty($attrRows)) {
             $rrd_def = RrdDefinition::make();
             $fields  = [];
             foreach ($attrRows as $attrId => $row) {
                 $id     = (int) ($row['smartmonSataAttrId'] ?? $attrId);
                 $dsRaw  = 'id' . $id;
-                $dsNorm = 'id' . $id . 'N';
+                $dsNorm = 'id' . $id . 'Normalized';
                 if (strlen($dsNorm) > 19) {
                     continue;
                 }
@@ -667,28 +668,28 @@ class Common extends Application
             }
             if (! empty($fields)) {
                 app('Datastore')->put($device, 'app', [
-                    'name'     => 'smart_mib',
+                    'name'     => 'smart',
                     'app_id'   => $this->app->app_id,
                     'rrd_def'  => $rrd_def,
-                    'rrd_name' => ['app', 'smart_mib', $this->app->app_id, $idx],
+                    'rrd_name' => ['app', 'smart', $this->app->app_id, $idx],
                 ], $fields);
             }
         }
 
-        // Power/temperature RRD
+        // Power/temperature RRD — same filename as V2 smart_power.
         $tempC  = $this->extractSensorTemperature($sensorRows, $attrRows);
         $hours  = $this->intValue($health['smartmonSataPowerOnHours'] ?? null);
         $cycles = $this->intValue($health['smartmonSataPowerCycles']  ?? null);
 
         if ($tempC !== null || $hours !== null || $cycles !== null) {
             app('Datastore')->put($device, 'app', [
-                'name'     => 'smart_mib',
+                'name'     => 'smart',
                 'app_id'   => $this->app->app_id,
                 'rrd_def'  => RrdDefinition::make()
                     ->addDataset('temp',   'GAUGE', 0, 200)
                     ->addDataset('hours',  'GAUGE', 0)
                     ->addDataset('cycles', 'GAUGE', 0),
-                'rrd_name' => ['app', 'smart_mib_pwr', $this->app->app_id, $idx],
+                'rrd_name' => ['app', 'smart_power', $this->app->app_id, $idx],
             ], [
                 'temp'   => $tempC,
                 'hours'  => $hours,
