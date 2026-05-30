@@ -2,10 +2,12 @@
 
 namespace LibreNMS\Agent\Module\Smart;
 
+use App\Models\Device;
 use App\Models\Sensor;
 use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Application;
+use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
 use SnmpQuery;
@@ -68,6 +70,13 @@ class Common extends Application
     private const HANDLER_MIB = 'mib';
     private const HANDLER_V2  = 'v2';
     private const HANDLER_V1  = 'v1';
+
+    // V1 RRD datasets that have no equivalent in V2 and should be discarded on migration.
+    // V1 stored these as self-test pass/fail counters; V2 handles self-test via the log table.
+    private const V1_SATA_DISCARD_DS = [
+        'completed', 'interrupted', 'readfailure', 'unknownfail',
+        'extended', 'short', 'conveyance', 'selective',
+    ];
 
     /** Per-device LastChange snapshot from previous cycle, keyed devIdx → tableId → ts. */
     private ?array $prevSataChange = null;
@@ -501,6 +510,8 @@ class Common extends Application
      */
     private function pollSata(): void
     {
+        $this->migrateV1Rrds();
+
         // Change index must be loaded first so all table-change guards below are valid.
         $this->sataChangeByDeviceTable();
         $devices = $this->sataDevices();
@@ -1141,6 +1152,68 @@ class Common extends Application
                 ['app_id', 'device_idx', 'table_id'],
                 ['last_change']
             );
+        }
+    }
+
+    // ── V1 → V2 migration ────────────────────────────────────────────────────
+
+    /**
+     * One-shot per-device migration from V1 RRD layout to V2.
+     *
+     * V1 keyed RRDs by device path (e.g. /dev/sda); V2 uses a stable
+     * identity key (WWN or Model+Serial).  For each SATA device that has
+     * not been migrated yet:
+     *
+     *   1. Rename app-smart-{app_id}-{v1_path}.rrd
+     *          → app-smart-{app_id}-{v2_idx}.rrd  (no-op if V1 file absent)
+     *   2. Discard the V1-only self-test counter DS that have no equivalent
+     *      in V2 (completed, interrupted, readfailure, unknownfail, extended,
+     *      short, conveyance, selective).
+     *   3. Mark the device as migrated so this runs only once.
+     *
+     * Note: the separate V1 smart_id9 / smart_id232 / smart_maxtemp files are
+     * intentionally left untouched — they will simply stop being updated and
+     * age out of RRD naturally.
+     */
+    private function migrateV1Rrds(): void
+    {
+        $deviceModel = Device::find($this->os->getDeviceId());
+        if ($deviceModel === null) {
+            return;
+        }
+
+        $rrd = app(Rrd::class);
+
+        foreach ($this->sataDevices() as $dev) {
+            $diskKey = $dev['disk_key'];
+
+            $alreadyDone = DB::table('smart_devices')
+                ->where('app_id', $this->app->app_id)
+                ->where('disk_key', $diskKey)
+                ->value('v1_rrd_migrated');
+
+            if ($alreadyDone) {
+                continue;
+            }
+
+            $v2Idx = $this->mibDiskIndex($diskKey);
+            $v2Name = ['app', 'smart', $this->app->app_id, $v2Idx];
+
+            // V1 used the raw device path as the disk ID (e.g. /dev/sda).
+            $v1DiskId = $dev['device_path'];
+            if (! empty($v1DiskId)) {
+                $v1Name = ['app', 'smart', $this->app->app_id, $v1DiskId];
+                $rrd->renameFile($deviceModel, $v1Name, $v2Name);
+            }
+
+            // Strip V1-only DS; no-op if they're absent or the file doesn't exist.
+            $rrdFile = Rrd::name($deviceModel->hostname, $v2Name);
+            $rrd->discardDatasets($rrdFile, self::V1_SATA_DISCARD_DS);
+
+            DB::table('smart_devices')
+                ->where('app_id', $this->app->app_id)
+                ->where('disk_key', $diskKey)
+                ->update(['v1_rrd_migrated' => 1]);
         }
     }
 

@@ -39,6 +39,7 @@ return new class extends Migration
             $table->unsignedTinyInteger('last_poll_exit')->nullable();
             $table->unsignedInteger('physical_index')->default(0);
             $table->text('uris')->nullable();
+            $table->boolean('v1_rrd_migrated')->default(false);
             $table->unique(['app_id', 'disk_key']);
         });
 
