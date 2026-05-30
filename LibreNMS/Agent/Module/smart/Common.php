@@ -202,6 +202,9 @@ class Common extends Application
         // Refresh device list (DB-first: only walks SNMP if the timestamp changed).
         $this->discoverDeviceTable();
 
+        // One-shot V1→V2 RRD migration (no-op once all devices are marked done).
+        $this->migrateV1Rrds();
+
         // Type: SATA
         $this->discoverSata();
 
@@ -510,8 +513,6 @@ class Common extends Application
      */
     private function pollSata(): void
     {
-        $this->migrateV1Rrds();
-
         // Change index must be loaded first so all table-change guards below are valid.
         $this->sataChangeByDeviceTable();
         $devices = $this->sataDevices();
