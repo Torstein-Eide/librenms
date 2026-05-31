@@ -96,7 +96,7 @@ class V2 extends Application
                 ['app_id' => $appId, 'uuid' => 'v2:' . $arrayName],
                 [
                     'device_id'          => $deviceId,
-                    'name'               => $arrayName,
+                    'md_id'              => $arrayName,
                     'level'              => (string) ($data['level'] ?? ''),
                     'size_bytes'         => (int) ($data['size'] ?? 0),
                     'raid_disks'         => $discCount,
