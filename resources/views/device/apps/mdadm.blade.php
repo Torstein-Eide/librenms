@@ -88,14 +88,14 @@ $linkArray = [
     echo generate_link($ovLabel, $linkArray);
     if (!empty($data->arrayData)) {
         echo ' | Arrays: ';
-        $names = array_keys($data->arrayData);
-        foreach ($names as $i => $name) {
+        $arrays = array_keys($data->arrayData);
+        foreach ($arrays as $i => $name) {
             $label = htmlspecialchars($name);
             if ($selectedArray === $name) {
                 $label = "<span class=\"pagemenu-selected\">{$label}</span>";
             }
             echo generate_link($label, $linkArray, ['array' => $name]);
-            if ($i < count($names) - 1) { echo ', '; }
+            if ($i < count($arrays) - 1) { echo ', '; }
         }
     }
     if (Auth::user()->hasRole('admin')) {
@@ -147,7 +147,7 @@ $linkArray = [
             <thead>
             <tr>
                 <th data-column-id="array_name"     data-sortable="true">Array Name</th>
-                <th data-column-id="name"           data-sortable="true">MD Device</th>
+                <th data-column-id="md_id"          data-sortable="true">MDid</th>
                 <th data-column-id="level"          data-sortable="true">Level</th>
                 <th data-column-id="state"          data-sortable="true">State</th>
                 <th data-column-id="sync_action"    data-sortable="true">Operation</th>
@@ -222,10 +222,10 @@ $linkArray = [
     {{-- Per-array view                                                      --}}
     {{-- ================================================================== --}}
     @php
-        $name     = (string) $selectedArray;
-        $arrData  = $data->array($name);
-        $meta     = $data->arraysMeta[$name] ?? [];
-        $sync     = $data->syncDataForArray($name);
+        $array     = (string) $selectedArray;
+        $arrData  = $data->array($array);
+        $meta     = $data->arraysMeta[$array] ?? [];
+        $sync     = $data->syncDataForArray($array);
         $hEntry   = $arrData['mdadm_array_health_status']    ?? [];
         $opEntry  = $arrData['mdadm_array_operation_status'] ?? [];
         $hBadge   = mdadm_badge($hEntry['label']  ?? 'Unknown', $hEntry['class']  ?? 'default', $hEntry['info']  ?? '');
@@ -244,7 +244,7 @@ $linkArray = [
                 $mismatchVal = is_numeric($mismatchRaw) ? (int) $mismatchRaw : null;
                 $chunkSize   = (int) ($meta['chunk_size'] ?? 0);
 
-                $panelStart(htmlspecialchars($name) . ' Status', $hBadge);
+                $panelStart(htmlspecialchars($meta['array_name'] ?? $array) . ' Status', $hBadge);
                 echo '<table class="table table-condensed table-hover" style="width:auto">';
                 foreach ($statusFields as $label => $spec) {
                     echo $tableRow($label, htmlspecialchars((string) ($meta[$spec['key']] ?? '-')), $spec['tooltip']);
@@ -325,7 +325,7 @@ $linkArray = [
     {{-- Devices table --}}
     @php
         $sensorDevices = $arrData['devices'] ?? [];
-        $metaDevices   = (array) ($data->arraysDevices[$name] ?? []);
+        $metaDevices   = (array) ($data->arraysDevices[$array] ?? []);
     @endphp
     @if(!empty($metaDevices))
         @php
@@ -375,7 +375,7 @@ $linkArray = [
                     'id'     => $data->app->app_id,
                     'type'   => 'mdadm_legacy',
                     'metric' => $metric,
-                    'array'  => $name,
+                    'array'  => $array,
                     'legend' => 'no',
                 ];
                 echo "<div class=\"panel panel-default\"><div class=\"panel-heading\"><h3 class=\"panel-title\">{$text}</h3></div><div class=\"panel-body\">";
@@ -385,8 +385,8 @@ $linkArray = [
         @endphp
     @else
         @php
-            $diskioRates = mdadm_diskio_rates($data, $name);
-            $syncData    = $data->syncDataForArray($name);
+            $diskioRates = mdadm_diskio_rates($data, $array);
+            $syncData    = $data->syncDataForArray($array);
 
             $graphHeaders = [
                 'disk_counts' => 'A:' . (int) ($meta['active_devices'] ?? 0)
@@ -418,7 +418,7 @@ $linkArray = [
                     'from'   => App\Facades\LibrenmsConfig::get('time.day'),
                     'id'     => $data->app->app_id,
                     'type'   => $spec['type'],
-                    'array'  => $name,
+                    'array'  => $array,
                     'legend' => 'no',
                 ];
                 if (isset($spec['metric'])) { $graph_array['metric'] = $spec['metric']; }

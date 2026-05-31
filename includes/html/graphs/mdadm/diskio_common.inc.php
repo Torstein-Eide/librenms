@@ -10,7 +10,7 @@ if (! is_string($arrayParam) || $arrayParam === '') {
 
 $dbArray = App\Models\MdadmArray::where('app_id', $app->app_id)
     ->where(function ($q) use ($arrayParam): void {
-        $q->where('uuid', $arrayParam)->orWhere('array_name', $arrayParam)->orWhere('name', $arrayParam);
+        $q->where('uuid', $arrayParam)->orWhere('array_name', $arrayParam)->orWhere('md_id', $arrayParam);
     })
     ->with('drives')
     ->first();

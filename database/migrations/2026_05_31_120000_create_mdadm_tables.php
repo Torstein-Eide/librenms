@@ -13,7 +13,7 @@ return new class extends Migration {
             $table->unsignedInteger('app_id')->index();
             $table->string('uuid', 36);
             $table->string('array_name')->nullable();
-            $table->string('name')->nullable();
+            $table->string('md_id')->nullable();
             $table->string('level', 32)->nullable();
             $table->string('state', 64)->nullable();
             $table->unsignedSmallInteger('active_devices')->nullable();
