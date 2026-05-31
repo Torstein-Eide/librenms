@@ -146,3 +146,18 @@ Same support level as v2. Handled by the same code path after normalising the ke
 | Error reporting | `error` always `"0"` — not used | `error` non-zero signals agent error |
 | All other fields | identical | identical |
 
+## Agent Exit Codes
+
+The v3 agent script exits with a numeric code. LibreNMS acts on it as follows:
+
+| Code | Constant                  | Trigger                                          | LibreNMS action                              |
+|------|---------------------------|--------------------------------------------------|----------------------------------------------|
+| 0    | `EXIT_SUCCESS`            | All arrays collected cleanly                     | Normal processing                            |
+| 1    | `EXIT_DEPENDENCY_MISSING` | `mdadm` binary not in `$PATH`                   | Cleanup — removes all sensors and DB records |
+| 2    | `EXIT_NO_ARRAYS`          | Auto-discovery found no arrays                   | Cleanup — removes all sensors and DB records |
+| 3    | `EXIT_PERMISSION_DENIED`  | `/sys/block` unreadable                          | Skip — transient error, sensors preserved    |
+| 4    | `EXIT_OUTPUT_WRITE_FAILURE` | Output file write failed                       | Skip — transient error, sensors preserved    |
+| 5    | `EXIT_CONFIG_ERROR`       | Device entry missing name field                  | Skip — transient error, sensors preserved    |
+| 6    | `EXIT_PARTIAL_FAILURE`    | Some arrays have read errors (data still emitted) | Normal processing — data is still present   |
+| 7    | `EXIT_NO_CONFIGURED_DEVICES` | Config listed devices but none exist in sysfs | Cleanup — removes all sensors and DB records |
+
