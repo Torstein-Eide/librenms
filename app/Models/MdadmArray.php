@@ -12,7 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $app_id
  * @property string $uuid
  * @property string|null $array_name
- * @property string|null $name
+ * @property string|null $md_id
  * @property string|null $level
  * @property string|null $state
  * @property int|null $size_bytes
@@ -49,7 +49,7 @@ class MdadmArray extends Model
         'app_id',
         'uuid',
         'array_name',
-        'name',
+        'md_id',
         'level',
         'state',
         'size_bytes',

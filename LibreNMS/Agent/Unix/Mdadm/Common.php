@@ -216,6 +216,8 @@ class Common extends Application
     {
         $payload = $this->fetchMdadmPayload();
         if ($payload === null) {
+            $this->cleanupAllSensorsAndArrays();
+
             return;
         }
         $version = (int) ($payload['version'] ?? 0);
@@ -257,6 +259,27 @@ class Common extends Application
         $this->runPollRrd();
         $this->runPollDb();
         \update_application($this->app, 'ok', $this->collectMetrics());
+    }
+
+    /**
+     * Remove all mdadm sensors and DB arrays for this app.
+     * Called when the agent is unreachable so stale data does not persist.
+     */
+    private function cleanupAllSensorsAndArrays(): void
+    {
+        $allTypes = [
+            'mdadm_array_health_status',
+            'mdadm_array_operation_status',
+            'mdadm_array_mismatch',
+            'mdadm_device_health_status',
+            'mdadm_device_error',
+        ];
+
+        $this->logStaleSensorRemovals('app:mdadm:', []);
+        app()->forgetInstance('sensor-discovery');
+        $this->syncSensors(...$allTypes);
+        $this->deleteStaleAgentSensors('app:mdadm:', $allTypes, []);
+        MdadmArray::where('app_id', $this->app->app_id)->delete();
     }
 
     /**
@@ -638,7 +661,7 @@ class Common extends Application
                 [
                     'device_id'          => $deviceId,
                     'array_name'         => ($array['array_name'] ?? '') !== '' ? (string) $array['array_name'] : null,
-                    'name'               => (string) ($array['name'] ?? ''),
+                    'md_id'              => (string) ($array['name'] ?? ''),
                     'level'              => (string) ($array['raid_level'] ?? ''),
                     'size_bytes'         => isset($array['size_bytes']) ? (int) $array['size_bytes'] : null,
                     'raid_disks'         => isset($array['raid_disks']) ? (int) $array['raid_disks'] : null,
@@ -657,7 +680,7 @@ class Common extends Application
                 echo sprintf(
                     '      DB array  id=%-4d  %s  (%s)  size=%s  meta=%s  chunk=%s' . PHP_EOL,
                     $arrayRow->id,
-                    $arrayRow->name ?? '(no name)',
+                    $arrayRow->md_id ?? '(no name)',
                     $arrayRow->level ?? 'null',
                     $sizeHuman,
                     $arrayRow->metadata_version ?? 'null',

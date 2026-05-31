@@ -16,7 +16,7 @@ class MdadmArrayController extends TableController
 {
     protected ?string $model = MdadmArray::class;
 
-    protected array $default_sort = ['name' => 'asc'];
+    protected array $default_sort = ['md_id' => 'asc'];
 
     protected function rules(): array
     {
@@ -27,7 +27,7 @@ class MdadmArrayController extends TableController
     {
         return [
             'array_name',
-            'name',
+            'md_id',
             'uuid',
             'level',
             'state',
@@ -45,7 +45,7 @@ class MdadmArrayController extends TableController
     {
         return [
             'array_name',
-            'name',
+            'md_id',
             'uuid',
             'level',
             'state',
@@ -72,7 +72,7 @@ class MdadmArrayController extends TableController
             'device' => $dev->device_id,
             'tab'    => 'apps',
             'app'    => 'mdadm',
-            'array'  => $model->name ?? $model->uuid,
+            'array'  => $model->md_id ?? $model->uuid,
         ]) : '#';
 
         $stateClass = match (strtolower((string) ($model->state ?? ''))) {
@@ -90,8 +90,8 @@ class MdadmArrayController extends TableController
         return [
             'device'         => $dev ? Url::modernDeviceLink($dev) : '?',
             'array_name'     => '<a href="' . htmlspecialchars($arrUrl) . '">' . htmlspecialchars($linkText) . '</a>',
-            'name'           => $model->name !== null
-                ? htmlspecialchars($model->name)
+            'md_id'          => $model->md_id !== null
+                ? htmlspecialchars($model->md_id)
                 : '<span class="text-muted">&mdash;</span>',
             'level'          => htmlspecialchars((string) ($model->level ?? '')),
             'state'          => '<span class="label label-' . $stateClass . '">'
@@ -115,7 +115,7 @@ class MdadmArrayController extends TableController
         return [
             'Device',
             'Array Name',
-            'MD Device',
+            'MDid',
             'Level',
             'State',
             'Operation',
@@ -138,7 +138,7 @@ class MdadmArrayController extends TableController
         return [
             $dev ? $dev->hostname : '',
             $model->array_name ?? '',
-            $model->name ?? '',
+            $model->md_id ?? '',
             $model->level ?? '',
             $model->state ?? '',
             $model->sync_action ?? 'idle',

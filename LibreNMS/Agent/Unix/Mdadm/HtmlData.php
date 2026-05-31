@@ -311,13 +311,13 @@ class HtmlData
 
         foreach ($this->dbArrays as $uuid => $dbRow) {
             $uuid = (string) $uuid;
-            $arrayName = (string) ($dbRow->name ?? $uuid);
+            $arrayName = (string) ($dbRow->md_id ?? $uuid);
             if ($arrayName === '') {
                 continue;
             }
 
             $arraysMeta[$arrayName] = [
-                'array_name'         => $dbRow->name,
+                'array_name'         => $dbRow->md_id,
                 'uuid'               => $dbRow->uuid,
                 'raid_level'         => $dbRow->level,
                 'state'              => $dbRow->state,
