@@ -147,7 +147,7 @@ $linkArray = [
             <thead>
             <tr>
                 <th data-column-id="array_name"     data-sortable="true">Array Name</th>
-                <th data-column-id="md_id"          data-sortable="true">MDid</th>
+                <th data-column-id="md_id"          data-sortable="true">MD device</th>
                 <th data-column-id="level"          data-sortable="true">Level</th>
                 <th data-column-id="state"          data-sortable="true">State</th>
                 <th data-column-id="sync_action"    data-sortable="true">Operation</th>
