@@ -291,7 +291,7 @@ abstract class Application
             if ($value != $prevValue) {
                 $sensor->sensor_current = $value;
                 $sensor->sensor_prev = $prevValue;
-                $sensor->lastupdate = DB::raw('NOW()');
+                $sensor->lastupdate = now()->toDateTimeString();
                 $sensor->save();
             }
         }

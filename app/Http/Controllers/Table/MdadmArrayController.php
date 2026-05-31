@@ -89,7 +89,7 @@ class MdadmArrayController extends TableController
 
         return [
             'device'         => $dev ? Url::modernDeviceLink($dev) : '?',
-            'array_name'     => '<a href="' . htmlspecialchars($arrUrl) . '">' . htmlspecialchars($linkText) . '</a>',
+            'array_name'     => '<a href="' . htmlspecialchars((string) $arrUrl) . '">' . htmlspecialchars($linkText) . '</a>',
             'md_id'          => $model->md_id !== null
                 ? htmlspecialchars($model->md_id)
                 : '<span class="text-muted">&mdash;</span>',

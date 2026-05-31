@@ -389,7 +389,7 @@ class Rrd extends BaseDatastore
      */
     public function getLastRates(string $filename, array $datasets, string $cf = 'AVERAGE'): ?TimeSeriesPoint
     {
-        $datasets = array_values(array_filter(array_unique($datasets), fn ($dataset): bool => is_string($dataset) && $dataset !== ''));
+        $datasets = array_values(array_filter(array_unique($datasets), fn ($dataset): bool => $dataset !== ''));
         if (empty($datasets)) {
             return null;
         }
