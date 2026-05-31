@@ -3,23 +3,23 @@
 use LibreNMS\Util\Html;
 use Symfony\Component\Yaml\Yaml;
 
-// Build a list of sensor_oid prefixes owned by YAML-driven app overview panels
-// so their sensors are not duplicated here.
-$appOverviewOidPrefixes = array_filter(array_map(
-    static function (string $f): ?string {
-        $appType = Yaml::parseFile($f)['app_type'] ?? null;
-
-        return $appType ? 'app:' . $appType . ':' : null;
-    },
-    glob(__DIR__ . '/../apps/*.yaml') ?: []
-));
+// Build a list of sensor group prefixes owned by agent apps that have their own
+// overview panels, so their sensors are not duplicated in the generic display.
+$agentDefs = Yaml::parseFile(base_path('resources/definitions/agent/unix.yaml')) ?? [];
+$appOverviewGroupPrefixes = [];
+foreach ($agentDefs as $def) {
+    foreach ((array) ($def['sensor_group_prefix'] ?? []) as $prefix) {
+        $appOverviewGroupPrefixes[] = (string) $prefix;
+    }
+}
 
 $sensors = DeviceCache::getPrimary()->sensors
     ->where('sensor_class', $sensor_class->value)
     ->where('group', '!=', 'transceiver')
-    ->filter(static function ($sensor) use ($appOverviewOidPrefixes): bool {
-        foreach ($appOverviewOidPrefixes as $prefix) {
-            if (str_starts_with((string) $sensor->sensor_oid, $prefix)) {
+    ->filter(static function ($sensor) use ($appOverviewGroupPrefixes): bool {
+        $group = (string) $sensor->group;
+        foreach ($appOverviewGroupPrefixes as $prefix) {
+            if (str_starts_with($group, $prefix)) {
                 return false;
             }
         }
