@@ -188,7 +188,7 @@ class Common extends Application
             return 10;
         }
 
-        $flags = array_map('strtolower', $device['state_flags'] ?? []);
+        $flags = array_map(strtolower(...), $device['state_flags'] ?? []);
         $state = strtolower(trim((string) ($device['state'] ?? '')));
 
         foreach (['faulty' => 9, 'blocked' => 8, 'write_error' => 7, 'want_replacement' => 5, 'replacement' => 6] as $flag => $val) {
@@ -299,7 +299,7 @@ class Common extends Application
             return $e->getParsedJson() ?: null;
         } catch (JsonAppMissingKeysException $e) {
             return $e->getParsedJson() ?: null;
-        } catch (\Exception $e) {
+        } catch (\Exception) {
             return null;
         }
     }
