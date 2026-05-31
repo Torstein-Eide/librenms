@@ -131,7 +131,7 @@ function debug_format_datastore_list(array $stores): string
         return '<span class="text-muted">none</span>';
     }
 
-    return implode(', ', array_map('htmlspecialchars', $stores));
+    return implode(', ', array_map(htmlspecialchars(...), $stores));
 }
 
 /**
@@ -267,7 +267,7 @@ function debug_rrd_files_panel(array $rrdEntries, array $stores = []): string
             HTML;
     }
 
-    $theadHtml = implode('', array_map(static fn ($h) => '<th>' . htmlspecialchars($h) . '</th>', $fileHeaders));
+    $theadHtml = implode('', array_map(static fn ($h) => '<th>' . htmlspecialchars((string) $h) . '</th>', $fileHeaders));
     $colspan = count($fileHeaders);
 
     if ($filesRows === '') {

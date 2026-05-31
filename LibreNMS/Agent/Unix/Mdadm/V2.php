@@ -361,8 +361,8 @@ class V2 extends Application
             );
             $sensorValues[$uuid . '_operation'] = self::mapOperation($action, (string) ($data['state'] ?? ''));
 
-            $presentDevs = array_map('strval', (array) ($data['device_list'] ?? []));
-            $missingDevs = array_map('strval', (array) ($data['missing_devices_list'] ?? []));
+            $presentDevs = array_map(strval(...), (array) ($data['device_list'] ?? []));
+            $missingDevs = array_map(strval(...), (array) ($data['missing_devices_list'] ?? []));
 
             foreach (MdadmDrive::where('mdadm_array_id', $arrayRow->id)->pluck('dev_id') as $devName) {
                 $devName = (string) $devName;
@@ -429,11 +429,7 @@ class V2 extends Application
             'active-idle' => 12,
         ];
 
-        if (isset($map[$a])) {
-            return $map[$a];
-        }
-
-        return match (true) {
+        return $map[$a] ?? match (true) {
             $s === 'inactive'                             => 7,
             in_array($s, ['readonly', 'read-only'], true) => 8,
             default                                       => -1,
