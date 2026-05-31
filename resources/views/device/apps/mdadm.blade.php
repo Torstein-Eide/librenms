@@ -89,12 +89,12 @@ $linkArray = [
     if (!empty($data->arrayData)) {
         echo ' | Arrays: ';
         $arrays = array_keys($data->arrayData);
-        foreach ($arrays as $i => $name) {
-            $label = htmlspecialchars($name);
-            if ($selectedArray === $name) {
+        foreach ($arrays as $i => $MDid) {
+            $label = htmlspecialchars($MDid);
+            if ($selectedArray === $MDid) {
                 $label = "<span class=\"pagemenu-selected\">{$label}</span>";
             }
-            echo generate_link($label, $linkArray, ['array' => $name]);
+            echo generate_link($label, $linkArray, ['array' => $MDid]);
             if ($i < count($arrays) - 1) { echo ', '; }
         }
     }
@@ -185,22 +185,22 @@ $linkArray = [
                 }
             @endphp
         @else
-            @foreach($data->arrayNames() as $name)
+            @foreach($data->arrayNames() as $MDid)
                 @php
-                    $arrData = $data->array($name);
+                    $arrData = $data->array($MDid);
                     $hEntry  = $arrData['mdadm_array_health_status'] ?? [];
                     $hBadge  = mdadm_badge($hEntry['label'] ?? 'Unknown', $hEntry['class'] ?? 'default', $hEntry['info'] ?? '');
-                    $arrUrl  = LibreNMS\Util\Url::generate($linkArray + ['array' => $name]);
-                    $nameEsc = htmlspecialchars($name);
+                    $arrUrl  = LibreNMS\Util\Url::generate($linkArray + ['array' => $MDid]);
+                    $MDidEsc = htmlspecialchars($MDid);
 
-                    $panelStart("<a href=\"{$arrUrl}\">{$nameEsc}</a>", $hBadge);
+                    $panelStart("<a href=\"{$arrUrl}\">{$MDidEsc}</a>", $hBadge);
                     echo '<div class="row">';
                     foreach ($arrayGraphs as $spec) {
                         $graphArray = [
                             'height' => '80', 'width' => '180',
                             'type'   => $spec['type'],
                             'id'     => $data->app->app_id,
-                            'array'  => $name,
+                            'array'  => $MDid,
                             'from'   => App\Facades\LibrenmsConfig::get('time.day'),
                             'to'     => App\Facades\LibrenmsConfig::get('time.now'),
                             'legend' => 'no',
@@ -244,7 +244,7 @@ $linkArray = [
                 $mismatchVal = is_numeric($mismatchRaw) ? (int) $mismatchRaw : null;
                 $chunkSize   = (int) ($meta['chunk_size'] ?? 0);
 
-                $panelStart(htmlspecialchars($meta['array_name'] ?? $array) . ' Status', $hBadge);
+                $panelStart(htmlspecialchars($meta['array_name'] ) . ' Status', $hBadge);
                 echo '<table class="table table-condensed table-hover" style="width:auto">';
                 foreach ($statusFields as $label => $spec) {
                     echo $tableRow($label, htmlspecialchars((string) ($meta[$spec['key']] ?? '-')), $spec['tooltip']);
