@@ -101,20 +101,20 @@ foreach ($arrayGraphs as $key => $spec) {
                     'device' => $dev->device_id,
                     'tab'    => 'apps',
                     'app'    => 'mdadm',
-                    'array'  => $arr->name,
+                    'array'  => $arr->md_id,
                 ]);
                 $graph_array = [
                     'height' => '80',
                     'width'  => '180',
                     'type'   => $spec['type'],
                     'id'     => $arr->app_id,
-                    'array'  => $arr->name ?? $arr->uuid,
+                    'array'  => $arr->md_id ?? $arr->uuid,
                     'from'   => App\Facades\LibrenmsConfig::get('time.day'),
                     'to'     => App\Facades\LibrenmsConfig::get('time.now'),
                     'legend' => 'no',
                 ];
                 if (isset($spec['metric'])) { $graph_array['metric'] = $spec['metric']; }
-                $label    = htmlspecialchars($dev->hostname . ' / ' . ($arr->name ?? $arr->uuid));
+                $label    = htmlspecialchars($dev->hostname . ' / ' . ($arr->md_id ?? $arr->uuid));
                 $graphTag = LibreNMS\Util\Url::lazyGraphTag($graph_array);
             @endphp
             <div class="pull-left" style="margin-right:8px;margin-bottom:8px">
@@ -131,11 +131,11 @@ foreach ($arrayGraphs as $key => $spec) {
                 $graph_array = [
                     'type'  => $spec['type'],
                     'id'    => $arr->app_id,
-                    'array' => $arr->name ?? $arr->uuid,
+                    'array' => $arr->md_id ?? $arr->uuid,
                     'to'    => App\Facades\LibrenmsConfig::get('time.now'),
                 ];
                 if (isset($spec['metric'])) { $graph_array['metric'] = $spec['metric']; }
-                $label = htmlspecialchars($dev->hostname . ' / ' . ($arr->name ?? $arr->uuid));
+                $label = htmlspecialchars($dev->hostname . ' / ' . ($arr->md_id ?? $arr->uuid));
                 echo '<div class="panel panel-default">'
                     . '<div class="panel-heading"><h3 class="panel-title">' . $label . '</h3></div>'
                     . '<div class="panel-body"><div class="row">';
