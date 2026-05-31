@@ -317,6 +317,7 @@ class HtmlData
             }
 
             $arraysMeta[$arrayName] = [
+                'md_id'              => $dbRow->md_id,
                 'array_name'         => $dbRow->array_name,
                 'uuid'               => $dbRow->uuid,
                 'raid_level'         => $dbRow->level,

@@ -244,7 +244,7 @@ $linkArray = [
                 $mismatchVal = is_numeric($mismatchRaw) ? (int) $mismatchRaw : null;
                 $chunkSize   = (int) ($meta['chunk_size'] ?? 0);
 
-                $panelStart(htmlspecialchars($meta['array_name'] ) . ' Status', $hBadge);
+                $panelStart(htmlspecialchars($meta['array_name'] ?? $meta['md_id'] ?? $array) . ' Status', $hBadge);
                 echo '<table class="table table-condensed table-hover" style="width:auto">';
                 foreach ($statusFields as $label => $spec) {
                     echo $tableRow($label, htmlspecialchars((string) ($meta[$spec['key']] ?? '-')), $spec['tooltip']);
