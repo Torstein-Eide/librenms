@@ -732,7 +732,7 @@ class Common extends Application
                         'device_id'       => $deviceId,
                         'app_id'          => $appId,
                         'path'            => (string) ($devData['device_name'] ?? ''),
-                        'size_bytes'      => isset($devData['size_blocks']) ? (int) $devData['size_blocks'] * 512 : null,
+                        'size_bytes'      => isset($devData['size_bytes']) ? (int) $devData['size_bytes'] : (isset($devData['size_blocks']) ? (int) $devData['size_blocks'] * 1024 : null),
                         'slot'            => isset($devData['slot']) ? (int) $devData['slot'] : null,
                         'id_model'        => isset($devData['id_model']) ? (string) $devData['id_model'] : null,
                         'id_serial_short' => isset($devData['id_serial_short']) ? (string) $devData['id_serial_short'] : null,
