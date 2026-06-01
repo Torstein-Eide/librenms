@@ -91,9 +91,11 @@ class MdadmArrayController extends TableController
             'device'         => $dev ? Url::modernDeviceLink($dev) : '?',
             'array_name'     => '<a href="' . htmlspecialchars((string) $arrUrl) . '">' . htmlspecialchars($linkText) . '</a>',
             'md_id'          => $model->md_id !== null
-                ? htmlspecialchars($model->md_id)
+                ? '<a href="' . htmlspecialchars((string) $arrUrl) . '">' . htmlspecialchars($model->md_id) . '</a>'
                 : '<span class="text-muted">&mdash;</span>',
-            'level'          => htmlspecialchars((string) ($model->level ?? '')),
+            'level'          => $model->level !== null
+                ? '<a href="' . htmlspecialchars((string) $arrUrl) . '">' . htmlspecialchars((string) $model->level) . '</a>'
+                : '',
             'state'          => '<span class="label label-' . $stateClass . '">'
                 . htmlspecialchars((string) ($model->state ?? '')) . '</span>',
             'sync_action'    => htmlspecialchars((string) ($model->sync_action ?? 'idle')),

@@ -15,10 +15,20 @@ use LibreNMS\Util\Debug;
 
 class Common extends Application
 {
+    // Agent script exit codes (see agent script constants)
+    private const EXIT_DEPENDENCY_MISSING    = 1;
+    private const EXIT_NO_ARRAYS             = 2;
+    private const EXIT_PERMISSION_DENIED     = 3;
+    private const EXIT_OUTPUT_WRITE_FAILURE  = 4;
+    private const EXIT_CONFIG_ERROR          = 5;
+    private const EXIT_PARTIAL_FAILURE       = 6;
+    private const EXIT_NO_CONFIGURED_DEVICES = 7;
+
     private bool $discoveryCompleted = false;
     private array $payload = [];
     private array $plarray = [];
     private array $Working = [];
+    private ?int $agentExitCode = null;
     /** @var Collection<string, MdadmArray> MdadmArray rows (with drives) as they existed before this poll cycle, keyed by uuid. */
     private Collection $dbArraysPrev;
     private array $discovery = [
@@ -214,12 +224,29 @@ class Common extends Application
 
     public function discover(): void
     {
-        $payload = $this->fetchMdadmPayload();
+        $payload  = $this->fetchMdadmPayload();
+        $exitCode = $this->agentExitCode;
+
+        // EXIT_PARTIAL_FAILURE (6): data is still emitted — fall through to normal processing.
+        if ($exitCode !== null && $exitCode !== self::EXIT_PARTIAL_FAILURE) {
+            if (in_array($exitCode, [self::EXIT_PERMISSION_DENIED, self::EXIT_OUTPUT_WRITE_FAILURE, self::EXIT_CONFIG_ERROR], true)) {
+                echo '  mdadm: skipping discovery — transient agent error (code ' . $exitCode . ')' . PHP_EOL;
+
+                return;
+            }
+            if (in_array($exitCode, [self::EXIT_DEPENDENCY_MISSING, self::EXIT_NO_ARRAYS, self::EXIT_NO_CONFIGURED_DEVICES], true) || $payload === null) {
+                $this->cleanupAllSensorsAndArrays();
+            }
+
+            return;
+        }
+
         if ($payload === null) {
             $this->cleanupAllSensorsAndArrays();
 
             return;
         }
+
         $version = (int) ($payload['version'] ?? 0);
         if ($version >= 1 && $version < 3) {
             (new V2($this->os, $this->app, $this->agent_data))->discoverLegacy($payload);
@@ -242,7 +269,18 @@ class Common extends Application
 
     public function poll(): void
     {
-        $payload = $this->fetchMdadmPayload();
+        $payload  = $this->fetchMdadmPayload();
+        $exitCode = $this->agentExitCode;
+
+        // EXIT_PARTIAL_FAILURE (6): data is still emitted — fall through to normal processing.
+        if ($exitCode !== null && $exitCode !== self::EXIT_PARTIAL_FAILURE) {
+            if (in_array($exitCode, [self::EXIT_PERMISSION_DENIED, self::EXIT_OUTPUT_WRITE_FAILURE, self::EXIT_CONFIG_ERROR], true)) {
+                echo '  mdadm: skipping poll — transient agent error (code ' . $exitCode . ')' . PHP_EOL;
+            }
+
+            return;
+        }
+
         if ($payload === null) {
             return;
         }
@@ -282,19 +320,14 @@ class Common extends Application
         MdadmArray::where('app_id', $this->app->app_id)->delete();
     }
 
-    /**
-     * Like fetchPayload() but returns the parsed JSON even when the agent sets error != 0,
-     * so callers can act on error codes (e.g. error=2 "no arrays" triggers DB cleanup).
-     * Tool errors that produce no parseable JSON still return null.
-     */
     private function fetchMdadmPayload(): ?array
     {
+        $this->agentExitCode = null;
         try {
             return \json_app_get($this->os->getDeviceArray(), 'mdadm', 1);
         } catch (JsonAppExtendErroredException $e) {
-            if (Debug::isVerbose()) {
-                echo '  mdadm: agent error ' . $e->getCode() . ': ' . $e->getMessage() . PHP_EOL;
-            }
+            $this->agentExitCode = $e->getCode();
+            echo '  mdadm: agent exit code ' . $this->agentExitCode . ': ' . $e->getMessage() . PHP_EOL;
 
             return $e->getParsedJson() ?: null;
         } catch (JsonAppMissingKeysException $e) {
@@ -699,7 +732,7 @@ class Common extends Application
                         'device_id'       => $deviceId,
                         'app_id'          => $appId,
                         'path'            => (string) ($devData['device_name'] ?? ''),
-                        'size_bytes'      => isset($devData['size_blocks']) ? (int) $devData['size_blocks'] * 512 : null,
+                        'size_bytes'      => isset($devData['size_bytes']) ? (int) $devData['size_bytes'] : (isset($devData['size_blocks']) ? (int) $devData['size_blocks'] * 1024 : null),
                         'slot'            => isset($devData['slot']) ? (int) $devData['slot'] : null,
                         'id_model'        => isset($devData['id_model']) ? (string) $devData['id_model'] : null,
                         'id_serial_short' => isset($devData['id_serial_short']) ? (string) $devData['id_serial_short'] : null,
