@@ -2,10 +2,10 @@
 
 Monitors Linux `mdadm` arrays from the LibreNMS agent. See the [Linux md documentation](https://docs.kernel.org/admin-guide/md.html) for kernel RAID details.
 
-Collected data includes array health, operation state, disk counts, sync progress, mismatch count, member disk health/errors, and disk I/O graphs. Current agent output is stored in database tables for the mdadm device/app pages and device overview panel.
+Collected data includes array health, operation state, disk counts, sync progress, mismatch count, member disk health/errors, and disk I/O graphs. Current agent output is stored in database tables for the mdadm drive/app pages and drive overview panel.
 
 !!! note
-    Use the current agent script for full support. Versions 1 and 2 receive database records, health/operation/device-presence sensors, and legacy RRD graphs. Version 3 adds full per-device detail, mismatch sensors, and v3 graphs.
+    Use the current agent script for full support. Versions 1 and 2 receive database records, health/operation/drive-presence sensors, and legacy RRD graphs. Version 3 adds full per-drive detail, mismatch sensors, and v3 graphs.
 
 ## Prerequisites
 
@@ -95,11 +95,11 @@ The agent script outputs a versioned JSON payload. LibreNMS supports all version
 
 ### Version 3 (current)
 
-Full support: array and device database records, per-array health/operation/mismatch sensors, per-device health/error sensors, sync progress with byte counters and speed limits, and v3 graphs.
+Full support: array and drive database records, per-array health/operation/mismatch sensors, per-drive health/error sensors, sync progress with byte counters and speed limits, and v3 graphs.
 
 ### Version 2 (legacy)
 
-Partial support. Discovery creates database records and health/operation/device-presence sensors. Graphs use the legacy RRD format (same as v1).
+Partial support. Discovery creates database records and health/operation/drive-presence sensors. Graphs use the legacy RRD format (same as v1).
 
 | Field | v2 | v3 |
 |---|---|---|
@@ -107,7 +107,7 @@ Partial support. Discovery creates database records and health/operation/device-
 | RAID level | ✓ | ✓ |
 | State | ✓ | ✓ |
 | Disk counts (total, active, spare, failed, working) | inferred | ✓ |
-| Degraded flag | ✓  | ✓  |
+| Degraded status | ✓ | ✓  |
 | Sync action | ✓ | ✓ |
 | Sync speed | ✓ | ✓  |
 | Sync completion % | ✓  | ✓ |
@@ -121,30 +121,19 @@ Partial support. Discovery creates database records and health/operation/device-
 | Consistency policy | — | ✓ |
 | Chunk size | — | ✓ |
 | Mismatch count | — | ✓ |
-| Per-device slot, size, model, serial | — | ✓ |
-| Per-device state flags and errors | — | ✓ |
-| Sensors (health, operation, mismatch, device health) | partial (no mismatch) | ✓ |
-| Error reporting | ✓ (`error` field; 1 = jq missing, 2 = no arrays) | — |
+| Per-drive slot, size, model, serial | — | ✓ |
+| Per-drive state flags and errors | — | ✓ |
+| Sensors (health, operation, mismatch, drive health) | partial (no mismatch) | ✓ |
+| Error reporting | ✓ (`error` field; 1 = jq missing, 2 = no arrays) | Se bellow |
 
 Disk counts are inferred from the payload rather than reported directly:
 
-- `hotspare_count` is recomputed as `max(0, slave_count − disc_count)`. The agent field can be negative when a device is physically removed from sysfs before the agent runs.
-- `failed_devices` = `len(missing_devices_list)` + removed count, where removed = `max(0, disc_count − slave_count)`.
+- `hotspare_count` is recomputed as `max(0, slave_count − disc_count)`. The agent field can be negative when a drive is physically removed from sysfs before the agent runs.
+- `failed_drives` = `len(missing_devices_list)` + removed count, where removed = `max(0, disc_count − slave_count)`.
 - `active_devices` = `disc_count − hotspare − failed`, `working_devices` = `disc_count − failed`.
 - The `degraded` boolean flag is reflected in the array health sensor (0 = Healthy, 1 = Degraded) but is not stored as a numeric count in the database; the Disk Counts panel omits it for v1/v2 arrays.
 
-**Removed devices:** when a device is physically removed it disappears from sysfs and is absent from both `device_list` and `missing_devices_list`. LibreNMS detects it via the count difference and marks the device sensor as **Unknown** on the next poll cycle. The DB record and sensor are cleaned up on the next discovery run.
-
-### Version 1 (legacy)
-
-Same support level as v2. Handled by the same code path after normalising the key difference (`missing_device_list` → `missing_devices_list`).
-
-| Field | v1 | v2 |
-|---|---|---|
-| Missing device list key | `missing_device_list` | `missing_devices_list` |
-| Value types | strings | numbers |
-| Error reporting | `error` always `"0"` — not used | `error` non-zero signals agent error |
-| All other fields | identical | identical |
+**Removed drives:** when a drive is physically removed it disappears from sysfs and is absent from both `device_list` and `missing_devices_list`. LibreNMS detects it via the count difference and marks the drive sensor as **Unknown** on the next poll cycle. The DB record and sensor are cleaned up on the next discovery run.
 
 ## Agent Exit Codes
 
