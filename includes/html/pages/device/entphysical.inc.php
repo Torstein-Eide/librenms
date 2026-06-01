@@ -11,8 +11,12 @@ function printEntPhysical($device, $ent, $level, $class)
     foreach ($ents as $ent) {
         //Let's find if we have any sensors attached to the current entity;
         //We hit this code for every type of entity because not all vendors have 1 'sensor' entity per sensor
+        // The sensor_index fallback excludes poller_type='ipmi': IPMI sensors come from
+        // ipmitool (no ENTITY-MIB entity) and use a sequential sensor_index that would
+        // otherwise mismatch onto unrelated low-index entities. TODO: attach IPMI sensors
+        // to their real hardware entity. See LibreNMS\OS\Linux::discoverEntityPhysical.
         $sensors = DeviceCache::getPrimary()->sensors()->where(fn (Builder $query) => $query->where('entPhysicalIndex', $ent['entPhysicalIndex'])
-            ->orWhere(fn (Builder $q) => $q->whereNull('entPhysicalIndex')->where('sensor_index', $ent['entPhysicalIndex'])))->get();
+            ->orWhere(fn (Builder $q) => $q->whereNull('entPhysicalIndex')->where('poller_type', '!=', 'ipmi')->where('sensor_index', $ent['entPhysicalIndex'])))->get();
         echo "
  <li class='$class'>";
 

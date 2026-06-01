@@ -66,6 +66,14 @@ class Linux extends Shared\Unix implements VminfoDiscovery
 
     public function discoverEntityPhysical(): Collection
     {
+        // TODO: IPMI sensors (includes/discovery/sensors/ipmi.inc.php) come from
+        // ipmitool, not SNMP, so they have no ENTITY-MIB entity and are currently
+        // not represented in the inventory tree at all. The goal is to attach them
+        // to the real hardware they belong to (the chassis / power supply / etc.)
+        // rather than synthesizing a placeholder subtree. Until that mapping exists
+        // they stay unlinked (entPhysicalIndex NULL) and are excluded from the
+        // sensor_index fallback on the inventory page so they don't mismatch onto
+        // unrelated entities. See includes/html/pages/device/entphysical.inc.php.
         return $this->discoverEntityMibInventory()
             ->merge($this->discoverLsiMegaRaidInventory())
             ->keyBy->getCompositeKey()
