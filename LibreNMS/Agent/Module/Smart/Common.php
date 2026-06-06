@@ -670,7 +670,13 @@ class Common extends Application
 
         $this->sataSubindexChangeRows = [];
         foreach ($this->walkSataTable('smartSATAChangeBySubindexTable', 3) as $devIdx => $tableRows) {
+            if (! is_array($tableRows)) {
+                continue;
+            }
             foreach ($tableRows as $tableId => $subindexes) {
+                if (! is_array($subindexes)) {
+                    continue;
+                }
                 foreach ($subindexes as $subindex => $row) {
                     if (is_array($row)) {
                         $this->sataSubindexChangeRows[(string) $devIdx][(string) $tableId][(string) $subindex] =
