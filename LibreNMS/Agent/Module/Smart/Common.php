@@ -1388,14 +1388,6 @@ class Common extends Application
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Print a debug line when -vv is active. */
-    private function vlog(string $msg): void
-    {
-        if (Debug::isVerbose()) {
-            echo PHP_EOL . "smart_mib: {$msg}";
-        }
-    }
-
     /** Return only SATA/ATA devices from the common device table. */
     private function sataDevices(): array
     {
