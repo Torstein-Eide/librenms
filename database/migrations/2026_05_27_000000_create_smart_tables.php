@@ -157,7 +157,7 @@ return new class extends Migration
             $table->unsignedBigInteger('reg_lba')->nullable();
             $table->unsignedInteger('powerup_ms')->nullable();
             $table->string('description', 128)->nullable();
-            $table->unique(['app_id', 'disk_key', 'error_entry_num', 'cmd_slot']);
+            $table->unique(['app_id', 'disk_key', 'error_entry_num', 'cmd_slot'], 'smart_sata_error_cmd_unique');
         });
 
         Schema::create('smart_sata_erc', function (Blueprint $table) {
