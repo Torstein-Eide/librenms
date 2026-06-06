@@ -1374,7 +1374,7 @@ class Common extends Application
             }
 
             // Strip V1-only DS; no-op if they're absent or the file doesn't exist.
-            $rrdFile = Rrd::name($deviceModel->hostname, $v2Name);
+            $rrdFile = $rrd->name($deviceModel->hostname, $v2Name);
             $rrd->discardDatasets($rrdFile, self::V1_SATA_DISCARD_DS);
 
             DB::table('smart_devices')
