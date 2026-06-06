@@ -91,7 +91,15 @@ class Common extends Application
         'extended', 'short', 'conveyance', 'selective',
     ];
 
-    
+    private ?array $commonDevices        = null;
+    private ?array $sataChangeRows       = null;
+    private ?array $sataSubindexChangeRows = null;
+    private ?array $prevSataChange       = null;
+    private array  $sataHealth           = [];
+    private array  $sataAttributes       = [];
+    private array  $sensorRows           = [];
+
+
 
     // ── Public interface ──────────────────────────────────────────────────────
 

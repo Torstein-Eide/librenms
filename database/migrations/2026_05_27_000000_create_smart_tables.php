@@ -27,7 +27,7 @@ return new class extends Migration
             $table->unsignedInteger('app_id');
             $table->unsignedInteger('device_id');
             $table->string('disk_key', 160);
-            $table->unsignedSmallInteger('snmp_index')->nullable();
+            $table->unsignedInteger('snmp_index')->nullable();
             $table->string('device_name', 64)->nullable();
             $table->string('device_path', 256)->nullable();
             $table->unsignedTinyInteger('protocol_type')->nullable();
