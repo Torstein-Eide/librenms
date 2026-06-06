@@ -174,7 +174,6 @@ class Common extends Application
         foreach ($this->commonDevices as $devIdx => $dev) {
             $diskKey = $dev['disk_key'];
             $idx     = $this->mibDiskIndex($diskKey);
-            $nav     = $this->mibDiskNavigation($diskKey);
             $devName = $this->sensorLabel($dev, (string) $devIdx);
             foreach ($this->sensorRows[$devIdx] ?? [] as $sensorIdx => $row) {
                 $type  = $row['smartmonSensorType'] ?? null;
@@ -202,7 +201,7 @@ class Common extends Application
                     'sensor_index'      => $sIdx,
                     'sensor_oid'        => "app:smart_mib:{$sIdx}",
                     'group'             => $group,
-                    'sensor_navigation' => $nav,
+
                     'sensor_descr'      => $descr,
                     'sensor_current'    => $value,
                 ];
@@ -273,7 +272,6 @@ class Common extends Application
         $diskKey = $dev['disk_key'];
         $devName = $this->sensorLabel($dev, $dev['snmp_index']);
         $idx     = $this->mibDiskIndex($diskKey);
-        $nav     = $this->mibDiskNavigation($diskKey);
         $group   = 'SMART';
 
         // Health: synthesised from overall status + attribute statuses
@@ -288,7 +286,7 @@ class Common extends Application
                     'sensor_index'      => "{$idx}_health",
                     'sensor_oid'        => "app:smart_mib:{$idx}_health",
                     'group'             => $group,
-                    'sensor_navigation' => $nav,
+
                     'sensor_descr'      => "{$group} {$devName} Health",
                     'sensor_current'    => $synthesized,
                 ]))
@@ -314,7 +312,7 @@ class Common extends Application
                     'sensor_index'      => "{$idx}_selftest_status",
                     'sensor_oid'        => "app:smart_mib:{$idx}_selftest_status",
                     'group'             => $group,
-                    'sensor_navigation' => $nav,
+
                     'sensor_descr'      => "{$group} {$devName} Self-test Status",
                     'sensor_current'    => $statusNibble,
                 ]))
