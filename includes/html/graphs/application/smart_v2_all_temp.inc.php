@@ -4,7 +4,7 @@ use App\Facades\Rrd;
 use App\Models\Sensor;
 
 $tempSensors = Sensor::where('device_id', $device['device_id'])
-    ->where('sensor_type', 'smart_temperature')
+    ->whereIn('sensor_type', ['smart_temperature', 'smart_mib_temperature'])
     ->orderBy('sensor_descr')
     ->get();
 
