@@ -1,0 +1,1126 @@
+SMARTMON-TC-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    MODULE-IDENTITY, Integer32, Unsigned32, Counter64, OBJECT-TYPE, enterprises
+        FROM SNMPv2-SMI
+    TEXTUAL-CONVENTION
+        FROM SNMPv2-TC;
+
+-- Root OID for all SMARTMON-*-MIB modules
+smartmonRoot OBJECT IDENTIFIER ::= { enterprises 65891 1 1 }
+
+smartmonTcMIB MODULE-IDENTITY
+    LAST-UPDATED "202605210000Z"
+    ORGANIZATION "Unassigned"
+    CONTACT-INFO
+        "This is a draft MIB for smartmontools smartctl output.
+
+         TODO: Replace the placeholder enterprise OID before publication."
+    DESCRIPTION
+        "Textual conventions shared across all SMARTMON-*-MIB modules."
+    REVISION "202605210000Z"
+    DESCRIPTION
+        "Added SmartmonAtaApmLevel. Added SmartmonLogicalBlockAddress.
+         Added SmartmonAtaMinorVersion (named INTEGER, word-81 values).
+         Added SmartmonAtaLogAddress (GetLogName), SmartmonAtaDevStatPage
+         (device statistics page numbers), SmartmonAtaOfflineStatus
+         (offline collection status bits 6:0).
+         Fixed SmartmonAtaSelfTestType: replaced unknown(0)/abort(9) with
+         offline(0)/abortOffline(127); added captive variants 129-132.
+         Removed unused neverRun(255) from SmartmonAtaSelfTestResult."
+    REVISION "202605180000Z"
+    DESCRIPTION "Initial draft."
+    ::= { smartmonRoot 1 }
+
+-- --------------------------------------------------------------------------
+-- Textual conventions
+-- --------------------------------------------------------------------------
+
+SmartmonDeviceType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Device or transport family as reported or selected for smartctl
+         (device.type in smartctl --json output).
+
+         The enumeration 'unknown(0)' is applicable when the device type
+         cannot be determined.
+
+         The enumeration 'ata(1)' is applicable for native ATA/PATA
+         devices.
+
+         The enumeration 'sat(2)' is applicable for ATA devices accessed
+         via a SCSI-ATA Translation (SAT) layer, such as USB-attached
+         drives presenting a SAT interface.
+
+         The enumeration 'scsi(3)' is applicable for generic SCSI devices
+         not covered by more specific types.
+
+         The enumeration 'sas(4)' is applicable for SAS (Serial Attached
+         SCSI) devices.
+
+         The enumeration 'nvme(5)' is applicable for NVMe devices.
+
+         The enumeration 'usbBridge(6)' is applicable for ATA devices
+         accessed through a USB bridge.
+
+         The enumeration 'megaraid(7)' is applicable for drives accessed
+         through a MegaRAID controller.
+
+         The enumeration 'cciss(8)' is applicable for drives accessed
+         through an HP cciss/hpsa controller.
+
+         The enumeration 'areca(9)' is applicable for drives accessed
+         through an Areca RAID controller.
+
+         The enumeration 'other(255)' is applicable when the device type
+         is known to smartctl but does not match any of the above."
+    SYNTAX INTEGER {
+        unknown(0),
+        ata(1),
+        sat(2),
+        scsi(3),
+        sas(4),
+        nvme(5),
+        usbBridge(6),
+        megaraid(7),
+        cciss(8),
+        areca(9),
+        other(255)
+    }
+
+SmartmonHealthStatus ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Normalized health status derived from the SMART overall-health
+         self-assessment test result (smartctl -H).
+
+         The enumeration 'unknown(0)' is applicable when the health
+         status cannot be determined.
+
+         The enumeration 'passed(1)' is applicable when the device
+         reports that it is unlikely to fail within 24 hours.
+
+         The enumeration 'failed(2)' is applicable when the device
+         reports that failure is predicted or that a SMART command
+         returned an error.
+
+         The enumeration 'warning(3)' is applicable when a warning
+         condition is detected that does not constitute an outright
+         failure (for example, a pre-failure attribute approaching its
+         threshold).
+
+         The enumeration 'unavailable(4)' is applicable when the health
+         status cannot be read from the device (for example, because
+         SMART is not supported or is disabled)."
+    SYNTAX INTEGER {
+        unknown(0),
+        passed(1),
+        failed(2),
+        warning(3),
+        unavailable(4)
+    }
+
+SmartmonPollResult ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Result of the last smartctl data collection attempt for a
+         device.
+
+         The enumeration 'unknown(0)' is applicable when no collection
+         has been attempted since the agent started.
+
+         The enumeration 'ok(1)' is applicable when the last collection
+         completed and produced parseable output.
+
+         The enumeration 'failed(2)' is applicable when smartctl exited
+         with a non-zero status indicating a device or command error.
+
+         The enumeration 'timeout(3)' is applicable when the smartctl
+         process did not complete within the configured time limit.
+
+         The enumeration 'permissionDenied(4)' is applicable when
+         smartctl could not open the device due to insufficient
+         privileges.
+
+         The enumeration 'unsupported(5)' is applicable when the device
+         does not support SMART or the requested protocol.
+
+         The enumeration 'parseError(6)' is applicable when smartctl
+         produced output that the agent could not parse."
+    SYNTAX INTEGER {
+        unknown(0),
+        ok(1),
+        failed(2),
+        timeout(3),
+        permissionDenied(4),
+        unsupported(5),
+        parseError(6)
+    }
+
+SmartmonPercentage ::= TEXTUAL-CONVENTION
+    DISPLAY-HINT "d"
+    STATUS      current
+    DESCRIPTION
+        "Percentage value.  NVMe Percentage Used can exceed 100 per the
+         NVMe specification, so the range is intentionally wider than
+         0..100."
+    SYNTAX Unsigned32 (0..4294967295)
+
+SmartmonNvmeSelfTestResult ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "NVMe self-test result code from the Device Self-test log
+         (nvme_self_test_log.table[].self_test_status.result in
+         smartctl --json output).  Source: nvmeprint.cpp.
+
+         The enumeration 'unknown(0)' is applicable when the result
+         cannot be determined or mapped.
+
+         The enumeration 'completedWithoutError(1)' indicates that the
+         operation completed without error.
+
+         The enumeration 'abortedByHost(2)' indicates that the operation
+         was aborted by a Device Self-test command issued by the host.
+
+         The enumeration 'interruptedByControllerReset(3)' indicates
+         that the operation was aborted due to a Controller Level Reset.
+
+         The enumeration 'failedUnknownSegment(4)' indicates that the
+         operation completed with a fatal error or unknown test error;
+         the failing segment is not known.
+
+         The enumeration 'failedKnownSegment(5)' indicates that the
+         operation completed with one or more failed segments and the
+         first failing segment number is recorded.
+
+         The enumeration 'abortedUnknownReason(6)' indicates that the
+         operation was aborted for an unknown reason.
+
+         The enumeration 'abortedSanitizeOperation(7)' indicates that
+         the operation was aborted due to a sanitize operation.
+
+         The enumeration 'noSelfTestInProgress(8)' indicates that no
+         self-test operation is in progress (entry not used or cleared).
+
+         The enumeration 'inProgress(9)' indicates that a self-test
+         operation is currently in progress.
+
+         The enumeration 'vendorSpecific(255)' is applicable for result
+         codes not covered by the NVMe specification."
+    SYNTAX INTEGER {
+        unknown(0),
+        completedWithoutError(1),
+        abortedByHost(2),
+        interruptedByControllerReset(3),
+        failedUnknownSegment(4),
+        failedKnownSegment(5),
+        abortedUnknownReason(6),
+        abortedSanitizeOperation(7),
+        noSelfTestInProgress(8),
+        inProgress(9),
+        vendorSpecific(255)
+    }
+
+SmartmonAtaSelfTestResult ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Normalized ATA/SATA self-test result derived from the status
+         nibble of the Self-test execution status byte, as recorded in
+         the self-test log (ata_smart_self_test_log.extended.table[].
+         status.value >> 4).  Source: ataprint.cpp PrintSmartSelfExecStatus,
+         atacmds.cpp ataPrintSmartSelfTestEntry.
+
+         The enumeration 'unknown(0)' is applicable when the result
+         cannot be determined or mapped.
+
+         The enumeration 'completedWithoutError(1)' indicates that the
+         self-test routine completed without error.
+
+         The enumeration 'abortedByHost(2)' indicates that the self-test
+         routine was aborted by the host.
+
+         The enumeration 'interruptedByReset(3)' indicates that the
+         self-test routine was interrupted by the host with a hard or
+         soft reset.
+
+         The enumeration 'fatalOrUnknownFailure(4)' indicates that a
+         fatal error or unknown test error occurred while the device was
+         executing its self-test routine and the device was unable to
+         complete the self-test routine.
+
+         The enumeration 'completedUnknownFailure(5)' indicates that
+         the self-test completed having a test element that failed and
+         the test element that failed is not known.
+
+         The enumeration 'completedElectricalFailure(6)' indicates that
+         the self-test completed having the electrical element of the
+         test failed.
+
+         The enumeration 'completedServomechanismFailure(7)' indicates
+         that the self-test completed having the servo (and/or seek)
+         element of the test failed.
+
+         The enumeration 'completedReadFailure(8)' indicates that the
+         self-test completed having the read element of the test failed.
+
+         The enumeration 'completedHandlingDamageSuspect(9)' indicates
+         that the self-test completed having a test element that failed
+         and the device is suspected of having handling damage.
+
+         The enumeration 'inProgress(15)' indicates that a self-test
+         routine is currently in progress."
+    SYNTAX INTEGER {
+        unknown(0),
+        completedWithoutError(1),
+        abortedByHost(2),
+        interruptedByReset(3),
+        fatalOrUnknownFailure(4),
+        completedUnknownFailure(5),
+        completedElectricalFailure(6),
+        completedServomechanismFailure(7),
+        completedReadFailure(8),
+        completedHandlingDamageSuspect(9),
+        inProgress(15)
+    }
+
+SmartmonAtaSelfTestType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The type of self-test recorded in an ATA/SATA self-test log
+         entry, as the raw self-test routine byte from the log
+         (ata_smart_self_test_log.extended.table[].type.value).
+         Source: ata.h ATA_SMART_IMMEDIATE_OFFLINE subcommand values,
+         ataprint.cpp.
+
+         Bit 7 (0x80) of the raw byte distinguishes captive (foreground,
+         bit 7 set) from offline (background, bit 7 clear) mode.
+         Values 0x40-0x7e and 0x90+ are vendor-specific and will appear
+         as unrecognised integers.
+
+         The enumeration 'offline(0)' corresponds to OFFLINE_FULL_SCAN
+         (0x00): a full offline data collection scan.
+
+         The enumeration 'short(1)' corresponds to SHORT_SELF_TEST
+         (0x01): a short self-test run in background (offline) mode.
+
+         The enumeration 'extended(2)' corresponds to EXTEND_SELF_TEST
+         (0x02): an extended (long) self-test run in background mode.
+
+         The enumeration 'conveyance(3)' corresponds to
+         CONVEYANCE_SELF_TEST (0x03): a conveyance self-test intended
+         to verify correct operation after transport.
+
+         The enumeration 'selective(4)' corresponds to
+         SELECTIVE_SELF_TEST (0x04): a selective self-test operating
+         on a specified LBA range.
+
+         The enumeration 'abortOffline(127)' corresponds to
+         ABORT_SELF_TEST (0x7F): aborts the current self-test or offline
+         data collection.
+
+         The enumeration 'shortCaptive(129)' corresponds to
+         SHORT_CAPTIVE_SELF_TEST (0x81): a short self-test run in
+         captive (foreground) mode.
+
+         The enumeration 'extendedCaptive(130)' corresponds to
+         EXTEND_CAPTIVE_SELF_TEST (0x82): an extended (long) self-test
+         run in captive mode.
+
+         The enumeration 'conveyanceCaptive(131)' corresponds to
+         CONVEYANCE_CAPTIVE_SELF_TEST (0x83): a conveyance self-test
+         run in captive mode.
+
+         The enumeration 'selectiveCaptive(132)' corresponds to
+         SELECTIVE_CAPTIVE_SELF_TEST (0x84): a selective self-test run
+         in captive mode."
+    SYNTAX INTEGER {
+        offline(0),
+        short(1),
+        extended(2),
+        conveyance(3),
+        selective(4),
+        abortOffline(127),
+        shortCaptive(129),
+        extendedCaptive(130),
+        conveyanceCaptive(131),
+        selectiveCaptive(132)
+    }
+
+SmartmonNvmeSelfTestType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The type of self-test recorded in an NVMe self-test log entry,
+         derived from the Self-test Action field of the Device Self-test
+         command (nvme_self_test_log.table[].self_test_code.value).
+         Source: nvmeprint.cpp.
+
+         The enumeration 'unknown(0)' is applicable when the test type
+         cannot be determined or mapped.
+
+         The enumeration 'short(1)' indicates a Short Device Self-test
+         operation covering a limited set of tests.
+
+         The enumeration 'extended(2)' indicates an Extended Device
+         Self-test operation covering all tests.
+
+         The enumeration 'vendorSpecific(255)' is applicable for test
+         type codes not covered by the NVMe specification."
+    SYNTAX INTEGER {
+        unknown(0),
+        short(1),
+        extended(2),
+        vendorSpecific(255)
+    }
+
+SmartmonSasSelfTestType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The type of self-test recorded in a SAS/SCSI self-test log
+         entry, derived from the self-test code field of the LOG SENSE
+         Self-Test Results log page (0x10).  Source: scsiprint.cpp.
+
+         The enumeration 'unknown(0)' is applicable when the test type
+         cannot be determined or mapped.
+
+         The enumeration 'backgroundShort(1)' indicates a Background
+         Short self-test.
+
+         The enumeration 'backgroundExtended(2)' indicates a Background
+         Extended self-test.
+
+         The enumeration 'foregroundShort(3)' indicates a Foreground
+         Short self-test run in captive mode.
+
+         The enumeration 'foregroundExtended(4)' indicates a Foreground
+         Extended self-test run in captive mode."
+    SYNTAX INTEGER {
+        unknown(0),
+        backgroundShort(1),
+        backgroundExtended(2),
+        foregroundShort(3),
+        foregroundExtended(4)
+    }
+
+SmartmonAtaSmartAttrType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA SMART attribute type derived from the prefailure flag
+         (bit 0) of the attribute flags word.
+         Source: ataprint.cpp, ATA-8 ACS table 54.
+
+         The enumeration 'unknown(0)' is applicable when the attribute
+         type cannot be determined.
+
+         The enumeration 'prefailure(1)' is applicable when the
+         prefailure flag (bit 0) is set, indicating that failure of this
+         attribute is a warning of imminent drive failure.
+
+         The enumeration 'oldAge(2)' is applicable when the prefailure
+         flag is clear, indicating that the attribute represents a
+         normal aging effect rather than a precursor to failure."
+    SYNTAX INTEGER {
+        unknown(0),
+        prefailure(1),
+        oldAge(2)
+    }
+
+SmartmonAtaSmartAttrUpdated ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Whether an ATA SMART attribute is updated continuously or only
+         during offline data collection, derived from the updated flag
+         (bit 1) of the attribute flags word.
+         Source: ataprint.cpp, ATA-8 ACS table 54.
+
+         The enumeration 'unknown(0)' is applicable when the update
+         mode cannot be determined.
+
+         The enumeration 'always(1)' is applicable when bit 1 is set,
+         indicating that the attribute is updated continuously during
+         normal device operation.
+
+         The enumeration 'offline(2)' is applicable when bit 1 is
+         clear, indicating that the attribute is updated only during
+         offline data collection."
+    SYNTAX INTEGER {
+        unknown(0),
+        always(1),
+        offline(2)
+    }
+
+SmartmonAtaSmartAttrStatus ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Failure status of an ATA SMART attribute derived by comparing
+         its normalized value and worst-ever value against the failure
+         threshold.  Source: ataprint.cpp.
+
+         The enumeration 'notRelevant(-1)' is applicable when the
+         failure threshold is 0, meaning no failure threshold is defined
+         for this attribute.
+
+         The enumeration 'unknown(0)' is applicable when the status
+         cannot be determined.
+
+         The enumeration 'ok(1)' is applicable when the normalized value
+         and worst value are both above the failure threshold.
+
+         The enumeration 'failingNow(2)' is applicable when the current
+         normalized value is at or below the failure threshold
+         (prefailure condition).
+
+         The enumeration 'failedInPast(3)' is applicable when the
+         worst-ever value was at or below the failure threshold at some
+         point, even if the current value has since recovered."
+    SYNTAX INTEGER {
+        notRelevant(-1),
+        unknown(0),
+        ok(1),
+        failingNow(2),
+        failedInPast(3)
+    }
+
+SmartmonAtaFormFactor ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA drive form factor derived from IDENTIFY DEVICE word 168
+         bits 3:0 (form_factor.ata_value).
+         Source: ataprint.cpp, ACS-3 INCITS 522-2014 table 72.
+
+         The enumeration 'unknown(0)' indicates that the field is not
+         reported or contains a reserved value.
+
+         The enumeration 'inches525(1)' indicates a 5.25-inch form
+         factor device.
+
+         The enumeration 'inches35(2)' indicates a 3.5-inch form
+         factor device.
+
+         The enumeration 'inches25(3)' indicates a 2.5-inch form
+         factor device.
+
+         The enumeration 'inches18(4)' indicates a 1.8-inch form
+         factor device.
+
+         The enumeration 'lessThan18Inches(5)' indicates a device
+         with a form factor smaller than 1.8 inches.
+
+         The enumeration 'mSata(6)' indicates an mSATA device.
+
+         The enumeration 'm2(7)' indicates an M.2 device.
+
+         The enumeration 'microSsd(8)' indicates a MicroSSD device.
+
+         The enumeration 'cFast(9)' indicates a CFast device."
+    SYNTAX INTEGER {
+        unknown(0),
+        inches525(1),
+        inches35(2),
+        inches25(3),
+        inches18(4),
+        lessThan18Inches(5),
+        mSata(6),
+        m2(7),
+        microSsd(8),
+        cFast(9)
+    }
+
+SmartmonSataVersion ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "SATA version derived from the most-significant set bit of bits
+         11:0 of IDENTIFY DEVICE word 222 (sata_version.value).
+         Source: ataprint.cpp, Serial ATA revision history.
+
+         The enumeration 'unknown(0)' indicates that the field is
+         0x0000 or 0xffff (not reported).
+
+         Values are offset by one from the bit position so that
+         unknown(0) is unambiguous: ata8Ast(1) corresponds to bit 0,
+         sata10a(2) to bit 1, and so on through sataAbove35(12) for
+         any bit above bit 10.
+
+         The enumeration 'ata8Ast(1)' indicates ATA8-AST.
+         The enumeration 'sata10a(2)' indicates SATA 1.0a.
+         The enumeration 'sataIiExt(3)' indicates SATA II Extensions.
+         The enumeration 'sata25(4)' indicates SATA 2.5.
+         The enumeration 'sata26(5)' indicates SATA 2.6.
+         The enumeration 'sata30(6)' indicates SATA 3.0.
+         The enumeration 'sata31(7)' indicates SATA 3.1.
+         The enumeration 'sata32(8)' indicates SATA 3.2.
+         The enumeration 'sata33(9)' indicates SATA 3.3.
+         The enumeration 'sata34(10)' indicates SATA 3.4.
+         The enumeration 'sata35(11)' indicates SATA 3.5.
+         The enumeration 'sataAbove35(12)' indicates a SATA revision
+         above 3.5 not yet named in this TC."
+    SYNTAX INTEGER {
+        unknown(0),
+        ata8Ast(1),
+        sata10a(2),
+        sataIiExt(3),
+        sata25(4),
+        sata26(5),
+        sata30(6),
+        sata31(7),
+        sata32(8),
+        sata33(9),
+        sata34(10),
+        sata35(11),
+        sataAbove35(12)
+    }
+
+SmartmonAtaDeviceState ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Device state nibble from an ATA error log entry
+         (device_state.value & 0x0f).
+         Source: ataprint.cpp, ATA-8 ACS error log format.
+
+         The enumeration 'unknown(0)' is applicable when the device
+         state cannot be determined or is reserved.
+
+         The enumeration 'sleeping(1)' indicates that the device was
+         in the Sleep power mode when the error occurred.
+
+         The enumeration 'standby(2)' indicates that the device was
+         in Standby mode when the error occurred.
+
+         The enumeration 'activeOrIdle(3)' indicates that the device
+         was in Active or Idle mode when the error occurred.
+
+         The enumeration 'smartOfflineOrSelftest(4)' indicates that
+         the device was executing SMART Offline or a Self-test routine
+         when the error occurred.
+
+         Values 5..10 are reserved by the ATA specification.
+         Values 11..15 are vendor-specific."
+    SYNTAX INTEGER {
+        unknown(0),
+        sleeping(1),
+        standby(2),
+        activeOrIdle(3),
+        smartOfflineOrSelftest(4)
+    }
+
+SmartmonAtaMinorVersion ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA minor version number from IDENTIFY DEVICE word 81
+         (ata_version.minor_value).  0x0000 (0) and 0xffff (65535)
+         indicate not reported.  Values are sparse; unlisted integers
+         are reserved or vendor-specific.
+         Source: ataprint.cpp get_ata_minor_version."
+    SYNTAX INTEGER {
+        ata1X3t9Pr4(1),
+        ata1Ansi1994(2),
+        ata1X3t9Rev4(3),
+        ata2Ansi1996(4),
+        ata2X3t10Pr2k(5),
+        ata3X3t10Rev1(6),
+        ata2X3t10Rev2k(7),
+        ata3X3t10Rev0(8),
+        ata2X3t10Rev3(9),
+        ata3Ansi1997(10),
+        ata3X3t10Rev6(11),
+        ata3X3t13Rev7(12),
+        ataAtapi4X3t13Rev6(13),
+        ataAtapi4T13Rev13(14),
+        ataAtapi4X3t13Rev7(15),
+        ataAtapi4T13Rev18(16),
+        ataAtapi4T13Rev15(17),
+        ataAtapi4Ansi1998(18),
+        ataAtapi5T13Rev3(19),
+        ataAtapi4T13Rev14(20),
+        ataAtapi5T13Rev1(21),
+        ataAtapi5Ansi2000(22),
+        ataAtapi4T13Rev17(23),
+        ataAtapi6T13Rev0(24),
+        ataAtapi6T13Rev3a(25),
+        ataAtapi7T13Rev1(26),
+        ataAtapi6T13Rev2(27),
+        ataAtapi6T13Rev1(28),
+        ataAtapi7Ansi2005(29),
+        ataAtapi7T13Rev0(30),
+        acs3T13Rev3b(31),
+        ataAtapi7T13Rev4a(33),
+        ataAtapi6Ansi2002(34),
+        acs6BsrRev7(37),
+        ata8AcsRev3c(39),
+        ata8AcsRev6(40),
+        ata8AcsRev4(41),
+        acs5BsrRev10(48),
+        acs2T13Rev2(49),
+        ata8AcsRev3e(51),
+        ata8AcsRev4c(57),
+        ata8AcsRev3f(66),
+        ata8AcsRev3b(82),
+        acs4BsrRev5(94),
+        acs3T13Rev5(109),
+        acs6BsrRev11(112),
+        acs6BsrRev2(115),
+        acs2Ansi2012(130),
+        acs4Ansi2018(156),
+        ata8AcsRev2d(263),
+        acs3Ansi2014(266),
+        acs2T13Rev3(272),
+        acs3T13Rev4(283)
+    }
+
+SmartmonAtaVersion ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA/ACS major version derived from the most-significant set bit
+         of IDENTIFY DEVICE word 80 (ata_version.major_value).
+         Source: ataprint.cpp, ATA revision history.
+
+         The enumeration 'unknown(0)' indicates that the field is
+         0x0000 or 0xffff (not reported).
+
+         The enumeration 'ata1(1)' indicates ATA-1.
+         The enumeration 'ata2(2)' indicates ATA-2.
+         The enumeration 'ata3(3)' indicates ATA-3.
+         The enumeration 'ataAtapi4(4)' indicates ATA/ATAPI-4.
+         The enumeration 'ataAtapi5(5)' indicates ATA/ATAPI-5.
+         The enumeration 'ataAtapi6(6)' indicates ATA/ATAPI-6.
+         The enumeration 'ataAtapi7(7)' indicates ATA/ATAPI-7.
+         The enumeration 'ata8Acs(8)' indicates ATA8-ACS.
+         The enumeration 'acs2(9)' indicates ACS-2.
+         The enumeration 'acs3(10)' indicates ACS-3.
+         The enumeration 'acs4(11)' indicates ACS-4.
+         The enumeration 'acs5(12)' indicates ACS-5.
+         The enumeration 'acs6(13)' indicates ACS-6.
+         The enumeration 'acsAbove6(14)' indicates ACS-7 or later,
+         not yet named in this TC."
+    SYNTAX INTEGER {
+        unknown(0),
+        ata1(1),
+        ata2(2),
+        ata3(3),
+        ataAtapi4(4),
+        ataAtapi5(5),
+        ataAtapi6(6),
+        ataAtapi7(7),
+        ata8Acs(8),
+        acs2(9),
+        acs3(10),
+        acs4(11),
+        acs5(12),
+        acs6(13),
+        acsAbove6(14)
+    }
+
+SmartmonAtaApmLevel ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA Advanced Power Management (APM) level (ata_apm.level).
+         Named values mark the boundary points of each band; all integers
+         within a band are valid and meaningful.
+
+         From hdparm(8): A low value means aggressive power management
+         and a high value means better performance.  Possible settings
+         range from values 1 through 127 (which permit spin-down), and
+         values 128 through 254 (which do not permit spin-down).  The
+         highest degree of power management is attained with a setting
+         of 1, and the highest I/O performance with a setting of 254.
+         A value of 255 tells hdparm to disable Advanced Power Management
+         altogether on the drive (not all drives support disabling it,
+         but most do).
+
+         Value 0 indicates APM is not reported by the drive."
+    SYNTAX INTEGER {
+        notReported(0),
+        minimumPower(1),
+        intermediateSpinDownLow(2),
+        intermediateSpinDownHigh(127),
+        intermediateNoSpinDownLow(128),
+        maximumPerformance(254),
+        apmDisabled(255)
+    }
+
+SmartmonAtaLogAddress ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA GPL/SMART log address as reported in the Log Directory
+         (ata_smart_log_directory / gp_log_directory table[].address).
+         Source: ataprint.cpp GetLogName.
+         Values 0x1a-0x1f, 0x26-0x2e, 0x31-0x41, 0x43-0x46,
+         0x48-0x52, 0x54-0x58, 0x5a-0x60, 0x62-0x7f are reserved.
+         All integers in hostVendorSpecificFirst(128)..hostVendorSpecificLast(159)
+         are host vendor specific logs.
+         All integers in deviceVendorSpecificFirst(160)..deviceVendorSpecificLast(223)
+         are device vendor specific logs.
+         Values 0xe2-0xff are reserved."
+    SYNTAX INTEGER {
+        logDirectory(0),
+        summarySmartErrorLog(1),
+        comprehensiveSmartErrorLog(2),
+        extComprehensiveSmartErrorLog(3),
+        deviceStatisticsLog(4),
+        reservedForCfa1(5),
+        smartSelfTestLog(6),
+        extendedSelfTestLog(7),
+        powerConditionsLog(8),
+        selectiveSelfTestLog(9),
+        deviceStatisticsNotification(10),
+        reservedForCfa2(11),
+        pendingDefectsLog(12),
+        lpsMisalignmentLog(13),
+        reservedForZac2(14),
+        senseDataForNcqLog(15),
+        ncqCommandErrorLog(16),
+        sataPhyEventCountersLog(17),
+        sataNcqNonDataLog(18),
+        sataNcqSendReceiveLog(19),
+        hybridInformationLog(20),
+        rebuildAssistLog(21),
+        outOfBandMgmtLog(22),
+        reservedForSata(23),
+        commandDurationLimitsLog(24),
+        lbaStatusLog(25),
+        streamingPerformanceLog(32),
+        writeStreamErrorLog(33),
+        readStreamErrorLog(34),
+        delayedSectorLog(35),
+        currentDeviceInternalStatus(36),
+        savedDeviceInternalStatus(37),
+        sectorConfigLog(47),
+        identifyDeviceDataLog(48),
+        mutateConfigurationsLog(66),
+        concurrentPositioningRangesLog(71),
+        senseDataLog(83),
+        powerConsumptionControlLog(89),
+        capacityModelNumberMappingLog(97),
+        hostVendorSpecificFirst(128),
+        hostVendorSpecificLast(159),
+        deviceVendorSpecificFirst(160),
+        deviceVendorSpecificLast(223),
+        sctCommandStatus(224),
+        sctDataTransfer(225)
+    }
+
+SmartmonAtaDevStatPage ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA Device Statistics log page number
+         (ata_device_statistics.pages[].number).
+         Source: ataprint.cpp get_device_statistics_page_name / devstat_infos,
+         ACS-3 INCITS 522-2014.
+
+         The enumeration 'supportedLogPages(0)' identifies the Supported
+         Log Pages page.
+
+         The enumeration 'generalStatistics(1)' identifies the General
+         Statistics page.
+
+         The enumeration 'freeFallStatistics(2)' identifies the Free-Fall
+         Statistics page.
+
+         The enumeration 'rotatingMediaStatistics(3)' identifies the
+         Rotating Media Statistics page.
+
+         The enumeration 'generalErrorsStatistics(4)' identifies the
+         General Errors Statistics page.
+
+         The enumeration 'temperatureStatistics(5)' identifies the
+         Temperature Statistics page.
+
+         The enumeration 'transportStatistics(6)' identifies the
+         Transport Statistics page.
+
+         The enumeration 'solidStateStatistics(7)' identifies the
+         Solid State Device Statistics page.
+
+         The enumeration 'vendorSpecific(255)' identifies a
+         vendor-specific statistics page."
+    SYNTAX INTEGER {
+        supportedLogPages(0),
+        generalStatistics(1),
+        freeFallStatistics(2),
+        rotatingMediaStatistics(3),
+        generalErrorsStatistics(4),
+        temperatureStatistics(5),
+        transportStatistics(6),
+        solidStateStatistics(7),
+        vendorSpecific(255)
+    }
+
+SmartmonAtaOfflineStatus ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA offline data collection status derived from bits 6:0 of the
+         status byte (ata_smart_data.offline_data_collection.status.value).
+         Bit 7 of the raw byte is the Auto Offline Data Collection enable
+         flag and is not represented here.
+         Source: ataprint.cpp OfflineDataCollectionStatus, ATA-8 ACS.
+
+         The enumeration 'neverStarted(0)' indicates that offline data
+         collection has never been started.
+
+         Values 0x01 and 0x07-0x3f are reserved by the ATA specification.
+
+         The enumeration 'completedWithoutError(2)' indicates that offline
+         data collection completed without error.
+
+         The enumeration 'inProgress(3)' indicates that offline data
+         collection is currently in progress.
+
+         The enumeration 'suspendedByCommand(4)' indicates that offline
+         data collection was suspended due to an interrupting command from
+         the host.
+
+         The enumeration 'abortedByCommand(5)' indicates that offline
+         data collection was aborted by the host issuing a command other
+         than Read or Write.
+
+         The enumeration 'abortedFatalError(6)' indicates that offline
+         data collection was aborted due to a fatal error.
+
+         Values 0x40-0x7f are vendor-specific."
+    SYNTAX INTEGER {
+        neverStarted(0),
+        completedWithoutError(2),
+        inProgress(3),
+        suspendedByCommand(4),
+        abortedByCommand(5),
+        abortedFatalError(6)
+    }
+
+SmartmonAtaSelfTestExecStatus ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "ATA self-test execution status code derived from bits 7:4 of
+         the raw status byte (ata_smart_data.self_test.status.value,
+         ATA-8 table 58).  Bits 3:0 encode remaining percentage / 10
+         and are reported separately as
+         smartmonSataSelfTestExecutionRemainingPct.
+         Source: ataprint.cpp PrintSmartSelfExecStatus, atacmds.cpp.
+
+         The enumeration 'completed(0)' indicates that the previous
+         self-test routine completed without error, or that no
+         self-test has ever been run.
+
+         The enumeration 'abortedByHost(1)' indicates that the
+         self-test routine was aborted by the host.
+
+         The enumeration 'interruptedByReset(2)' indicates that the
+         self-test routine was interrupted by the host with a hard or
+         soft reset.
+
+         The enumeration 'fatalError(3)' indicates that a fatal error
+         or unknown test error occurred while the device was executing
+         its self-test routine and the device was unable to complete
+         the self-test routine.
+
+         The enumeration 'failedUnknownElement(4)' indicates that the
+         previous self-test completed having a test element that failed
+         and the test element that failed is not known.
+
+         The enumeration 'failedElectricalElement(5)' indicates that
+         the previous self-test completed having the electrical element
+         of the test failed.
+
+         The enumeration 'failedServoElement(6)' indicates that the
+         previous self-test completed having the servo (and/or seek)
+         element of the test failed.
+
+         The enumeration 'failedReadElement(7)' indicates that the
+         previous self-test completed having the read element of the
+         test failed.
+
+         The enumeration 'failedHandlingDamage(8)' indicates that the
+         previous self-test completed having a test element that failed
+         and the device is suspected of having handling damage.
+
+         The enumerations 'reserved9(9)' through 'reserved14(14)' are
+         reserved by the ATA specification and should not appear in
+         practice.
+
+         The enumeration 'inProgress(15)' indicates that a self-test
+         routine is currently in progress.  The test type (short,
+         extended, conveyance, or selective) is not encoded in this
+         field; to identify the running test consult
+         smartmonSataSelfTestType.<deviceIndex>.1, which holds the
+         type of the most recent self-test log entry."
+    SYNTAX INTEGER {
+        completed(0),
+        abortedByHost(1),
+        interruptedByReset(2),
+        fatalError(3),
+        failedUnknownElement(4),
+        failedElectricalElement(5),
+        failedServoElement(6),
+        failedReadElement(7),
+        failedHandlingDamage(8),
+        reserved9(9),
+        reserved10(10),
+        reserved11(11),
+        reserved12(12),
+        reserved13(13),
+        reserved14(14),
+        inProgress(15)
+    }
+
+SmartmonScsiErrorDirection ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "I/O direction for SAS/SCSI error counter log rows, derived from
+         the log page address of the Error Counter log page.
+         Source: scsiprint.cpp, SPC-4 table 278.
+
+         The enumeration 'read(1)' identifies the Read Error Counter
+         log page (0x03).
+
+         The enumeration 'write(2)' identifies the Write Error Counter
+         log page (0x02).
+
+         The enumeration 'verify(3)' identifies the Verify Error Counter
+         log page (0x05)."
+    SYNTAX INTEGER {
+        read(1),
+        write(2),
+        verify(3)
+    }
+
+-- --------------------------------------------------------------------------
+-- Sensor textual conventions  (mirroring ENTITY-SENSOR-MIB RFC 3433)
+-- --------------------------------------------------------------------------
+
+SmartmonSensorDataType ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "The physical quantity measured by a sensor row in
+         smartmonSensorTable.  Together with SmartmonSensorDataScale and
+         SmartmonSensorPrecision it fully determines the unit of the
+         associated SmartmonSensorValue.
+
+         The enumeration 'other(1)' is applicable if the sensor type is
+         known but does not match any of the supported values.
+
+         The enumeration 'unknown(2)' is applicable if the sensor type
+         is not known to the agent.
+
+         The enumeration 'celsius(3)' is applicable for temperature
+         sensors reporting in degrees Celsius.
+
+         The enumeration 'watts(4)' is applicable for power sensors
+         reporting in watts.
+
+         The enumeration 'amperes(5)' is applicable for current sensors
+         reporting in amperes.
+
+         The enumeration 'voltsDC(6)' is applicable for DC voltage
+         sensors reporting in volts.
+
+         The enumeration 'voltsAC(7)' is applicable for AC voltage
+         sensors reporting in volts.
+
+         The enumeration 'vibration(8)' is applicable for vibration or
+         shock sensors.
+
+         The enumeration 'rpm(9)' is applicable for rotational speed
+         sensors reporting in revolutions per minute.
+
+         The enumeration 'percent(10)' is applicable for sensors
+         reporting a dimensionless percentage value."
+    REFERENCE "RFC 3433, EntitySensorDataType"
+    SYNTAX INTEGER {
+        other(1),
+        unknown(2),
+        celsius(3),
+        watts(4),
+        amperes(5),
+        voltsDC(6),
+        voltsAC(7),
+        vibration(8),
+        rpm(9),
+        percent(10)
+    }
+
+SmartmonSensorDataScale ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "SI prefix scaling factor for a sensor value.  An object of this
+         type SHOULD be examined together with the associated
+         SmartmonSensorPrecision and SmartmonSensorValue objects to
+         determine the true measurement.
+
+         Example: milliwatts uses scale milli(8), precision 0."
+    REFERENCE "RFC 3433, EntitySensorDataScale"
+    SYNTAX INTEGER {
+        yocto(1),    -- 10^-24
+        zepto(2),    -- 10^-21
+        atto(3),     -- 10^-18
+        femto(4),    -- 10^-15
+        pico(5),     -- 10^-12
+        nano(6),     -- 10^-9
+        micro(7),    -- 10^-6
+        milli(8),    -- 10^-3
+        units(9),    -- 10^0
+        kilo(10),    -- 10^3
+        mega(11),    -- 10^6
+        giga(12),    -- 10^9
+        tera(13),    -- 10^12
+        peta(14),    -- 10^15
+        exa(15),     -- 10^18
+        zetta(16),   -- 10^21
+        yotta(17)    -- 10^24
+    }
+
+SmartmonSensorPrecision ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Number of decimal places in the fractional part of the
+         associated SmartmonSensorValue fixed-point number.
+         Positive values (1..9) indicate fractional digits.
+         Negative values (-8..-1) indicate the number of accurate
+         integer digits.  Zero means the value is not fixed-point.
+
+         Example: temperature reported as whole degrees Celsius uses
+         scale units(9) and precision 0.  A sensor reporting tenths of
+         a degree uses precision 1 and a value ten times larger."
+    REFERENCE "RFC 3433, EntitySensorPrecision"
+    SYNTAX Integer32 (-8..9)
+
+SmartmonSensorValue ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "A sensor reading.  The true value is:
+             reading * 10^(scale_exponent - precision)
+         The value -1000000000 indicates underflow; +1000000000
+         indicates overflow."
+    REFERENCE "RFC 3433, EntitySensorValue"
+    SYNTAX Integer32 (-1000000000..1000000000)
+
+SmartmonSensorStatus ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Operational status of a sensor.
+
+         The enumeration 'ok(1)' indicates that the agent can obtain the
+         sensor value and the value is therefore reported.
+
+         The enumeration 'unavailable(2)' indicates that the agent
+         presently cannot obtain the sensor value.
+
+         The enumeration 'nonoperational(3)' indicates that the agent
+         believes the sensor is broken and will never return a valid
+         value."
+    REFERENCE "RFC 3433, EntitySensorStatus"
+    SYNTAX INTEGER {
+        ok(1),
+        unavailable(2),
+        nonoperational(3)
+    }
+
+SmartmonLogicalBlockAddress ::= TEXTUAL-CONVENTION
+    DISPLAY-HINT "d"
+    STATUS      current
+    DESCRIPTION
+        "A 64-bit Logical Block Address (LBA) identifying a sector on a
+         storage device.  Counter64 is used as the base type because
+         SMIv2 provides no unsigned 64-bit integer; the counter
+         semantics do not apply.  A value of 0xFFFFFFFFFFFFFFFF may
+         indicate an unknown or invalid LBA depending on context."
+    SYNTAX Counter64
+
+END
