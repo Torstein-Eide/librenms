@@ -386,7 +386,7 @@ class Common extends Application
                 ->where('snmp_index', (int) $snmpIndex)
                 ->update([
                     'last_poll_result' => $this->intValue($row['smartmonDeviceLastPollResult'] ?? null),
-                    'last_poll_time'   => $row['smartmonDeviceLastPollTime'] ?? null,
+                    'last_poll_time'   => $this->parseDateAndTime($row['smartmonDeviceLastPollTime'] ?? null),
                 ]);
         }
 
@@ -713,7 +713,7 @@ class Common extends Application
                 'serial_number'    => $dev['serial_number'],
                 'firmware_version' => $dev['firmware_version'],
                 'wwn'              => $dev['wwn'],
-                'last_poll_time'   => $dev['last_poll_time'] ,
+                'last_poll_time'   => $this->parseDateAndTime($dev['last_poll_time']),
                 'last_poll_result' => $dev['last_poll_result'],
                 'last_poll_exit'   => $dev['last_poll_exit_status'],
                 'physical_index'   => $dev['physical_index'] ?? 0,
@@ -1424,6 +1424,23 @@ class Common extends Application
             $this->commonDevices,
             fn($dev) => in_array($dev['device_type'] ?? 0, self::SATA_TYPES, true)
         );
+    }
+
+    /**
+     * Convert a SNMP DateAndTime string (e.g. "2026-6-6,22:15:11.0,+2:0")
+     * to a MySQL-compatible datetime string ("2026-06-06 22:15:11"), or null.
+     */
+    private function parseDateAndTime(mixed $raw): ?string
+    {
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+        $pattern = '/^(\d{4})-(\d{1,2})-(\d{1,2}),(\d{1,2}):(\d{2}):(\d{2})(?:\.\d+)?(?:,[+-]\d+:\d+)?$/';
+        if (! preg_match($pattern, trim((string) $raw), $m)) {
+            return null;
+        }
+
+        return sprintf('%04d-%02d-%02d %02d:%02d:%02d', $m[1], $m[2], $m[3], $m[4], $m[5], $m[6]);
     }
 
     /** Print a debug line when -vv is active. */
