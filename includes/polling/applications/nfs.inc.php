@@ -17,8 +17,6 @@ try {
 
 require base_path('includes/nfs-shared.inc.php');
 
-$data = $returned['data'];
-
 $rrd_def = RrdDefinition::make()
     ->addDataset('data', 'COUNTER');
 
