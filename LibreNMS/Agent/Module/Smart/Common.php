@@ -103,16 +103,9 @@ class Common extends Application
                 ->value('smartmonDeviceTableRowCount.0')
         );
 
-        if ($rowCount > 0) {
-            $this->vlog("shouldDiscover: MIB rowCount={$rowCount} → true");
-            return true;
-        }
+        $this->vlog("shouldDiscover: MIB rowCount={$rowCount}");
 
-        $this->vlog('shouldDiscover: MIB rowCount=0, checking V1 fallback');
-        $v1 = (new SmartV1($this->os, $this->app, $this->agent_data))->shouldDiscover();
-        $this->vlog('shouldDiscover: V1 fallback → ' . ($v1 ? 'true' : 'false'));
-
-        return $v1;
+        return $rowCount > 0;
     }
 
     public function discover(): void
