@@ -17,8 +17,9 @@ return new class extends Migration
             $table->unsignedInteger('app_id');
             $table->unsignedSmallInteger('device_idx');            // smartmonDeviceIndex
             $table->unsignedTinyInteger('table_id');               // SATA_TID_* constant
+            $table->unsignedInteger('subindex')->default(0);       // 0 = device-level; >0 = page/error-entry-level
             $table->string('last_change', 32)->nullable();         // DateAndTime from MIB
-            $table->primary(['app_id', 'device_idx', 'table_id']);
+            $table->primary(['app_id', 'device_idx', 'table_id', 'subindex']);
         });
 
         Schema::create('smart_devices', function (Blueprint $table) {
@@ -26,6 +27,7 @@ return new class extends Migration
             $table->unsignedInteger('app_id');
             $table->unsignedInteger('device_id');
             $table->string('disk_key', 160);
+            $table->unsignedSmallInteger('snmp_index')->nullable();
             $table->string('device_name', 64)->nullable();
             $table->string('device_path', 256)->nullable();
             $table->unsignedTinyInteger('protocol_type')->nullable();
@@ -106,6 +108,7 @@ return new class extends Migration
             $table->unsignedBigInteger('value_raw')->nullable();
             $table->string('value_raw_string', 32)->nullable();
             $table->tinyInteger('status')->nullable();
+            $table->string('rrd_type', 8)->nullable()->default('GAUGE');
             $table->unique(['app_id', 'disk_key', 'attribute_id']);
         });
 
