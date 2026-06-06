@@ -15,7 +15,7 @@ return new class extends Migration
 
         Schema::create('smart_sata_change', function (Blueprint $table) {
             $table->unsignedInteger('app_id');
-            $table->unsignedSmallInteger('device_idx');            // smartmonDeviceIndex
+            $table->unsignedInteger('device_idx');                 // smartmonDeviceIndex
             $table->unsignedTinyInteger('table_id');               // SATA_TID_* constant
             $table->unsignedInteger('subindex')->default(0);       // 0 = device-level; >0 = page/error-entry-level
             $table->string('last_change', 32)->nullable();         // DateAndTime from MIB

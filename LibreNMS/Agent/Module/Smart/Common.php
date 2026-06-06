@@ -651,12 +651,35 @@ class Common extends Application
 
     private function sataChangeByDeviceTable(): void
     {
-        if (isset($this->sataChangeRows)) {
+        if ($this->sataChangeRows !== null) {
             return;
         }
-        $this->prevSataChange         = $this->loadStoredSataChangeSnapshot();
-        $this->sataChangeRows         = $this->walkSataTable('smartSATAChangeByDeviceLastChange',   2);
-        $this->sataSubindexChangeRows = $this->walkSataTable('smartSATAChangeBySubindexLastChange', 3);
+        $this->prevSataChange = $this->loadStoredSataChangeSnapshot();
+
+        // table(2) puts the column name at depth 3 ([devIdx][tableId][colName]),
+        // so walk the full table and extract the lastChange column explicitly.
+        $this->sataChangeRows = [];
+        foreach ($this->walkSataTable('smartSATAChangeByDeviceTable', 2) as $devIdx => $tableRows) {
+            foreach ($tableRows as $tableId => $row) {
+                if (is_array($row)) {
+                    $this->sataChangeRows[(string) $devIdx][(string) $tableId] =
+                        $row['smartSATAChangeByDeviceLastChange'] ?? null;
+                }
+            }
+        }
+
+        $this->sataSubindexChangeRows = [];
+        foreach ($this->walkSataTable('smartSATAChangeBySubindexTable', 3) as $devIdx => $tableRows) {
+            foreach ($tableRows as $tableId => $subindexes) {
+                foreach ($subindexes as $subindex => $row) {
+                    if (is_array($row)) {
+                        $this->sataSubindexChangeRows[(string) $devIdx][(string) $tableId][(string) $subindex] =
+                            $row['smartSATAChangeBySubindexLastChange'] ?? null;
+                    }
+                }
+            }
+        }
+
         $this->vlog('sataChangeByDeviceTable: loaded ' . count($this->sataChangeRows) . ' device change row(s), prev snapshot ' . ($this->prevSataChange !== null ? 'present' : 'absent'));
     }
 
