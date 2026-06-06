@@ -1425,6 +1425,14 @@ class Common extends Application
         );
     }
 
+    /** Print a debug line when -vv is active. */
+    private function vlog(string $msg): void
+    {
+        if (Debug::isVerbose()) {
+            echo PHP_EOL . "smart_mib: {$msg}";
+        }
+    }
+
     /** Load SATA devices from DB, keyed by snmp_index. Used during polling to avoid SNMP walk. */
     private function sataDevicesFromDb(): array
     {
