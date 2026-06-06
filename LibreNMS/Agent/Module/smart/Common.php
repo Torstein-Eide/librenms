@@ -104,18 +104,25 @@ class Common extends Application
         );
 
         if ($rowCount > 0) {
+            $this->vlog("shouldDiscover: MIB rowCount={$rowCount} → true");
             return true;
         }
 
-        return (new SmartV1($this->os, $this->app, $this->agent_data))->shouldDiscover();
+        $this->vlog('shouldDiscover: MIB rowCount=0, checking V1 fallback');
+        $v1 = (new SmartV1($this->os, $this->app, $this->agent_data))->shouldDiscover();
+        $this->vlog('shouldDiscover: V1 fallback → ' . ($v1 ? 'true' : 'false'));
+
+        return $v1;
     }
 
     public function discover(): void
     {
         $handler = $this->detectAndPersistHandler();
+        $this->vlog("discover: handler={$handler}");
 
         if ($handler !== self::HANDLER_MIB) {
-            return; // V1 has no MIB-based discovery
+            $this->vlog('discover: non-MIB handler, skipping MIB discovery');
+            return;
         }
 
         $this->discoverMib();
@@ -140,6 +147,7 @@ class Common extends Application
 
     private function discoverMib(): void
     {
+        $this->vlog('discoverMib: starting MIB discovery');
         app()->forgetInstance('sensor-discovery');
 
         // One-shot V1→V2 RRD migration (no-op once all devices are marked done).
@@ -147,6 +155,7 @@ class Common extends Application
 
         // SENSOR-MIB is common to all device types; walk once before type discovery.
         $this->sensorTable();
+        $this->vlog('discoverMib: sensorTable has ' . count($this->sensorRows) . ' device entry/entries');
 
         // Type: SATA
         $this->discoverSata();
@@ -160,6 +169,7 @@ class Common extends Application
         // SENSOR-MIB sensors: register for every discovered device.
         $device = $this->os->getDevice();
         $group  = 'SMART';
+        $this->vlog('discoverMib: registering SENSOR-MIB sensors for ' . count($this->commonDevices) . ' device(s)');
         foreach ($this->commonDevices as $devIdx => $dev) {
             $diskKey = $dev['disk_key'];
             $idx     = $this->mibDiskIndex($diskKey);
@@ -214,6 +224,7 @@ class Common extends Application
         // Change index must be loaded first so all table-change guards below are valid.
         $this->sataChangeByDeviceTable();
         $devices = $this->sataDevices();
+        $this->vlog('discoverSata: ' . count($devices) . ' SATA device(s) found');
 
         $this->walkAndSyncSataTable('smartmonSataInfoTable', 1, $devices, self::SATA_TID_INFO, [$this, 'syncSataInfoRow']);
 
@@ -223,6 +234,7 @@ class Common extends Application
 
         // For each SATA device: register SATA-specific sensors.
         foreach ($devices as $devIdx => $dev) {
+            $this->vlog("discoverSata: device idx={$devIdx} disk_key={$dev['disk_key']}");
             $this->discoverSataDeviceSensors(
                 $dev,
                 $this->sataHealth[$devIdx]     ?? [],
@@ -644,6 +656,7 @@ class Common extends Application
         $this->prevSataChange         = $this->loadStoredSataChangeSnapshot();
         $this->sataChangeRows         = $this->walkSataTable('smartSATAChangeByDeviceLastChange',   2);
         $this->sataSubindexChangeRows = $this->walkSataTable('smartSATAChangeBySubindexLastChange', 3);
+        $this->vlog('sataChangeByDeviceTable: loaded ' . count($this->sataChangeRows) . ' device change row(s), prev snapshot ' . ($this->prevSataChange !== null ? 'present' : 'absent'));
     }
 
     private function sataHealthTable(): void
@@ -684,6 +697,7 @@ class Common extends Application
     /** Upsert all discovered devices into smart_devices. */
     private function syncDeviceRows(): void
     {
+        $this->vlog('syncDeviceRows: upserting ' . count($this->commonDevices) . ' device(s)');
         foreach ($this->commonDevices as $snmpIndex => $dev) {
             DB::table('smart_devices')->upsert([
                 'app_id'           => $this->app->app_id,
@@ -1198,14 +1212,19 @@ class Common extends Application
     ): void {
         $this->sataChangeByDeviceTable();
         if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable($tableId)) {
+            $this->vlog("walkAndSyncSataTable: {$table} skipped (no changes)");
             return;
         }
 
+        $this->vlog("walkAndSyncSataTable: walking {$table} (depth={$depth})");
+        $synced = 0;
         foreach ($this->normalizeNestedIntegerRows($this->walkSataTable($table, $depth)) as $devIdx => $rows) {
             if (isset($devices[$devIdx]) && $this->sataTableChangedForDevice($devIdx, $tableId)) {
                 $sync($devices[$devIdx], $rows);
+                $synced++;
             }
         }
+        $this->vlog("walkAndSyncSataTable: {$table} synced {$synced} device(s)");
     }
 
     private function loadStoredSataChangeSnapshot(): ?array
@@ -1263,6 +1282,7 @@ class Common extends Application
             }
         }
 
+        $this->vlog('persistSataChangeSnapshot: upserting ' . count($upsertRows) . ' change row(s)');
         if (! empty($upsertRows)) {
             DB::table('smart_sata_change')->upsert(
                 $upsertRows,
@@ -1344,6 +1364,7 @@ class Common extends Application
             ->value('handler') ?: null;
 
         if ($handler !== null) {
+            $this->vlog("detectAndPersistHandler: using stored handler={$handler}");
             return $handler;
         }
 
@@ -1353,6 +1374,8 @@ class Common extends Application
         $handler = ($response->isValid() && $response->value('smartmonDeviceTableRowCount.0') !== '')
             ? self::HANDLER_MIB
             : self::HANDLER_V1;
+
+        $this->vlog("detectAndPersistHandler: detected handler={$handler} (MIB valid=" . ($response->isValid() ? 'true' : 'false') . ')');
 
         DB::table('smart_app_state')->upsert(
             ['app_id' => $this->app->app_id, 'handler' => $handler],
@@ -1364,6 +1387,14 @@ class Common extends Application
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /** Print a debug line when -vv is active. */
+    private function vlog(string $msg): void
+    {
+        if (Debug::isVerbose()) {
+            echo PHP_EOL . "smart_mib: {$msg}";
+        }
+    }
 
     /** Return only SATA/ATA devices from the common device table. */
     private function sataDevices(): array
@@ -1380,12 +1411,21 @@ class Common extends Application
             $this->commonDeviceTable();
 
             if ($snmpTs !== $storedTs) {
+                $this->vlog("sataDevices: device table changed (snmp={$snmpTs}, stored={$storedTs}), syncing");
                 $this->syncDeviceRows();
                 DB::table('smart_app_state')
                     ->where('app_id', $this->app->app_id)
                     ->update(['device_table_last_change' => $snmpTs]);
+            } else {
+                $this->vlog("sataDevices: device table unchanged (ts={$snmpTs})");
             }
         }
+
+        $sata = array_filter(
+            $this->commonDevices,
+            fn($dev) => in_array($dev['device_type'] ?? 0, self::SATA_TYPES, true)
+        );
+        $this->vlog('sataDevices: ' . count($sata) . ' SATA / ' . count($this->commonDevices) . ' total device(s)');
 
         return array_filter(
             $this->commonDevices,
