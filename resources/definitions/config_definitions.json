@@ -2244,13 +2244,6 @@
             "section": "device",
             "order": 8
         },
-        "enable_footer": {
-            "default": false,
-            "type": "boolean",
-            "group": "webui",
-            "section": "general",
-            "order": 0
-        },
         "enable_inventory": {
             "default": true,
             "type": "boolean",
