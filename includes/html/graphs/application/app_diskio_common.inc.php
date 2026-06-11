@@ -18,13 +18,12 @@
  */
 function app_diskio_build_rrd_list(array $device, array $deviceCandidateSets, string $context = ''): array
 {
-    $rows = dbFetchRows(
-        'SELECT diskio_descr FROM ucd_diskio WHERE device_id = ? ORDER BY diskio_descr',
-        [$device['device_id']]
-    );
+    $descrs = \App\Models\UcdDiskio::where('device_id', $device['device_id'])
+        ->orderBy('diskio_descr')
+        ->pluck('diskio_descr');
     $known = [];
-    foreach ($rows as $row) {
-        $d = trim((string) ($row['diskio_descr'] ?? ''));
+    foreach ($descrs as $descr) {
+        $d = trim((string) $descr);
         if ($d !== '') {
             $known[$d] = true;
         }
