@@ -9,7 +9,7 @@ tags:
 
 # Developing SNMP Extensions
 
-This guide covers the monitored-host side of a LibreNMS application: how the
+This guide covers the monitored-host side of a snmp application: how the
 agent exposes its data to `snmpd`, local configuration, and (for the legacy
 model) cache files and refresh scheduling.
 
@@ -21,11 +21,12 @@ A good extension should be predictable to install, safe to upgrade, and cheap fo
 
 ## Choosing a transport
 
-LibreNMS extensions can deliver data to the poller in three ways. For a new
-extension, **prefer a custom MIB** - served over `pass_persist` (simplest) or
-AgentX (most robust). The maintainers favour a custom MIB for anything beyond a
-trivial scalar payload. The JSON `extend` model remains supported for simple
-payloads and existing extensions but is considered legacy.
+LibreNMS extensions can deliver data to the poller in two main ways. 
+ 
+- Custom MIB served over `pass_persist` (simplest and prefered)
+- Custom MIB served over  AgentX (most robust).
+ 
+The JSON `extend` model remains supported for existing extensions and is considered legacy.
 
 | | Custom MIB + `pass_persist` (preferred) | Custom MIB + AgentX (alternative) | JSON `extend` (legacy) |
 | --- | --- | --- | --- |
@@ -36,23 +37,35 @@ payloads and existing extensions but is considered legacy.
 | Process model | `snmpd` spawns and keeps one persistent helper | Standalone daemon connects to `snmpd` over a socket | Heavy script must be cached to `/run` |
 | Lifecycle | Tied to `snmpd`; restarts with it | Independent of `snmpd`; own user/privileges/restarts | Tied to the refresh timer/cron |
 | Setup cost | Low | Higher (socket, daemon, registration) | Low |
-| Best for | Structured, multi-table data; one host | Structured data; long-lived/large tables; isolation | Small/simple payloads, quick ports |
+| Best for | Structured multi-table data on one host (default) | Process isolation, privilege separation, fleets of subagents | Small/simple payloads, quick ports |
 
 Both custom-MIB transports serve the *same* MIB and look identical to the
-poller - they differ only in how the helper process talks to `snmpd`.
+poller, they differ only in how the helper process talks to `snmpd`.
 
-### Custom MIB + pass_persist (preferred)
+### Custom MIB + pass_persist
 
 Define an enterprise MIB describing your objects and serve it from a
 `pass_persist` agent. `snmpd` keeps the agent running and forwards requests for
 your OID subtree to it, so the poller reads typed, walkable tables directly -
 no cache file and no `extend` JSON.
 
-```text
-snmpd pass_persist              LibreNMS poller
-------------------              --------------
-agent answers live   --->       walk MDADM-MIB tables
-typed SNMP objects              map OIDs -> sensors/DB
+```mermaid
+sequenceDiagram
+    autonumber
+
+    participant Manager as SNMP manager<br/>snmpwalk/snmpget
+    participant Snmpd as Net-SNMP snmpd
+    participant Script as pass_persist script
+    participant Data as Data source<br/>smartctl/files/API
+
+    Manager->>Snmpd: SNMP GET / GETNEXT
+    Snmpd->>Script: stdin: get / getnext + OID
+    Script->>Data: Collect or read data
+    Data-->>Script: Return raw data
+    Script->>Script: Resolve OID, type, value
+    Script->>Script: Handle OID ordering / GETNEXT
+    Script-->>Snmpd: stdout: OID + type + value
+    Snmpd-->>Manager: SNMP response
 ```
 
 LibreNMS ships these MIBs under
@@ -77,7 +90,18 @@ value - OID, type, value - using the type tokens `integer`, `gauge`,
 `counter`, `counter64`, `timeticks`, `ipaddress`, `objectid`, `string`, and
 `opaque`.
 
-!!! warning "pass_persist cannot transport binary OCTET STRINGs (the hex trap)"
+??? example "request and respond"
+      ```shell
+      #printf 'PING\nget\n.1.3.6.1.4.1.60652.101.1.1.5\ngetnext\n.1.3.6.1.4.1.60652.101\n'     | sudo -u Debian-snmp /usr/local/lib/snmpd/mdadm
+      PONG
+      NONE
+      .1.3.6.1.4.1.60652.101.1.1.1.0
+      string
+      2026-06-11T13:03:13.035789+00:00
+
+      ``` 
+
+??? warning "pass_persist cannot transport binary OCTET STRINGs (the hex trap)"
     The protocol is line-based ASCII and has **no hex/binary string token** - the
     only string type is `string`, whose value snmpd treats as ASCII text. So any
     MIB object that is a *binary* `OCTET STRING` does not round-trip: snmpd
@@ -98,7 +122,7 @@ value - OID, type, value - using the type tokens `integer`, `gauge`,
     binary OCTET STRINGs natively - so it is the better choice if your MIB must
     carry packed-byte objects.
 
-### Custom MIB + AgentX (alternative)
+### Custom MIB + AgentX
 
 AgentX ([RFC 2741](https://www.rfc-editor.org/rfc/rfc2741)) serves the same
 custom MIB, but the helper runs as an independent **subagent daemon** that
@@ -108,16 +132,32 @@ robust than `pass_persist` for long-lived or large tables: the subagent is not
 forked per request, survives `snmpd` restarts (it reconnects), and can run under
 its own user and privileges.
 
-```text
-AgentX subagent daemon          snmpd master              LibreNMS poller
-----------------------          ------------              --------------
-registers MIB subtree   <--->   routes OID subtree  <---  walk MIB tables
-answers AgentX requests         over agentx socket        map OIDs -> sensors/DB
+Examples of AgentX are `FRRouting` and `lldpd`.  
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    participant Manager as SNMP manager<br/>snmpwalk/snmpget
+    participant Snmpd as Net-SNMP snmpd<br/>master agent
+    participant Subagent as AgentX subagent
+    participant Data as Data source<br/>smartctl/cache/API
+
+    Subagent->>Snmpd: Connect to AgentX socket
+    Subagent->>Snmpd: Register OID subtree
+
+    Manager->>Snmpd: SNMP GET / GETNEXT
+    Snmpd->>Subagent: AgentX request for registered OID
+    Subagent->>Data: Collect or read data
+    Data-->>Subagent: Return raw data
+    Subagent->>Subagent: Resolve table/scalar value
+    Subagent-->>Snmpd: AgentX response
+    Snmpd-->>Manager: SNMP response
 ```
 
 Enable the AgentX master in `snmpd.conf` and choose a socket:
 
-```conf
+```ini
 master agentx
 agentXSocket /var/agentx/master
 # or a TCP socket, e.g. agentXSocket tcp:localhost:705
@@ -128,12 +168,12 @@ after a master restart:
 
 ```ini
 [Unit]
-Description=LibreNMS mdadm AgentX subagent
+Description=My snmpd AgentX subagent
 After=snmpd.service
 Wants=snmpd.service
 
 [Service]
-ExecStart=/usr/local/lib/snmpd/mdadm --agentx
+ExecStart=/usr/local/lib/snmpd/My_AgentX_program
 Restart=on-failure
 User=Debian-snmp
 Group=Debian-snmp
@@ -147,37 +187,66 @@ Implement the subagent with an AgentX-capable binding, for example Python
 LibreNMS-side handler are identical to the pass_persist case - only the
 host-side process model changes.
 
-Use AgentX when the agent maintains large tables, needs to run on its own
-schedule or privileges, or must stay up independently of `snmpd`. Otherwise
-`pass_persist` is simpler to ship.
+??? warning "AgentX table indexes must fit in 31 bits"
+    OID sub-identifiers are unsigned 32-bit, but the AgentX APIs (and many
+    table-index code paths in net-snmp and its language bindings) carry index
+    values as a *signed* `Integer32`. An index with the top bit set
+    (`>= 2^31 = 2147483648`) is then read back as a negative number, so the row
+    sorts wrong, breaks `GETNEXT`/`snmpwalk` ordering, or is dropped entirely.
+
+    If you derive synthetic table indexes - e.g. a 32-bit hash of a UUID or
+    serial - cap them to 31 bits and avoid zero:
+
+    ```text
+    index = (hash & 0x7FFFFFFF) or 1   # range 1 .. 2147483647
+    ```
+
+    `pass_persist` is not affected (the helper emits OID strings directly and the
+    full unsigned 32-bit range is fine), but masking to 31 bits everywhere means
+    the same agent works unchanged under either transport. Treat the index as an
+    opaque key regardless - expose a stable identifier (UUID, serial) as its own
+    column so managers never depend on the synthetic index.
 
 ### pass_persist vs AgentX
 
-Both serve a custom MIB, but they make different trade-offs. The short version:
-`pass_persist` is the duct-tape option - quick and good enough for small glue;
-AgentX is the engineered option - the right architecture for a real, long-lived
-agent.
+Both serve a custom MIB, the difference is operational, and it cuts both ways. 
+AgentX have extra dependency (a net-snmp C library / AgentX binding) more code, 
+this gives process isolation and privilege separation.
 
 | Topic | `pass_persist` | AgentX |
 | --- | --- | --- |
-| Best for | Quick scripts, simple read-only values | Real subagents and serious MIBs |
-| Interface | Text protocol over stdin/stdout | AgentX protocol to the `snmpd` master agent |
-| Complexity | Low | Medium/higher |
-| Language | Any language | C/C++ via Net-SNMP, Python via libraries |
-| Tables | Possible, but painful | Proper fit |
-| `GETNEXT` / `snmpwalk` | You must implement OID ordering yourself | Library/framework helps |
-| SET support | Awkward/limited | Much better transaction model |
-| Traps/notifications | Not natural | Native subagent use case |
-| Robustness | Fragile: stdout noise, blocking, parser bugs | More robust and SNMP-native |
-| Production use | Fine for small glue | Better for long-term maintained agents |
+| Best for | Single host, polled MIBs (incl. multi-table) | Isolation, privilege separation |
+| Interface | Line protocol over stdin/stdout | AgentX protocol to the `snmpd` master |
+| Dependencies | None (language stdlib) | net-snmp C library / AgentX binding |
+| Setup cost | Low | Higher (socket, daemon, registration) |
+| Language | Any | C/C++ (Net-SNMP), Python/Perl via bindings |
+| Performance (one host) | Same | Same |
+| Tables | Supported; you emit the OID order | Handled by the framework |
+| `GETNEXT` / `snmpwalk` | You implement (and own) OID ordering | Framework handles ordering |
+| Index width | Full unsigned 32-bit | Signed `Integer32` - cap at 31 bits |
+| SET support | Awkward/limited | Proper transaction model |
+| Traps/notifications | Not natural | Native |
+| Failure isolation | A hung script stalls `snmpd`'s request | A crash only drops its own subtree |
+| Runs as | `snmpd`'s user | Own daemon, own user |
 
-**Use `pass_persist`** when you need a fast prototype or a small read-only
-extension. It is simple, scriptable, and good enough for a handful of scalar
-values.
+**Default to `pass_persist`** for a single host exposing one MIB on a polling
+interval - even a structured, multi-table one. 
 
-**Use AgentX** when you have real SNMP tables, dynamic indexes, traps, proper
-`snmpwalk` behaviour, or anything that should survive long-term maintenance -
-i.e. a MIB like the multi-table `MDADM-MIB`.
+When to use AgentX:
+
+- **Process isolation and lifecycle.** The subagent is its own daemon on a
+  socket; you can restart, redeploy, or crash it without touching `snmpd`. 
+  With `pass_persist`, `snmpd` owns the process, so a slow or hung
+  script stalls that exchange and can make `snmpd` time the pass out and return
+  nothing.
+- **Slow-collection blast radius.** Both designs run the mdadm
+  collection inline, but `pass_persist` blocks inside `snmpd`'s request path,
+  whereas AgentX blocks only the subagent's own answers - the master stays
+  responsive for every other MIB.
+- **Privilege separation.** The subagent can run as its own user (e.g. with the
+  `sudo` rights it needs for `mdadm -E`) while `snmpd` stays unprivileged; a
+  `pass_persist` helper runs as `snmpd`'s user.
+
 
 #### Useful links
 
@@ -190,82 +259,51 @@ i.e. a MIB like the multi-table `MDADM-MIB`.
   subagents connect to a local `snmpd` master over AgentX, usually through a
   Unix socket such as `/var/run/agentx/master`.
 - [`pyagentx` (GitHub)](https://github.com/hosthvo/pyagentx) - a pure-Python
-  AgentX client. Its project page notes it is looking for a new maintainer, so
-  weigh that before relying on it in production.
+  AgentX client. 
 
 ### Custom MIB guidelines
 
 These apply to both `pass_persist` and AgentX:
 
-- Use your own enterprise OID arc; do not reuse another vendor's subtree.
+- Use your own enterprise OID or the LibreNMS enterprise OID (Needs more info on 
+  how we reserver a number, or its first one to create pull request?), do not reuse another vendor's subtree.
 - Split slow-changing identity/configuration into separate tables from
   frequently-polled health/status, so the poller can read each on its own
-  interval.
+  interval. 
+- Expose LastUpdate and hash of the tables so there is a option for client to gate updating 
+  if there is no update. This is very useful for very large and multidimensional table, and you may need a table for LastUpdates and hashs.
 - Expose a scalar version object (e.g. `mdadmVersion.0`) the poller can probe to
   detect the agent - custom-MIB agents have no `nsExtend` entry, so they are not
   found by the standard extend-discovery loop and must be probed directly.
 - Use proper SNMP types and `TEXTUAL-CONVENTION` enums rather than encoding
   everything as strings.
+- Cap synthetic table indexes at 31 bits (`hash & 0x7FFFFFFF`, never zero) so the
+  MIB is portable to AgentX, which treats indexes as signed `Integer32` (see the
+  warning above). Always expose a stable identifier as its own column too.
 - Ship the MIB in `mibs/librenms/` so the poller (and any SNMP manager) can
   resolve the symbolic names.
 
 ---
 
-# Legacy: JSON extend
+## Host packaging & integration
 
-The remainder of this guide documents the legacy JSON `extend` model. Prefer a
-custom MIB (above) for new extensions; this model remains supported for simple
-payloads and existing extensions.
+These conventions apply to every transport. 
 
-```text
-systemd/cron refresh         snmpd extend              LibreNMS poller
---------------------         -----------              --------------
-run heavy script      --->   cat cache file     --->   read JSON payload
-write /run cache             fast response             parse/process data
-```
-
-## Deliverables
+### Deliverables
 
 When publishing an extension, provide:
 
-| Deliverable | Recommended path |
-| --- | --- |
-| Executable | `/usr/local/lib/snmpd/<name>` |
-| Configuration | `/etc/snmp/extension/<name>.conf` |
-| Runtime cache | `/run/snmp/extension/<name>.json` |
-| snmpd snippet | `/etc/snmp/snmpd.conf.d/librenms.conf` |
-| systemd service/timer | reusable cache refresh unit |
-| cron fallback | `/etc/cron.d/librenms-snmp-extension-<name>` |
-| user documentation | install, verify, troubleshoot |
+| Deliverable | Recommended path | Purpose |
+| --- | --- | --- |
+| Executable | `/usr/local/lib/snmpd/<name>` | extension executables |
+| Configuration | `/etc/snmp/extension/<name>.conf` | extension configuration |
+| snmpd snippet | `/etc/snmp/snmpd.conf.d/<name>.conf` | snmpd include snippets |
+| Runtime cache | `/run/snmp/extension/<name>...` | runtime cache files |
+| User documentation | - | install, verify, troubleshoot |
 
-## Directory layout
+Keep code, configuration, and runtime output in separate paths.
 
-```text
-/usr/local/lib/snmpd/          extension executables
-/etc/snmp/extension/           extension configuration
-/etc/snmp/snmpd.conf.d/        snmpd include snippets
-/run/snmp/extension/           runtime cache files
-```
-
-Use `/run` for cache files because they are runtime state and should not survive reboot.
-
-## snmpd integration
-
-Prefer cached output:
-
-```conf
-extend myext /bin/cat /run/snmp/extension/myext.json
-```
-
-Use direct execution only for very fast scripts:
-
-```conf
-extend myext /usr/local/lib/snmpd/myext --config /etc/snmp/extension/myext.conf
-```
-
-If the extension can take more than 250 ms, cache it. Slow extend scripts increase SNMP timeout risk and make polling noisy.
-
-## Include directory
+### Include directory
 
 The recommended snippet file is:
 
@@ -279,9 +317,95 @@ The main `snmpd.conf` must include that directory, for example:
 includeDir /etc/snmp/snmpd.conf.d
 ```
 
-Your installer or documentation should verify this. Do not assume every distribution enables include directories by default.
+Your installer or documentation should verify this. Do not assume every
+distribution enables include directories by default.
 
-## JSON output contract
+### Installing dependencies and directories
+
+???+ example
+    A skeleton installer is available here:
+    [Github Torstein Eide](https://gist.github.com/Torstein-Eide/0e184236d84eb8466a15613249d62cab)
+
+Debian/Ubuntu - `snmpd` commonly runs as `Debian-snmp`:
+
+```bash
+apt-get update
+apt-get install -y snmpd snmp ca-certificates
+
+install -d -m 0755 /usr/local/lib/snmpd
+install -d -m 0755 /etc/snmp/extension
+install -d -m 0755 /etc/snmp/snmpd.conf.d
+```
+
+RedHat-family - `snmpd` commonly runs as `snmp`:
+
+```bash
+dnf install -y net-snmp net-snmp-utils ca-certificates
+systemctl enable --now snmpd
+
+install -d -m 0755 /usr/local/lib/snmpd
+install -d -m 0755 /etc/snmp/extension
+install -d -m 0755 /etc/snmp/snmpd.conf.d
+```
+
+### Installer checklist
+
+An installer should be:
+
+- idempotent and safe to run multiple times
+- explicit about paths
+- careful not to overwrite unrelated `snmpd` config
+- able to install dependencies or tell the user what is missing
+- able to verify `includeDir`
+
+---
+
+## Legacy: JSON extend
+
+The remainder of this guide documents the legacy JSON `extend` model. Prefer a
+custom MIB (above) for new extensions; this model remains supported for existing
+extensions.
+
+In this model a heavy script runs on a timer and writes its JSON output to a
+cache file. `snmpd` only `cat`s that file when the poller asks, keeping the SNMP
+request path fast.
+
+```text
+systemd/cron refresh          snmpd extend            LibreNMS poller
+--------------------          ------------            ---------------
+run heavy script       --->   cat cache file   --->   read JSON payload
+write /run cache              fast response           parse/process data
+```
+
+On top of the shared layout, this model adds a runtime cache directory. Use
+`/run` so it does not survive reboot:
+
+```text
+/run/snmp/extension/           runtime JSON cache files
+```
+
+```bash
+install -d -m 0755 /run/snmp/extension
+```
+
+### snmpd integration
+
+Prefer cached output:
+
+```conf
+extend myext /bin/cat /run/snmp/extension/myext.json
+```
+
+Use direct execution only for very fast scripts:
+
+```conf
+extend myext /usr/local/lib/snmpd/myext --config /etc/snmp/extension/myext.conf
+```
+
+If the extension can take more than 250 ms, cache it. Slow extend scripts
+increase SNMP timeout risk and make polling noisy.
+
+### JSON output contract
 
 Return JSON shaped like this:
 
@@ -301,45 +425,13 @@ Return JSON shaped like this:
 | `errorString` | yes | Human-readable result or error |
 | `data` | yes | Extension-specific payload |
 
-For large payloads, pipe output through `lnms_return_optimizer` so LibreNMS can decode compressed output automatically.
+For large payloads, pipe the output through `lnms_return_optimizer` so LibreNMS
+can decode the compressed result automatically.
 
+### Cache refresh
 
-## Installation
-
-???+ example 
-  A example of installation skeleton can be found her: [Github Torstein Eide](https://gist.github.com/Torstein-Eide/0e184236d84eb8466a15613249d62cab)
-
-### Debian/Ubuntu notes
-
-```bash
-apt-get update
-apt-get install -y snmpd snmp ca-certificates
-
-install -d -m 0755 /usr/local/lib/snmpd
-install -d -m 0755 /etc/snmp/extension
-install -d -m 0755 /etc/snmp/snmpd.conf.d
-install -d -m 0755 /run/snmp/extension
-```
-
-`snmpd` commonly runs as `Debian-snmp`.
-
-### RedHat-family notes
-
-```bash
-dnf install -y net-snmp net-snmp-utils ca-certificates
-systemctl enable --now snmpd
-
-install -d -m 0755 /usr/local/lib/snmpd
-install -d -m 0755 /etc/snmp/extension
-install -d -m 0755 /etc/snmp/snmpd.conf.d
-install -d -m 0755 /run/snmp/extension
-```
-
-`snmpd` commonly runs as `snmp`.
-
-### systemd cache refresh
-
-A timer-based refresh is preferred on systemd hosts.
+A timer-based refresh is preferred on systemd hosts; use cron where systemd
+timers are not available.
 
 Example service:
 
@@ -377,34 +469,16 @@ systemctl daemon-reload
 systemctl enable --now librenms-snmp-extension@myext.timer
 ```
 
-### cron fallback
+#### cron fallback
 
-Use cron when systemd timers are not available.
+Store this in `/etc/cron.d/librenms-snmp-extension-myext`:
 
 ```cron
 PATH=/usr/local/bin:/usr/bin:/bin
 */5 * * * * Debian-snmp /usr/local/lib/snmpd/myext --config /etc/snmp/extension/myext.conf --output /run/snmp/extension/myext.json
 ```
 
-Store this in:
-
-```text
-/etc/cron.d/librenms-snmp-extension-myext
-```
-
-### Minimal installer checklist
-
-An installer should be:
-
-- idempotent
-- safe to run multiple times
-- explicit about paths
-- careful not to overwrite unrelated `snmpd` config
-- able to install dependencies or tell the user what is missing
-- able to choose systemd or cron
-- able to verify `includeDir`
-
-## Verification
+### Verification
 
 After installation, verify the cache exists:
 
@@ -425,7 +499,7 @@ Verify from the LibreNMS server:
 snmpwalk -v2c -c COMMUNITY HOSTNAME NET-SNMP-EXTEND-MIB::nsExtendOutputFull."myext"
 ```
 
-## Troubleshooting
+### Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
@@ -435,11 +509,8 @@ snmpwalk -v2c -c COMMUNITY HOSTNAME NET-SNMP-EXTEND-MIB::nsExtendOutputFull."mye
 | Empty output | timer/cron wrote the cache successfully |
 | LibreNMS parse error | JSON validates and version matches expected schema |
 
-## Rules of thumb
+### Rules of thumb
 
-- Keep `snmpd` fast.
-- Cache heavy work.
-- Keep code, config, and runtime output in separate paths.
-- Use stable JSON field names.
-- Include a schema `version`.
-- Document how users verify both the cache and SNMP output.
+- Cache heavy work; keep `snmpd` fast.
+- Use stable JSON field names and include a schema `version`.
+- Document how users verify both the cache file and the SNMP output.
