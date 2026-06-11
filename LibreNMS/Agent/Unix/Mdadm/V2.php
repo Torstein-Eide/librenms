@@ -507,6 +507,7 @@ class V2 extends Application
     // -------------------------------------------------------------------------
 
     /**
+     * @param  array<string, mixed>  $data
      * @return array{int, int, int, int, string, bool}
      *                                                 [discCount, hotspare, failedTotal, missingExplicit, action, isSyncing]
      *
@@ -518,8 +519,6 @@ class V2 extends Application
      *
      * Use missingExplicit for health mapping (degraded vs failed distinction);
      * use failedTotal for active/working device stats.
-     *
-     * @param  array<string, mixed>  $data
      */
     private static function parseCounters(array $data): array
     {
