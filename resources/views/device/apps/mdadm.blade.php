@@ -235,6 +235,12 @@ $fmtBool = static function ($value, string $yesClass = 'default'): string {
                     $arrUrl  = LibreNMS\Util\Url::generate($linkArray + ['array' => $MDid]);
                     $MDidEsc = htmlspecialchars($MDid);
 
+                    // Title segments sent to the /graphs/ page as a list, e.g. ['mdadm', 'SWAPssd (md0)'].
+                    $arrMeta    = $data->arraysMeta[$MDid] ?? [];
+                    $arrName    = trim((string) ($arrMeta['array_name'] ?? ''));
+                    $arrLabel   = $arrName !== '' ? "$arrName ($MDid)" : $MDid;
+                    $titleParts = [$data->app->app_type, $arrLabel];
+
                     $panelStart("<a href=\"{$arrUrl}\">{$MDidEsc}</a>", $hBadge);
                     echo '<div class="row">';
                     foreach ($arrayGraphs as $spec) {
@@ -250,7 +256,17 @@ $fmtBool = static function ($value, string $yesClass = 'default'): string {
                         if (isset($spec['metric'])) { $graphArray['metric'] = $spec['metric']; }
                         $titleEsc = htmlspecialchars($spec['title']);
                         $graphTag = LibreNMS\Util\Url::lazyGraphTag($graphArray);
-                        echo "<div class=\"pull-left\" style=\"margin-right:8px;margin-bottom:8px\"><div class=\"text-muted\" style=\"font-size:11px;margin-bottom:4px\">{$titleEsc}</div><a href=\"{$arrUrl}\">{$graphTag}</a></div>";
+                        // Pass the title segments as a list; Url::generate emits them as
+                        // ?title_parts[]=... and the /graphs/ page joins them with " :: ".
+                        $graphUrl = LibreNMS\Util\Url::generate([
+                            'page'        => 'graphs',
+                            'device'      => $data->device['device_id'],
+                            'type'        => $spec['type'],
+                            'id'          => $data->app->app_id,
+                            'array'       => $MDid,
+                            'title_parts' => $titleParts,
+                        ]);
+                        echo "<div class=\"pull-left\" style=\"margin-right:8px;margin-bottom:8px\"><div class=\"text-muted\" style=\"font-size:11px;margin-bottom:4px\">{$titleEsc}</div><a href=\"{$graphUrl}\">{$graphTag}</a></div>";
                     }
                     echo '</div>';
                     $panelEnd();
@@ -669,15 +685,21 @@ $fmtBool = static function ($value, string $yesClass = 'default'): string {
                     . ' | Out: ' . LibreNMS\Util\Number::formatBi($diskioRates['written'], 2, 0, 'B/s');
             }
 
+            // Title segments for the /graphs/ page: [app, "array_name (md_id)"].
+            $arrName    = trim((string) ($meta['array_name'] ?? ''));
+            $arrLabel   = $arrName !== '' ? "$arrName ($array)" : $array;
+            $titleParts = [$data->app->app_type, $arrLabel];
+
             foreach ($arrayGraphs as $key => $spec) {
                 $graph_array = [
-                    'height' => '100', 'width' => '215',
-                    'to'     => App\Facades\LibrenmsConfig::get('time.now'),
-                    'from'   => App\Facades\LibrenmsConfig::get('time.day'),
-                    'id'     => $data->app->app_id,
-                    'type'   => $spec['type'],
-                    'array'  => $array,
-                    'legend' => 'no',
+                    'height'      => '100', 'width' => '215',
+                    'to'          => App\Facades\LibrenmsConfig::get('time.now'),
+                    'from'        => App\Facades\LibrenmsConfig::get('time.day'),
+                    'id'          => $data->app->app_id,
+                    'type'        => $spec['type'],
+                    'array'       => $array,
+                    'legend'      => 'no',
+                    'title_parts' => $titleParts,
                 ];
                 if (isset($spec['metric'])) { $graph_array['metric'] = $spec['metric']; }
                 $text        = $spec['title'];

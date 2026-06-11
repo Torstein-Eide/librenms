@@ -36,6 +36,18 @@ if (is_file('includes/html/graphs/' . $type . '/auth.inc.php')) {
 if (! $auth) {
     require 'includes/html/error-no-perm.inc.php';
 } else {
+    // Optional extra title segments provided by the linking page, e.g.
+    // "mdadm :: SWAPssd (md0)" -> rendered as device :: <parts> :: graph name.
+    if (! empty($vars['title_parts'])) {
+        $parts = is_array($vars['title_parts']) ? $vars['title_parts'] : explode('::', (string) $vars['title_parts']);
+        foreach ($parts as $part) {
+            $part = trim((string) $part);
+            if ($part !== '') {
+                $title .= ' :: ' . htmlentities($part);
+            }
+        }
+    }
+
     if (LibrenmsConfig::has("graph_types.$type.$subtype.descr")) {
         $title .= ' :: ' . LibrenmsConfig::get("graph_types.$type.$subtype.descr");
     } elseif ($type == 'device' && $subtype == 'collectd') {
