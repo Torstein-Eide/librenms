@@ -72,6 +72,10 @@ class RrdProcess
 
         $this->process->waitUntil(function ($type, $buffer) use ($waitFor) {
             if ($type === Process::ERR) {
+                // rrdtool reports a missing file on stderr as "realpath(...): No such file or directory"
+                if (str_contains($buffer, 'No such file')) {
+                    throw new RrdNotFoundException($buffer);
+                }
                 throw new RrdException($buffer);
             }
 

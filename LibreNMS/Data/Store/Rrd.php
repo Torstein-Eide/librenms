@@ -693,6 +693,20 @@ class Rrd extends BaseDatastore
             return $output;
         }
 
+        // rrdtool writes its temp file in the target directory and will not create it,
+        // failing with "Cannot create temporary file" if the directory is missing.
+        // The per-device directory is normally made by PollDevice::initRrdDirectory(),
+        // but discovery (e.g. CheckDeviceAvailability writing icmp-perf, or an app
+        // collector creating its first rrd) can run before the device is ever polled,
+        // so ensure the directory exists here before creating a new rrd.
+        // Skipped for rrdcached, which manages file creation under its own base dir.
+        if ($command === 'create' && ! $this->rrdcached) {
+            $dir = dirname($filename);
+            if (! is_dir($dir)) {
+                mkdir($dir, 0775, true);
+            }
+        }
+
         $this->init();
         $output = $this->rrd->run($commandLine);
 
