@@ -14,7 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $dev_id
  * @property string|null $path
  * @property string|null $state
- * @property array|null $state_flags
+ * @property list<string>|null $state_flags
  * @property int|null $errors
  * @property bool $is_missing
  * @property int|null $size_bytes
@@ -68,11 +68,17 @@ class MdadmDrive extends Model
         'is_missing' => 'boolean',
     ];
 
+    /**
+     * @return BelongsTo<Device, $this>
+     */
     public function device(): BelongsTo
     {
         return $this->belongsTo(Device::class, 'device_id', 'device_id');
     }
 
+    /**
+     * @return BelongsTo<MdadmArray, $this>
+     */
     public function mdadmArray(): BelongsTo
     {
         return $this->belongsTo(MdadmArray::class, 'mdadm_array_id');

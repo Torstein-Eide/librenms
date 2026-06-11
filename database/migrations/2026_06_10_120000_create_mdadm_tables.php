@@ -77,7 +77,7 @@ return new class extends Migration
             $table->string('dev_id', 64);
             $table->string('path')->nullable();
             $table->string('state', 64)->nullable();
-            $table->json('state_flags')->nullable();
+            $table->longText('state_flags')->nullable();
             $table->unsignedInteger('errors')->nullable();
             $table->boolean('is_missing')->default(false);
             $table->unsignedBigInteger('size_bytes')->nullable();

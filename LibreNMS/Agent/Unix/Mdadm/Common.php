@@ -78,11 +78,14 @@ class Common extends Application
     ];
 
     private bool $discoveryCompleted = false;
+    /** @var array<string, mixed> */
     private array $payload = [];
+    /** @var array<string, mixed> keyed by array uuid */
     private array $plarray = [];
     private ?int $agentExitCode = null;
     /** @var Collection<string, MdadmArray> MdadmArray rows (with drives) as they existed before this poll cycle, keyed by uuid. */
     private Collection $dbArraysPrev;
+    /** @var array<string, mixed> */
     private array $discovery = [
         'sync' => [],
         'array_count' => 0,
@@ -98,6 +101,7 @@ class Common extends Application
         return StateTranslation::define($descr, $value, $severity);
     }
 
+    /** @return list<StateTranslation> */
     private function arrayHealthTranslations(): array
     {
         return [
@@ -115,6 +119,7 @@ class Common extends Application
         ];
     }
 
+    /** @return list<StateTranslation> */
     private function arrayOperationTranslations(): array
     {
         return [
@@ -136,6 +141,7 @@ class Common extends Application
         ];
     }
 
+    /** @return list<StateTranslation> */
     private function deviceHealthTranslations(): array
     {
         return [
@@ -158,6 +164,7 @@ class Common extends Application
     // Health / operation mappers
     // -------------------------------------------------------------------------
 
+    /** @param array<string, mixed> $array */
     private function mapArrayHealth(array $array, int $maxDeviceHealth): int
     {
         if (! isset($array['state'], $array['failed_devices'], $array['degraded'])) {
@@ -198,13 +205,15 @@ class Common extends Application
         return 0;
     }
 
+    /** @param list<int> $devHealth */
     private function maxKnownDeviceHealth(array $devHealth): int
     {
-        $values = array_filter($devHealth, static fn ($v) => is_int($v) && $v >= 0);
+        $values = array_filter($devHealth, static fn ($v) => $v >= 0);
 
         return $values === [] ? -1 : max($values);
     }
 
+    /** @param array<string, mixed> $array */
     private function mapArrayOperation(array $array): int
     {
         $operation = str_replace('_', '-', strtolower(trim((string) ($array['sync']['action'] ?? ''))));
@@ -230,6 +239,7 @@ class Common extends Application
         return ['inactive' => 7, 'readonly' => 8, 'read-only' => 8][$state] ?? -1;
     }
 
+    /** @param array<string, mixed> $device */
     private function mapDeviceHealth(array $device): int
     {
         if (($device['is_missing'] ?? null) === true) {
@@ -392,6 +402,8 @@ class Common extends Application
      * Tries MDADM-MIB (v3) first, then the legacy JSON extend (v1/v2). The
      * resolved source is recorded by discover() so poll() goes straight to the
      * right transport without re-probing.
+     *
+     * @return array<string, mixed>|null
      */
     private function fetchMdadmPayload(): ?array
     {
@@ -439,6 +451,8 @@ class Common extends Application
      * catches JsonAppException and resolves the error itself (calling
      * update_application), swallowing the agent exit code. Common.php needs that
      * code via JsonAppExtendErroredException::getCode() to drive agentExitCode.
+     *
+     * @return array<string, mixed>|null
      */
     private function fetchLegacyJsonPayload(): ?array
     {
@@ -463,6 +477,8 @@ class Common extends Application
      *
      * Returns version/error/counters, or null when the MIB is not served on
      * this host (the caller then falls back to the legacy JSON extend).
+     *
+     * @return array<string, mixed>|null
      */
     private function snmpScalars(): ?array
     {
@@ -497,6 +513,8 @@ class Common extends Application
      * name, and each carries its MDADM-MIB snmp_index so poll can map the
      * health tables back without re-walking the meta tables.
      * Returns null when the MIB is not served (caller falls back to JSON).
+     *
+     * @return array<string, mixed>|null
      */
     private function fetchSnmpMetaPayload(): ?array
     {
@@ -560,7 +578,13 @@ class Common extends Application
         return $this->wrapSnmpPayload($scalars, $arrays);
     }
 
-    /** Wrap SNMP scalar metadata and an arrays table into the shared payload envelope. */
+    /**
+     * Wrap SNMP scalar metadata and an arrays table into the shared payload envelope.
+     *
+     * @param  array<string, mixed>  $scalars
+     * @param  array<array-key, mixed>  $arrays
+     * @return array<string, mixed>
+     */
     private function wrapSnmpPayload(array $scalars, array $arrays): array
     {
         return [
@@ -581,6 +605,8 @@ class Common extends Application
      * snmp_index (array index, then member index). initPollState() maps these
      * back to UUID/dev_id using the indices persisted at discovery.
      * Returns null when the MIB is not served (caller falls back to JSON).
+     *
+     * @return array<string, mixed>|null
      */
     private function fetchSnmpHealthPayload(): ?array
     {
@@ -652,7 +678,7 @@ class Common extends Application
     }
 
     /** Cast a 64-bit MDADM-MIB gauge to int, mapping the all-ones "none"/"max" sentinel to null. */
-    private function gauge64OrNull($value): ?int
+    private function gauge64OrNull(mixed $value): ?int
     {
         $raw = (string) ($value ?? '');
 
@@ -660,7 +686,7 @@ class Common extends Application
     }
 
     /** Cast an SNMP TruthValue (1=true, 2=false) to bool; null when absent. */
-    private function truthValue($value): ?bool
+    private function truthValue(mixed $value): ?bool
     {
         if ($value === null || $value === '') {
             return null;
@@ -669,15 +695,20 @@ class Common extends Application
         return (int) $value === 1;
     }
 
-    /** Split a comma-separated md member state flag string into trimmed, non-empty flags. */
+    /**
+     * Split a comma-separated md member state flag string into trimmed, non-empty flags.
+     *
+     * @return list<string>
+     */
     private function splitStateFlags(string $state): array
     {
         return array_values(array_filter(
-            array_map('trim', explode(',', $state)),
+            array_map(trim(...), explode(',', $state)),
             static fn ($flag) => $flag !== ''
         ));
     }
 
+    /** @param array<string, mixed> $payload */
     private function initState(array $payload): void
     {
         $this->payload = $payload;
@@ -696,6 +727,8 @@ class Common extends Application
      * discovery. The assembled plarray keeps the same shape the run* methods
      * expect: array identity (name/array_name/uuid) merged from the DB row with
      * the dynamic health/sync fields, devices keyed by dev_id.
+     *
+     * @param  array<string, mixed>  $payload
      */
     private function initPollState(array $payload): void
     {
@@ -862,6 +895,7 @@ class Common extends Application
         ];
     }
 
+    /** @param array<array{0: string, 1: string, 2: int, 3: int|null, 4: int|null}> $datasets */
     private static function buildRrdDef(array $datasets): RrdDefinition
     {
         $def = RrdDefinition::make();
@@ -941,6 +975,7 @@ class Common extends Application
         )->withStateTranslations('mdadm_array_health_status', $this->arrayHealthTranslations());
     }
 
+    /** @param array<string, mixed> $deviceData */
     private function discoveryDevice(
         string $uuid,
         string $devId,
@@ -1229,6 +1264,7 @@ class Common extends Application
         }
     }
 
+    /** @return array<string, mixed> */
     private function collectMetrics(): array
     {
         $counters = $this->payload['data']['counters'] ?? [];

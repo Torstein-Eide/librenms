@@ -114,21 +114,30 @@ class MdadmArray extends Model
     ];
 
     protected $casts = [
-        'is_mounted'      => 'boolean',
-        'is_swap'         => 'boolean',
+        'is_mounted' => 'boolean',
+        'is_swap' => 'boolean',
         'bitmap_can_clear' => 'boolean',
     ];
 
+    /**
+     * @return BelongsTo<Device, $this>
+     */
     public function device(): BelongsTo
     {
         return $this->belongsTo(Device::class, 'device_id', 'device_id');
     }
 
+    /**
+     * @return BelongsTo<Application, $this>
+     */
     public function application(): BelongsTo
     {
         return $this->belongsTo(Application::class, 'app_id', 'app_id');
     }
 
+    /**
+     * @return HasMany<MdadmDrive, $this>
+     */
     public function drives(): HasMany
     {
         return $this->hasMany(MdadmDrive::class, 'mdadm_array_id');

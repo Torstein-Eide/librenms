@@ -18,6 +18,9 @@ use LibreNMS\Util\Number;
 
 abstract class Application
 {
+    /**
+     * @param  array<string, string>  $agent_data  Raw unix-agent text blocks keyed by extend name.
+     */
     public function __construct(
         protected OS $os,
         protected ApplicationModel $app,
@@ -78,11 +81,17 @@ abstract class Application
     // App data persistence
     // -------------------------------------------------------------------------
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function getAppData(): array
     {
         return (array) ($this->app->data ?? []);
     }
 
+    /**
+     * @param  array<string, mixed>  $data
+     */
     protected function saveAppData(array $data): void
     {
         $this->app->data = $data;
@@ -142,6 +151,8 @@ abstract class Application
     /**
      * Register state translations for the last discovered sensor.
      * Fluent — call immediately after discoverSensor().
+     *
+     * @param  list<\App\Models\StateTranslation>  $translations
      */
     protected function withStateTranslations(string $stateName, array $translations): static
     {
@@ -162,6 +173,7 @@ abstract class Application
      * Log sensors with $oidPrefix that are absent from $expectedOids, then return their IDs.
      * Call this before syncSensors() so the rows still exist when we read their descriptions.
      *
+     * @param  list<string>  $expectedOids
      * @return list<int> sensor_ids that were logged (pass to deleteStaleAgentSensors if needed)
      */
     protected function logStaleSensorRemovals(string $oidPrefix, array $expectedOids): array
@@ -181,6 +193,9 @@ abstract class Application
     /**
      * Delete sensors whose OID starts with $oidPrefix but are no longer expected.
      * Removes rows where the OID is not in $expectedOids OR the type is not in $knownTypes.
+     *
+     * @param  list<string>  $knownTypes
+     * @param  list<string>  $expectedOids
      */
     protected function deleteStaleAgentSensors(
         string $oidPrefix,
@@ -301,6 +316,10 @@ abstract class Application
     // RRD
     // -------------------------------------------------------------------------
 
+    /**
+     * @param  array<string, mixed>  $tags
+     * @param  array<string, mixed>  $fields
+     */
     protected function putRrd(string $type, array $tags, array $fields): void
     {
         app('Datastore')->put($this->os->getDeviceArray(), $type, $tags, $fields);
@@ -351,6 +370,8 @@ abstract class Application
     /**
      * Fetch JSON payload from SNMP extend, falling back to unix-agent cache.
      * Returns null and calls update_application() on unrecoverable error.
+     *
+     * @return array<string, mixed>|null
      */
     protected function fetchPayload(string $extend_name, int $min_version = 1): ?array
     {

@@ -16,13 +16,20 @@ class MdadmArrayController extends TableController
 {
     protected ?string $model = MdadmArray::class;
 
+    /** @var array<string, string> */
     protected array $default_sort = ['md_id' => 'asc'];
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function rules(): array
     {
         return [];
     }
 
+    /**
+     * @return list<string>
+     */
     protected function sortFields(Request $request): array
     {
         return [
@@ -41,6 +48,9 @@ class MdadmArrayController extends TableController
         ];
     }
 
+    /**
+     * @return array<int|string, string|list<string>>
+     */
     protected function searchFields(Request $request): array
     {
         return [
@@ -112,6 +122,9 @@ class MdadmArrayController extends TableController
         ];
     }
 
+    /**
+     * @return list<string>
+     */
     protected function getExportHeaders(): array
     {
         return [

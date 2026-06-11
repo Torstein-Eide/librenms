@@ -46,6 +46,9 @@ use LibreNMS\Util\Debug;
  */
 class V2 extends Application
 {
+    /**
+     * @param  array<string, mixed>  $payload
+     */
     public function discoverLegacy(array $payload): void
     {
         $payload = self::normalize($payload);
@@ -246,7 +249,11 @@ class V2 extends Application
         }
     }
 
-    /** RRD poll — legacy graph data for the array. */
+    /**
+     * RRD poll — legacy graph data for the array.
+     *
+     * @param  array<string, mixed>  $payload
+     */
     public function pollLegacy(array $payload): void
     {
         $payload = self::normalize($payload);
@@ -311,7 +318,11 @@ class V2 extends Application
         \update_application($this->app, 'OK', $metrics);
     }
 
-    /** Keep MdadmArray state columns and sensor values current on every poll cycle. */
+    /**
+     * Keep MdadmArray state columns and sensor values current on every poll cycle.
+     *
+     * @param  array<string, mixed>  $payload
+     */
     public function pollDbLegacy(array $payload): void
     {
         $payload = self::normalize($payload);
@@ -507,6 +518,8 @@ class V2 extends Application
      *
      * Use missingExplicit for health mapping (degraded vs failed distinction);
      * use failedTotal for active/working device stats.
+     *
+     * @param  array<string, mixed>  $data
      */
     private static function parseCounters(array $data): array
     {
@@ -522,7 +535,11 @@ class V2 extends Application
         return [$discCount, $hotspare, $failedTotal, $missingExplicit, $action, $isSyncing];
     }
 
-    /** Return the errorString if the `error` field is non-zero, null otherwise. v1 is always 0. */
+    /**
+     * Return the errorString if the `error` field is non-zero, null otherwise. v1 is always 0.
+     *
+     * @param  array<string, mixed>  $payload
+     */
     private static function agentError(array $payload): ?string
     {
         $code = (int) ($payload['error'] ?? 0);
@@ -530,7 +547,12 @@ class V2 extends Application
         return $code !== 0 ? (string) ($payload['errorString'] ?? "agent error $code") : null;
     }
 
-    /** Normalize v1 key `missing_device_list` → `missing_devices_list`. */
+    /**
+     * Normalize v1 key `missing_device_list` → `missing_devices_list`.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
     private static function normalize(array $payload): array
     {
         foreach ($payload['data'] ?? [] as $i => $item) {

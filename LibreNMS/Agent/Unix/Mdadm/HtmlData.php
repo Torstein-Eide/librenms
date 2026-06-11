@@ -43,16 +43,25 @@ class HtmlData
     private const CACHE_TTL = 300; // seconds (5 min — matches default poll interval)
 
     public readonly bool $isLegacy;
-    public readonly array $arraysMeta;       // [arrayName => rawMeta array]
-    public readonly array $arraysDevices;    // [arrayName => [devKey => metaDev array]]
-    public readonly array $arrayUuidByName;  // [arrayName => uuid]
-    public readonly array $arrayData;        // [arrayName => sensor+diskio map]
-    public readonly array $appMetrics;       // flat metric key => value
+    /** @var array<string, array<string, mixed>> [arrayName => rawMeta array] */
+    public readonly array $arraysMeta;
+    /** @var array<string, array<string, array<string, mixed>>> [arrayName => [devKey => metaDev array]] */
+    public readonly array $arraysDevices;
+    /** @var array<string, string> [arrayName => uuid] */
+    public readonly array $arrayUuidByName;
+    /** @var array<string, array<string, mixed>> [arrayName => sensor+diskio map] */
+    public readonly array $arrayData;
+    /** @var array<string, mixed> flat metric key => value */
+    public readonly array $appMetrics;
+    /** @var Collection<int, Sensor> */
     public readonly Collection $allSensors;
 
     /** @var Collection<string, MdadmArray> MdadmArray rows keyed by uuid, with drives eager-loaded. */
     private Collection $dbArrays;
 
+    /**
+     * @param  array<string, mixed>  $device
+     */
     private function __construct(
         public readonly Application $app,
         public readonly array $device,
@@ -144,7 +153,11 @@ class HtmlData
         10 => 'Member is missing.',
     ];
 
-    /** Resolve human-readable label, Bootstrap class, and info string for a sensor entry. */
+    /**
+     * Resolve human-readable label, Bootstrap class, and info string for a sensor entry.
+     *
+     * @return array{label: string, class: string, info: string}
+     */
     private static function resolveEntry(string $type, int $val): array
     {
         return match ($type) {
@@ -224,7 +237,11 @@ class HtmlData
     // Caching factory methods
     // -------------------------------------------------------------------------
 
-    /** Load data for one device+app, cached for 5 minutes. */
+    /**
+     * Load data for one device+app, cached for 5 minutes.
+     *
+     * @param  array<string, mixed>  $device
+     */
     public static function forDevice(Application $app, array $device): self
     {
         return Cache::remember(
@@ -237,6 +254,8 @@ class HtmlData
     /**
      * Scoped to one array — shares the per-device cache entry.
      * Use ->array($arrayName) on the returned object to get the filtered data.
+     *
+     * @param  array<string, mixed>  $device
      */
     public static function forArray(Application $app, array $device, string $arrayName): self
     {
@@ -246,6 +265,8 @@ class HtmlData
     /**
      * Scoped to one drive — shares the per-device cache entry.
      * Use ->drive($arrayName, $driveKey) on the returned object.
+     *
+     * @param  array<string, mixed>  $device
      */
     public static function forDrive(Application $app, array $device, string $arrayName, string $driveKey): self
     {
@@ -280,7 +301,11 @@ class HtmlData
     // Scope accessors
     // -------------------------------------------------------------------------
 
-    /** All known array names (discovery order). */
+    /**
+     * All known array names (discovery order).
+     *
+     * @return list<string>
+     */
     public function arrayNames(): array
     {
         return array_keys($this->arrayData);
@@ -291,6 +316,8 @@ class HtmlData
      * Keys: mdadm_array_health_status, mdadm_array_operation_status,
      *       mdadm_array_mismatch, diskio, devices.
      * Each sensor entry: ['val' => int, 'label' => string, 'class' => string, 'info' => string, 'sensor' => Sensor]
+     *
+     * @return array<string, mixed>
      */
     public function array(string $arrayName): array
     {
@@ -300,6 +327,8 @@ class HtmlData
     /**
      * Sensor + meta data for one drive within an array.
      * Returns ['sensors' => [...], 'meta' => [...]]
+     *
+     * @return array<string, mixed>
      */
     public function drive(string $arrayName, string $driveKey): array
     {
@@ -312,6 +341,8 @@ class HtmlData
     /**
      * Parsed sync scalars for one array.
      * Keys: action, speed_bps, done_bytes, total_bytes, completed_pct, is_syncing
+     *
+     * @return array<string, mixed>
      */
     public function syncDataForArray(string $arrayName): array
     {
@@ -432,7 +463,7 @@ class HtmlData
         return [$arraysMeta, $arraysDevices, $arrayUuidByName];
     }
 
-    /** @return array{Collection, array<string,mixed>, bool} */
+    /** @return array{Collection<int, Sensor>, array<string, mixed>, bool} */
     private function buildSensors(): array
     {
         // Seed from discovery so every known array is present even before sensors exist
