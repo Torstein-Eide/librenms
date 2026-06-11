@@ -161,12 +161,11 @@ function mdadm_debug_render(int $appId, object $allSensors, string $appName, str
     );
 
     // 3. Sensors — what to list
-    $sensorColumns = ['sensor_oid', 'sensor_type', 'group', 'sensor_navigation', 'sensor_index', 'sensor_descr', 'current'];
+    $sensorColumns = ['sensor_oid', 'sensor_type', 'group', 'sensor_index', 'sensor_descr', 'current'];
     $sensorRows = $allSensors->map(fn ($s) => [
         'sensor_oid' => $s->sensor_oid,
         'sensor_type' => $s->sensor_type,
         'group' => $s->group,
-        'sensor_navigation' => $s->sensor_navigation,
         'sensor_index' => $s->sensor_index,
         'sensor_descr' => $s->sensor_descr,
         'current' => $s->sensor_current,

@@ -914,7 +914,6 @@ class Common extends Application
 
         $arrayName = (string) ($array['name'] ?? $uuid);
         $arrayGroup = "Mdadm $arrayName";
-        $arrayNav = 'tab=apps/app=mdadm/array=' . rawurlencode($arrayName) . '/';
 
         $this->discovery['arrays'][$uuid]['name'] = $arrayName;
         $this->discovery['arrays'][$uuid]['devices']['rrdkey'] = substr($uuid, 0, 8);
@@ -933,7 +932,6 @@ class Common extends Application
                 (string) $deviceKey,
                 is_array($deviceData) ? $deviceData : [],
                 $arrayGroup,
-                $arrayNav,
                 $deviceHealth
             );
         }
@@ -950,7 +948,6 @@ class Common extends Application
             oid: "app:mdadm:$arrayMismatchIndex",
             descr: "$arrayGroup Mismatch",
             group: $arrayGroup,
-            navigation: $arrayNav,
             highLimit: 1,
         );
 
@@ -961,7 +958,6 @@ class Common extends Application
             oid: "app:mdadm:$arrayOperationIndex",
             descr: "$arrayGroup Operation",
             group: $arrayGroup,
-            navigation: $arrayNav,
         )->withStateTranslations('mdadm_array_operation_status', $this->arrayOperationTranslations());
 
         $this->discoverSensor(
@@ -971,7 +967,6 @@ class Common extends Application
             oid: "app:mdadm:$arrayHealthIndex",
             descr: "$arrayGroup Health",
             group: $arrayGroup,
-            navigation: $arrayNav,
         )->withStateTranslations('mdadm_array_health_status', $this->arrayHealthTranslations());
     }
 
@@ -981,7 +976,6 @@ class Common extends Application
         string $devId,
         array $deviceData,
         string $arrayGroup,
-        string $arrayNav,
         int $deviceHealth
     ): void {
         $deviceHealthIndex = $uuid . '_' . $devId . '_health';
@@ -994,7 +988,6 @@ class Common extends Application
             oid: "app:mdadm:$deviceHealthIndex",
             descr: "$arrayGroup $devId Health",
             group: "$arrayGroup::devices",
-            navigation: $arrayNav,
         )->withStateTranslations('mdadm_device_health_status', $this->deviceHealthTranslations());
 
         $this->discoverSensor(
@@ -1004,7 +997,6 @@ class Common extends Application
             oid: "app:mdadm:$deviceErrorsIndex",
             descr: "$arrayGroup $devId errors",
             group: "$arrayGroup::devices",
-            navigation: $arrayNav,
         );
     }
 

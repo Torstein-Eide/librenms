@@ -149,7 +149,6 @@ class V2 extends Application
             // Sensors
             $uuid = 'v2:' . $arrayName;
             $group = "Mdadm $arrayName";
-            $nav = 'tab=apps/app=mdadm/array=' . rawurlencode($arrayName) . '/';
             $healthIdx = $uuid . '_health';
             $opIdx = $uuid . '_operation';
             $expectedOids[] = "app:mdadm:$healthIdx";
@@ -163,7 +162,6 @@ class V2 extends Application
                 descr: "$group Health",
                 current: self::mapHealth((string) ($data['state'] ?? ''), $missingExplicit, (int) ($data['degraded'] ?? 0)),
                 group: $group,
-                navigation: $nav,
             )->withStateTranslations('mdadm_array_health_status', self::healthTranslations());
 
             $this->discoverSensor(
@@ -174,7 +172,6 @@ class V2 extends Application
                 descr: "$group Operation",
                 current: self::mapOperation($action, (string) ($data['state'] ?? '')),
                 group: $group,
-                navigation: $nav,
             )->withStateTranslations('mdadm_array_operation_status', self::operationTranslations());
 
             // Per-device health: present → Present (0), missing → Missing (10)
@@ -197,7 +194,6 @@ class V2 extends Application
                     descr: "$group $devName Health",
                     current: 0,
                     group: $devGroup,
-                    navigation: $nav,
                 )->withStateTranslations('mdadm_device_health_status', self::deviceHealthTranslations());
             }
             foreach ((array) ($data['missing_devices_list'] ?? []) as $devName) {
@@ -218,7 +214,6 @@ class V2 extends Application
                     descr: "$group $devName Health",
                     current: 10,
                     group: $devGroup,
-                    navigation: $nav,
                 )->withStateTranslations('mdadm_device_health_status', self::deviceHealthTranslations());
             }
         }

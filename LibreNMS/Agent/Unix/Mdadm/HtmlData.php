@@ -476,7 +476,6 @@ class HtmlData
 
         foreach ($sensors as $sensor) {
             $group = (string) $sensor->group;
-            $sensorNav = (string) ($sensor->sensor_navigation ?? '');
             $val = (int) ($sensor->sensor_current ?? -1);
             $type = (string) $sensor->sensor_type;
             $entry = array_merge(['val' => $val, 'sensor' => $sensor], self::resolveEntry($type, $val));
@@ -487,7 +486,7 @@ class HtmlData
                 $devKey = $parts[1] ?? (string) $sensor->sensor_descr;
                 $arrayData[$arrayName]['devices'][$devKey][$type] = $entry;
             } else {
-                $arrayName = $this->arrayNameFromGroupOrNavigation($group, $sensorNav);
+                $arrayName = $this->arrayNameFromGroup($group);
                 if ($arrayName === '') {
                     continue;
                 }
@@ -518,17 +517,10 @@ class HtmlData
         return "mdadm.htmldata.{$deviceId}.{$appId}";
     }
 
-    private function arrayNameFromGroupOrNavigation(string $group, string $sensorNavigation): string
+    private function arrayNameFromGroup(string $group): string
     {
         $normalizedGroup = trim(str_replace('Mdadm ', '', $group));
-        if ($normalizedGroup !== '') {
-            return str_replace('::devices', '', $normalizedGroup);
-        }
 
-        if (preg_match('/array=([^\/]+)\//', $sensorNavigation, $matches) === 1) {
-            return rawurldecode((string) $matches[1]);
-        }
-
-        return '';
+        return $normalizedGroup !== '' ? str_replace('::devices', '', $normalizedGroup) : '';
     }
 }
