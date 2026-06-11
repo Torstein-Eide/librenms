@@ -142,4 +142,20 @@ class MdadmArray extends Model
     {
         return $this->hasMany(MdadmDrive::class, 'mdadm_array_id');
     }
+
+    /**
+     * Human-readable label combining the array name and md_id, e.g. "data (md0)".
+     * Falls back to md_id (or uuid) when no array_name is set.
+     */
+    public function graphLabel(): string
+    {
+        $arrayName = trim((string) ($this->array_name ?? ''));
+        $mdId = trim((string) ($this->md_id ?? ''));
+
+        if ($arrayName !== '' && $mdId !== '') {
+            return "$arrayName ($mdId)";
+        }
+
+        return $arrayName !== '' ? $arrayName : ($mdId !== '' ? $mdId : (string) $this->uuid);
+    }
 }

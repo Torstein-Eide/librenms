@@ -1,26 +1,23 @@
 <?php
 
 use App\Facades\Rrd;
+use App\Models\MdadmArray;
 use LibreNMS\Exceptions\RrdGraphException;
 
 /**
- * Per-drive graph for a v3 mdadm array: one line per member device.
+ * Shared per-drive graph builder for the v3 mdadm app: one line per member
+ * device. Type files set $unit_text and $ds before requiring this.
  *
- * Reads the per-drive RRD keyed by the stable array UUID and the member
- * dev_id: ['app', 'mdadm', <app_id>, <array uuid>, <dev_id>].
+ * Reads the per-drive RRD keyed by the stable array UUID and the member's
+ * superblock device UUID (dev_id fallback):
+ * ['app', 'mdadm', <app_id>, <array uuid>, <dev uuid|dev_id>].
  */
-[$unit_text, $ds] = match ($vars['metric'] ?? '') {
-    'events' => ['Events', 'events'],
-    'bad_blocks' => ['Bad Blocks', 'bad_blocks'],
-    default => throw new RrdGraphException('Unknown metric: ' . ($vars['metric'] ?? '')),
-};
-
 $arrayParam = $vars['array'] ?? '';
 if ($arrayParam === '') {
     throw new RrdGraphException('No array selected');
 }
 
-$dbArray = App\Models\MdadmArray::where('app_id', $app->app_id)
+$dbArray = MdadmArray::where('app_id', $app->app_id)
     ->where(function ($q) use ($arrayParam): void {
         $q->where('uuid', $arrayParam)->orWhere('array_name', $arrayParam)->orWhere('md_id', $arrayParam);
     })
@@ -31,6 +28,8 @@ if ($dbArray === null) {
     throw new RrdGraphException('Unknown array: ' . $arrayParam);
 }
 
+$graph_title = $dbArray->graphLabel() . ' :: Drive ' . $unit_text;
+
 $name = 'mdadm';
 $unitlen = 12;
 $bigdescrlen = 12;
@@ -38,8 +37,6 @@ $smalldescrlen = 12;
 $colours = 'mixed';
 $dostack = 0;
 $printtotal = 0;
-$addarea = 0;
-$transparency = 15;
 $scale_min = 0;
 
 $rrd_list = [];

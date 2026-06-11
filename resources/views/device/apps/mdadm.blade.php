@@ -13,14 +13,14 @@ $legacyGraphs = [
 ];
 
 $arrayGraphs = [
-    'disk_counts' => ['type' => 'mdadm_app',        'metric' => 'disk_counts', 'title' => 'Disk Counts (disks)'],
-    'mismatch'    => ['type' => 'mdadm_mismatch',                               'title' => 'Mismatch'],
-    'sync_bps'    => ['type' => 'mdadm_app',        'metric' => 'sync_bps',    'title' => 'Sync Speed (B/s)'],
-    'sync_pct'    => ['type' => 'mdadm_app',        'metric' => 'sync_pct',    'title' => 'Sync Progress (%)'],
-    'diskio_ops'  => ['type' => 'mdadm_diskio_ops',                             'title' => 'Disk I/O Ops'],
-    'diskio_bits' => ['type' => 'mdadm_diskio_bits',                            'title' => 'Disk I/O Bytes'],
-    'drive_events'=> ['type' => 'mdadm_drive',      'metric' => 'events',      'title' => 'Drive Events'],
-    'drive_bad'   => ['type' => 'mdadm_drive',      'metric' => 'bad_blocks',  'title' => 'Drive Bad Blocks'],
+    'disk_counts' => ['type' => 'mdadm_disk_counts',     'title' => 'Disk Counts (disks)'],
+    'mismatch'    => ['type' => 'mdadm_mismatch',        'title' => 'Mismatch'],
+    'sync_bps'    => ['type' => 'mdadm_sync_bps',        'title' => 'Sync Speed (B/s)'],
+    'sync_pct'    => ['type' => 'mdadm_sync_pct',        'title' => 'Sync Progress (%)'],
+    'diskio_ops'  => ['type' => 'mdadm_diskio_ops',      'title' => 'Disk I/O Ops'],
+    'diskio_bits' => ['type' => 'mdadm_diskio_bits',     'title' => 'Disk I/O Bytes'],
+    'drive_events'=> ['type' => 'mdadm_drive_events',    'title' => 'Drive Events'],
+    'drive_bad'   => ['type' => 'mdadm_drive_bad_blocks', 'title' => 'Drive Bad Blocks'],
 ];
 
 $statusFields = [

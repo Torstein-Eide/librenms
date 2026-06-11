@@ -1,9 +1,9 @@
 @php
 $arrayGraphs = [
-    'disk_counts' => ['type' => 'mdadm_app',        'metric' => 'disk_counts', 'title' => 'Disk Counts'],
+    'disk_counts' => ['type' => 'mdadm_disk_counts', 'title' => 'Disk Counts'],
     'mismatch'    => ['type' => 'mdadm_mismatch',                               'title' => 'Mismatch'],
-    'sync_bps'    => ['type' => 'mdadm_app',        'metric' => 'sync_bps',    'title' => 'Sync Speed'],
-    'sync_pct'    => ['type' => 'mdadm_app',        'metric' => 'sync_pct',    'title' => 'Sync Progress'],
+    'sync_bps'    => ['type' => 'mdadm_sync_bps',    'title' => 'Sync Speed'],
+    'sync_pct'    => ['type' => 'mdadm_sync_pct',    'title' => 'Sync Progress'],
     'diskio_ops'  => ['type' => 'mdadm_diskio_ops',                             'title' => 'Disk I/O Ops'],
     'diskio_bits' => ['type' => 'mdadm_diskio_bits',                            'title' => 'Disk I/O Bytes'],
 ];
