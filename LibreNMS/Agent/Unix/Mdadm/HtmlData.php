@@ -172,6 +172,54 @@ class HtmlData
         };
     }
 
+    /** Kernel RAID-4/5/6 parity-placement layout names, indexed by the raw layout value. */
+    private const RAID456_LAYOUT_LABELS = [
+        0 => 'left-asymmetric',
+        1 => 'right-asymmetric',
+        2 => 'left-symmetric',
+        3 => 'right-symmetric',
+        4 => 'parity-first',
+        5 => 'parity-last',
+    ];
+
+    /**
+     * Decode the raw kernel layout integer into a human-readable string.
+     *
+     * RAID-4/5/6 use the parity-placement names; RAID-10 encodes the copy
+     * count and policy (near = low byte, far = next byte, offset = bit 16).
+     * Null layout (non-RAID-5/10 levels report -1 → stored null) or an
+     * unrecognised level yields null so callers can omit the row.
+     */
+    private static function layoutLabel(?int $layout, ?string $level): ?string
+    {
+        if ($layout === null) {
+            return null;
+        }
+
+        $level = strtolower(trim((string) $level));
+
+        if (in_array($level, ['raid4', 'raid5', 'raid6'], true)) {
+            return self::RAID456_LAYOUT_LABELS[$layout] ?? ('layout ' . $layout);
+        }
+
+        if ($level === 'raid10') {
+            $near = $layout & 0xFF;
+            $far = ($layout >> 8) & 0xFF;
+            $offset = ($layout & 0x10000) !== 0;
+
+            if ($offset && $far > 1) {
+                return "offset=$far";
+            }
+            if ($far > 1) {
+                return "far=$far";
+            }
+
+            return "near=$near";
+        }
+
+        return null;
+    }
+
     // -------------------------------------------------------------------------
     // Caching factory methods
     // -------------------------------------------------------------------------
@@ -281,6 +329,8 @@ class HtmlData
             'total_bytes'   => $dbRow !== null ? (int) ($dbRow->sync_total_bytes ?? 0) : 0,
             'completed_pct' => $dbRow !== null ? (float) ($dbRow->sync_completed_pct ?? 0) : 0.0,
             'last_action'   => $dbRow !== null ? (string) ($dbRow->sync_last_action ?? '') : '',
+            'min_sectors'   => $dbRow !== null ? $dbRow->sync_min_sectors : null,
+            'max_sectors'   => $dbRow !== null ? $dbRow->sync_max_sectors : null,
             'is_syncing'    => $action !== '' && $action !== 'idle',
         ];
     }
@@ -333,6 +383,24 @@ class HtmlData
                 'failed_devices'     => $dbRow->failed_devices,
                 'degraded'           => $dbRow->degraded,
                 'mismatch_cnt'       => $dbRow->mismatch_cnt,
+                'layout'             => $dbRow->layout,
+                'layout_label'       => self::layoutLabel($dbRow->layout, $dbRow->level),
+                'resync_start_sectors'     => $dbRow->resync_start_sectors,
+                'reshape_position_sectors' => $dbRow->reshape_position_sectors,
+                'bitmap_type'        => $dbRow->bitmap_type,
+                'bitmap_location'    => $dbRow->bitmap_location,
+                'bitmap_chunksize'   => $dbRow->bitmap_chunksize,
+                'bitmap_metadata'    => $dbRow->bitmap_metadata,
+                'bitmap_time_base'   => $dbRow->bitmap_time_base,
+                'is_mounted'         => $dbRow->is_mounted,
+                'mount_points'       => $dbRow->mount_points,
+                'is_swap'            => $dbRow->is_swap,
+                'bitmap_backlog'     => $dbRow->bitmap_backlog,
+                'bitmap_max_backlog' => $dbRow->bitmap_max_backlog,
+                'bitmap_can_clear'   => $dbRow->bitmap_can_clear,
+                'stripe_cache_size'   => $dbRow->stripe_cache_size,
+                'stripe_cache_active' => $dbRow->stripe_cache_active,
+                'journal_mode'       => $dbRow->journal_mode,
             ];
 
             $arrayDevs = [];
@@ -348,6 +416,13 @@ class HtmlData
                     'slot'            => $drive->slot,
                     'id_model'        => $drive->id_model,
                     'id_serial_short' => $drive->id_serial_short,
+                    'offset_sectors'        => $drive->offset_sectors,
+                    'ppl_sector'            => $drive->ppl_sector,
+                    'ppl_size_sectors'      => $drive->ppl_size_sectors,
+                    'events'                => $drive->events,
+                    'recovery_start_sectors' => $drive->recovery_start_sectors,
+                    'bad_block_count'       => $drive->bad_block_count,
+                    'unack_bad_block_count' => $drive->unack_bad_block_count,
                 ];
             }
             $arraysDevices[$arrayName] = $arrayDevs;

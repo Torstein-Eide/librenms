@@ -11,6 +11,7 @@ return new class extends Migration {
             $table->id();
             $table->unsignedInteger('device_id')->index();
             $table->unsignedInteger('app_id')->index();
+            $table->unsignedInteger('snmp_index')->nullable();
             $table->string('uuid', 36);
             $table->string('array_name')->nullable();
             $table->string('md_id')->nullable();
@@ -35,6 +36,31 @@ return new class extends Migration {
             $table->unsignedBigInteger('sync_done_bytes')->nullable();
             $table->unsignedBigInteger('sync_total_bytes')->nullable();
             $table->string('sync_last_action', 32)->nullable();
+
+            // Array meta (discovery): layout, resync/reshape progress, write-intent bitmap config.
+            $table->integer('layout')->nullable();
+            $table->unsignedBigInteger('resync_start_sectors')->nullable();
+            $table->unsignedBigInteger('reshape_position_sectors')->nullable();
+            $table->string('bitmap_type', 16)->nullable();
+            $table->string('bitmap_location')->nullable();
+            $table->unsignedInteger('bitmap_chunksize')->nullable();
+            $table->string('bitmap_metadata', 32)->nullable();
+            $table->unsignedInteger('bitmap_time_base')->nullable();
+
+            // Array health (poll): mount/swap status, bitmap backlog, RAID-5/6 stripe cache + journal.
+            $table->boolean('is_mounted')->nullable();
+            $table->string('mount_points')->nullable();
+            $table->boolean('is_swap')->nullable();
+            $table->unsignedInteger('bitmap_backlog')->nullable();
+            $table->unsignedInteger('bitmap_max_backlog')->nullable();
+            $table->boolean('bitmap_can_clear')->nullable();
+            $table->unsignedInteger('stripe_cache_size')->nullable();
+            $table->unsignedInteger('stripe_cache_active')->nullable();
+            $table->string('journal_mode', 16)->nullable();
+
+            // Array sync (poll): check/repair scope range.
+            $table->unsignedBigInteger('sync_min_sectors')->nullable();
+            $table->unsignedBigInteger('sync_max_sectors')->nullable();
             $table->timestamps();
 
             $table->unique(['app_id', 'uuid']);
@@ -46,6 +72,7 @@ return new class extends Migration {
             $table->unsignedInteger('device_id')->index();
             $table->unsignedInteger('app_id')->index();
             $table->unsignedBigInteger('mdadm_array_id')->index();
+            $table->unsignedInteger('snmp_index')->nullable();
             $table->string('dev_id', 64);
             $table->string('path')->nullable();
             $table->string('state', 64)->nullable();
@@ -57,6 +84,17 @@ return new class extends Migration {
             $table->unsignedSmallInteger('slot')->nullable();
             $table->string('id_model', 128)->nullable();
             $table->string('id_serial_short', 64)->nullable();
+
+            // Device meta (discovery): component offset and Partial Parity Log location.
+            $table->unsignedBigInteger('offset_sectors')->nullable();
+            $table->unsignedBigInteger('ppl_sector')->nullable();
+            $table->unsignedBigInteger('ppl_size_sectors')->nullable();
+
+            // Device health (poll): superblock event count, rebuild resume point, bad-block logs.
+            $table->unsignedBigInteger('events')->nullable();
+            $table->unsignedBigInteger('recovery_start_sectors')->nullable();
+            $table->unsignedInteger('bad_block_count')->nullable();
+            $table->unsignedInteger('unack_bad_block_count')->nullable();
             $table->timestamps();
 
             $table->unique(['mdadm_array_id', 'dev_id']);

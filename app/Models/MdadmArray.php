@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $id
  * @property int $device_id
  * @property int $app_id
+ * @property int|null $snmp_index
  * @property string $uuid
  * @property string|null $array_name
  * @property string|null $md_id
@@ -34,6 +35,25 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $sync_done_bytes
  * @property int|null $sync_total_bytes
  * @property string|null $sync_last_action
+ * @property int|null $layout
+ * @property int|null $resync_start_sectors
+ * @property int|null $reshape_position_sectors
+ * @property string|null $bitmap_type
+ * @property string|null $bitmap_location
+ * @property int|null $bitmap_chunksize
+ * @property string|null $bitmap_metadata
+ * @property int|null $bitmap_time_base
+ * @property bool|null $is_mounted
+ * @property string|null $mount_points
+ * @property bool|null $is_swap
+ * @property int|null $bitmap_backlog
+ * @property int|null $bitmap_max_backlog
+ * @property bool|null $bitmap_can_clear
+ * @property int|null $stripe_cache_size
+ * @property int|null $stripe_cache_active
+ * @property string|null $journal_mode
+ * @property int|null $sync_min_sectors
+ * @property int|null $sync_max_sectors
  * @property \Illuminate\Support\Carbon|null $created_at
  * @property \Illuminate\Support\Carbon|null $updated_at
  * @property-read Device $device
@@ -47,6 +67,7 @@ class MdadmArray extends Model
     protected $fillable = [
         'device_id',
         'app_id',
+        'snmp_index',
         'uuid',
         'array_name',
         'md_id',
@@ -71,6 +92,31 @@ class MdadmArray extends Model
         'sync_done_bytes',
         'sync_total_bytes',
         'sync_last_action',
+        'layout',
+        'resync_start_sectors',
+        'reshape_position_sectors',
+        'bitmap_type',
+        'bitmap_location',
+        'bitmap_chunksize',
+        'bitmap_metadata',
+        'bitmap_time_base',
+        'is_mounted',
+        'mount_points',
+        'is_swap',
+        'bitmap_backlog',
+        'bitmap_max_backlog',
+        'bitmap_can_clear',
+        'stripe_cache_size',
+        'stripe_cache_active',
+        'journal_mode',
+        'sync_min_sectors',
+        'sync_max_sectors',
+    ];
+
+    protected $casts = [
+        'is_mounted'      => 'boolean',
+        'is_swap'         => 'boolean',
+        'bitmap_can_clear' => 'boolean',
     ];
 
     public function device(): BelongsTo
