@@ -17,7 +17,6 @@ on:
       - 'doc/**'
       - 'mkdocs.yml'
       - 'resources/definitions/os_detection/**'
-      - 'Developing/Application/**'
 
 permissions:
   contents: read # to fetch code (actions/checkout)
