@@ -1132,6 +1132,7 @@ mdadm_drives:
     - { Field: mdadm_array_id, Type: 'bigint unsigned', 'Null': false, Extra: '' }
     - { Field: snmp_index, Type: 'int unsigned', 'Null': true, Extra: '' }
     - { Field: dev_id, Type: varchar(64), 'Null': false, Extra: '' }
+    - { Field: dev_uuid, Type: varchar(64), 'Null': true, Extra: '' }
     - { Field: path, Type: varchar(255), 'Null': true, Extra: '' }
     - { Field: state, Type: varchar(64), 'Null': true, Extra: '' }
     - { Field: state_flags, Type: longtext, 'Null': true, Extra: '' }

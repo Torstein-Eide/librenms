@@ -42,11 +42,20 @@ if ($scale_max === null) {
     unset($scale_max);
 }
 
-$array = $vars['array'] ?? '';
-$rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, $array]);
+$arrayParam = $vars['array'] ?? '';
+$dbArray = $arrayParam !== ''
+    ? App\Models\MdadmArray::where('app_id', $app->app_id)
+        ->where(function ($q) use ($arrayParam): void {
+            $q->where('uuid', $arrayParam)->orWhere('array_name', $arrayParam)->orWhere('md_id', $arrayParam);
+        })
+        ->first()
+    : null;
+
+// RRD files are keyed by the stable array UUID.
+$rrd_filename = $dbArray !== null ? Rrd::name($device['hostname'], ['app', $name, $app->app_id, $dbArray->uuid]) : '';
 
 $rrd_list = [];
-if ($array !== '' && Rrd::checkRrdExists($rrd_filename)) {
+if ($rrd_filename !== '' && Rrd::checkRrdExists($rrd_filename)) {
     foreach ($datasets as $spec) {
         $rrd_list[] = [
             'filename' => $rrd_filename,

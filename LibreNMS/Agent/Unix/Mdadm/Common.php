@@ -538,6 +538,7 @@ class Common extends Application
                 $devices[$devName] = [
                     'snmp_index' => (int) $memberIndex,
                     'device_name' => $devName,
+                    'device_uuid' => (string) ($dm['mdadmMemberDeviceUuid'] ?? ''),
                     'slot' => $slot === self::SNMP_UINT32_MAX ? null : $slot,
                     'size_bytes' => (int) ($dm['mdadmMemberSizeBytes'] ?? 0),
                     'id_model' => (string) ($dm['mdadmMemberIdModel'] ?? ''),
@@ -891,7 +892,10 @@ class Common extends Application
     private static function driveRrdDatasets(): array
     {
         return [
-            ['errors', 'DERIVE', self::RRD_HEARTBEAT, 0, null],
+            ['errors',           'DERIVE', self::RRD_HEARTBEAT, 0, null],
+            ['events',           'GAUGE',  self::RRD_HEARTBEAT, 0, null],
+            ['bad_blocks',       'GAUGE',  self::RRD_HEARTBEAT, 0, null],
+            ['unack_bad_blocks', 'GAUGE',  self::RRD_HEARTBEAT, 0, null],
         ];
     }
 
@@ -1035,11 +1039,11 @@ class Common extends Application
 
         foreach ($this->dbArraysPrev as $uuid => $arrayRow) {
             $uuid = (string) $uuid;
-            $array = $this->plarray[$uuid]['array'] ?? [];
-            $arrayName = (string) ($array['name'] ?? '');
-            if ($arrayName === '') {
-                continue;
+            if (! isset($this->plarray[$uuid])) {
+                continue; // array not present in this poll
             }
+            $array = $this->plarray[$uuid]['array'] ?? [];
+            $arrayName = (string) ($array['name'] ?? $uuid);
 
             $sync = $array['sync'] ?? [];
             $syncAction = strtolower(trim((string) ($sync['action'] ?? 'idle')));
@@ -1048,11 +1052,12 @@ class Common extends Application
             $prevAction = $arrayRow->sync_action !== null ? (string) $arrayRow->sync_action : null;
             $this->logIfChanged($arrayName, 'sync action', $prevAction, $syncAction);
 
+            // RRD files are keyed by the stable array UUID (md_id can change across reassembly).
             $this->putRrd('app', [
                 'name' => 'mdadm',
                 'app_id' => $appId,
                 'rrd_def' => self::buildRrdDef(self::arrayRrdDatasets()),
-                'rrd_name' => ['app', 'mdadm', $appId, $arrayName],
+                'rrd_name' => ['app', 'mdadm', $appId, $uuid],
             ], [
                 'active' => (int) ($array['active_devices'] ?? null),
                 'spare' => (int) ($array['spare_devices'] ?? null),
@@ -1064,14 +1069,23 @@ class Common extends Application
                 'speed_bps' => (int) ($sync['speed_bps'] ?? null),
             ]);
 
-            foreach ($this->plarray[$uuid]['devices'] ?? [] as $devId => $devData) {
+            // Per-drive RRD is keyed by the stable superblock device UUID, falling
+            // back to dev_id (kernel name) when the array predates a known UUID.
+            foreach ($arrayRow->drives as $drive) {
+                $devId = (string) $drive->dev_id;
+                $devData = $this->plarray[$uuid]['devices'][$devId] ?? [];
+                $driveKey = $drive->dev_uuid !== null && $drive->dev_uuid !== '' ? (string) $drive->dev_uuid : $devId;
+
                 $this->putRrd('app', [
                     'name' => 'mdadm',
                     'app_id' => $appId,
                     'rrd_def' => $driveDef,
-                    'rrd_name' => ['app', 'mdadm', $appId, $arrayName, (string) $devId],
+                    'rrd_name' => ['app', 'mdadm', $appId, $uuid, $driveKey],
                 ], [
                     'errors' => (int) ($devData['errors'] ?? 0),
+                    'events' => (int) ($devData['events'] ?? 0),
+                    'bad_blocks' => (int) ($devData['bad_block_count'] ?? 0),
+                    'unack_bad_blocks' => (int) ($devData['unack_bad_block_count'] ?? 0),
                 ]);
             }
         }
@@ -1125,6 +1139,7 @@ class Common extends Application
                         'device_id' => $deviceId,
                         'app_id' => $appId,
                         'snmp_index' => isset($devData['snmp_index']) ? (int) $devData['snmp_index'] : null,
+                        'dev_uuid' => ($devData['device_uuid'] ?? '') !== '' ? (string) $devData['device_uuid'] : null,
                         'path' => (string) ($devData['device_name'] ?? ''),
                         'size_bytes' => isset($devData['size_bytes']) ? (int) $devData['size_bytes'] : (isset($devData['size_blocks']) ? (int) $devData['size_blocks'] * 1024 : null),
                         'slot' => isset($devData['slot']) ? (int) $devData['slot'] : null,

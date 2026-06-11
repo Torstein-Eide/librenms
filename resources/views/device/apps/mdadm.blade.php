@@ -19,6 +19,8 @@ $arrayGraphs = [
     'sync_pct'    => ['type' => 'mdadm_app',        'metric' => 'sync_pct',    'title' => 'Sync Progress (%)'],
     'diskio_ops'  => ['type' => 'mdadm_diskio_ops',                             'title' => 'Disk I/O Ops'],
     'diskio_bits' => ['type' => 'mdadm_diskio_bits',                            'title' => 'Disk I/O Bytes'],
+    'drive_events'=> ['type' => 'mdadm_drive',      'metric' => 'events',      'title' => 'Drive Events'],
+    'drive_bad'   => ['type' => 'mdadm_drive',      'metric' => 'bad_blocks',  'title' => 'Drive Bad Blocks'],
 ];
 
 $statusFields = [
