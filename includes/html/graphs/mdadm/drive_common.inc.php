@@ -48,7 +48,7 @@ foreach ($dbArray->drives as $drive) {
 
     // Match the poll-side key: stable superblock device UUID, else dev_id.
     $driveKey = $drive->dev_uuid !== null && $drive->dev_uuid !== '' ? (string) $drive->dev_uuid : $devId;
-    $rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, $dbArray->uuid, $driveKey]);
+    $rrd_filename = Rrd::name($device['hostname'], ['app', $name, $app->app_id, $dbArray->uuid . '_' . $driveKey]);
     if (! Rrd::checkRrdExists($rrd_filename)) {
         continue;
     }

@@ -893,7 +893,7 @@ class Common extends Application
     {
         return [
             ['errors',           'DERIVE', self::RRD_HEARTBEAT, 0, null],
-            ['events',           'GAUGE',  self::RRD_HEARTBEAT, 0, null],
+            ['events',           'DERIVE', self::RRD_HEARTBEAT, 0, null],
             ['bad_blocks',       'GAUGE',  self::RRD_HEARTBEAT, 0, null],
             ['unack_bad_blocks', 'GAUGE',  self::RRD_HEARTBEAT, 0, null],
         ];
@@ -1080,7 +1080,7 @@ class Common extends Application
                     'name' => 'mdadm',
                     'app_id' => $appId,
                     'rrd_def' => $driveDef,
-                    'rrd_name' => ['app', 'mdadm', $appId, $uuid, $driveKey],
+                    'rrd_name' => ['app', 'mdadm', $appId, $uuid . '_' . $driveKey],
                 ], [
                     'errors' => (int) ($devData['errors'] ?? 0),
                     'events' => (int) ($devData['events'] ?? 0),
