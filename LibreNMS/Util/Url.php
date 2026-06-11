@@ -364,10 +364,24 @@ class Url
     private static function urlParams($vars, $prefix = '/')
     {
         $url = empty($vars) ? '' : $prefix;
+        $query = [];
         foreach ($vars as $var => $value) {
+            // Array values can't be path segments; carry them as a repeated-key
+            // query string (e.g. ?title_parts[]=a&title_parts[]=b).
+            if (is_array($value)) {
+                if (! empty($value)) {
+                    $query[$var] = $value;
+                }
+
+                continue;
+            }
             if ($value == '0' || $value != '' && ! Str::contains($var, 'opt') && ! is_numeric($var)) {
                 $url .= urlencode((string) $var) . '=' . urlencode((string) $value) . '/';
             }
+        }
+
+        if (! empty($query)) {
+            $url .= '?' . http_build_query($query);
         }
 
         return $url;
@@ -400,6 +414,10 @@ class Url
     {
         $urlargs = [];
         foreach ($args as $key => $arg) {
+            // graph.php image params are scalar; skip page-only array values (e.g. title_parts)
+            if (is_array($arg)) {
+                continue;
+            }
             $urlargs[] = $key . '=' . ($arg === null ? '' : urlencode($arg));
         }
 
@@ -441,6 +459,10 @@ class Url
         $urlargs = [];
 
         foreach ($args as $key => $arg) {
+            // graph.php image params are scalar; skip page-only array values (e.g. title_parts)
+            if (is_array($arg)) {
+                continue;
+            }
             $urlargs[] = $key . '=' . ($arg === null ? '' : urlencode($arg));
         }
 
