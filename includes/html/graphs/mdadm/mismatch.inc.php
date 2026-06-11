@@ -1,7 +1,7 @@
 <?php
 
-use App\Models\Sensor;
 use App\Facades\Rrd;
+use App\Models\Sensor;
 use LibreNMS\Exceptions\RrdGraphException;
 
 require 'includes/html/graphs/common.inc.php';

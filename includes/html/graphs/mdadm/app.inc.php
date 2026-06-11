@@ -50,8 +50,8 @@ if ($array !== '' && Rrd::checkRrdExists($rrd_filename)) {
     foreach ($datasets as $spec) {
         $rrd_list[] = [
             'filename' => $rrd_filename,
-            'descr'    => $spec['descr'],
-            'ds'       => $spec['ds'],
+            'descr' => $spec['descr'],
+            'ds' => $spec['ds'],
         ];
     }
 }

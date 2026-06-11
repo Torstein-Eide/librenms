@@ -65,7 +65,7 @@ class MdadmDrive extends Model
 
     protected $casts = [
         'state_flags' => 'array',
-        'is_missing'  => 'boolean',
+        'is_missing' => 'boolean',
     ];
 
     public function device(): BelongsTo

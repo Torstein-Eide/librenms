@@ -117,23 +117,23 @@ abstract class Application
         string $rrd_type = 'GAUGE',
     ): static {
         app('sensor-discovery')->discover(new Sensor([
-            'device_id'           => $this->os->getDeviceId(),
-            'poller_type'         => $poller_type,
-            'sensor_class'        => $class,
-            'sensor_type'         => $type,
-            'sensor_index'        => $index,
-            'sensor_oid'          => $oid,
-            'sensor_descr'        => $descr,
-            'sensor_current'      => $current,
-            'group'               => $group,
-            'sensor_navigation'   => $navigation,
-            'sensor_divisor'      => $divisor,
-            'sensor_multiplier'   => $multiplier,
-            'sensor_limit_low'    => $lowLimit,
+            'device_id' => $this->os->getDeviceId(),
+            'poller_type' => $poller_type,
+            'sensor_class' => $class,
+            'sensor_type' => $type,
+            'sensor_index' => $index,
+            'sensor_oid' => $oid,
+            'sensor_descr' => $descr,
+            'sensor_current' => $current,
+            'group' => $group,
+            'sensor_navigation' => $navigation,
+            'sensor_divisor' => $divisor,
+            'sensor_multiplier' => $multiplier,
+            'sensor_limit_low' => $lowLimit,
             'sensor_limit_low_warn' => $lowWarnLimit,
-            'sensor_limit_warn'   => $warnLimit,
-            'sensor_limit'        => $highLimit,
-            'rrd_type'            => $rrd_type,
+            'sensor_limit_warn' => $warnLimit,
+            'sensor_limit' => $highLimit,
+            'rrd_type' => $rrd_type,
         ]));
 
         return $this;
@@ -162,7 +162,7 @@ abstract class Application
      * Log sensors with $oidPrefix that are absent from $expectedOids, then return their IDs.
      * Call this before syncSensors() so the rows still exist when we read their descriptions.
      *
-     * @return list<int>  sensor_ids that were logged (pass to deleteStaleAgentSensors if needed)
+     * @return list<int> sensor_ids that were logged (pass to deleteStaleAgentSensors if needed)
      */
     protected function logStaleSensorRemovals(string $oidPrefix, array $expectedOids): array
     {
@@ -212,8 +212,8 @@ abstract class Application
      * - state change events with human-readable labels
      * - sensor_prev + lastupdate persisted via Eloquent save()
      *
-     * @param  array<string, int|float>  $values      ['sensor_index' => raw_value, ...]
-     * @param  string                    $oidPrefix   Scopes the DB query (e.g. 'app:mdadm:')
+     * @param  array<string, int|float>  $values  ['sensor_index' => raw_value, ...]
+     * @param  string  $oidPrefix  Scopes the DB query (e.g. 'app:mdadm:')
      */
     protected function updateSensorValues(array $values, string $oidPrefix): void
     {
@@ -252,11 +252,11 @@ abstract class Application
 
             app('Datastore')->put($device, 'sensor', [
                 'sensor_class' => $sensor->sensor_class,
-                'sensor_type'  => $sensor->sensor_type,
+                'sensor_type' => $sensor->sensor_type,
                 'sensor_descr' => $sensor->sensor_descr,
                 'sensor_index' => $sensor->sensor_index,
-                'rrd_name'     => \get_sensor_rrd_name($device, $sensor->toArray()),
-                'rrd_def'      => RrdDefinition::make()->addDataset('sensor', $sensor->rrd_type ?? 'GAUGE'),
+                'rrd_name' => \get_sensor_rrd_name($device, $sensor->toArray()),
+                'rrd_def' => RrdDefinition::make()->addDataset('sensor', $sensor->rrd_type ?? 'GAUGE'),
             ], ['sensor' => $value]);
 
             // Threshold crossing alerts
@@ -334,13 +334,13 @@ abstract class Application
         }
 
         return match (strtolower(trim($level))) {
-            'unknown'           => Severity::Unknown,
-            'ok'                => Severity::Ok,
-            'info'              => Severity::Info,
-            'notice'            => Severity::Notice,
-            'warning'           => Severity::Warning,
+            'unknown' => Severity::Unknown,
+            'ok' => Severity::Ok,
+            'info' => Severity::Info,
+            'notice' => Severity::Notice,
+            'warning' => Severity::Warning,
             'error', 'critical' => Severity::Error,
-            default             => Severity::Info,
+            default => Severity::Info,
         };
     }
 

@@ -66,48 +66,48 @@ class MdadmArrayController extends TableController
      */
     public function formatItem(Model $model): array
     {
-        $dev    = $model->application->device ?? null;
+        $dev = $model->application->device ?? null;
         $arrUrl = $dev ? Url::generate([
-            'page'   => 'device',
+            'page' => 'device',
             'device' => $dev->device_id,
-            'tab'    => 'apps',
-            'app'    => 'mdadm',
-            'array'  => $model->md_id ?? $model->uuid,
+            'tab' => 'apps',
+            'app' => 'mdadm',
+            'array' => $model->md_id ?? $model->uuid,
         ]) : '#';
 
         $stateClass = match (strtolower((string) ($model->state ?? ''))) {
-            'clean', 'active'                             => 'default',
-            'degraded'                                    => 'danger',
+            'clean', 'active' => 'default',
+            'degraded' => 'danger',
             'recovering', 'resyncing', 'checking', 'sync' => 'warning',
-            default                                       => 'default',
+            default => 'default',
         };
 
-        $failedCnt  = (int) ($model->failed_devices ?? 0);
+        $failedCnt = (int) ($model->failed_devices ?? 0);
         $mismatchCnt = (int) ($model->mismatch_cnt ?? 0);
 
         $linkText = $model->array_name ?? $model->uuid;
 
         return [
-            'device'         => $dev ? Url::modernDeviceLink($dev) : '?',
-            'array_name'     => '<a href="' . htmlspecialchars((string) $arrUrl) . '">' . htmlspecialchars($linkText) . '</a>',
-            'md_id'          => $model->md_id !== null
+            'device' => $dev ? Url::modernDeviceLink($dev) : '?',
+            'array_name' => '<a href="' . htmlspecialchars((string) $arrUrl) . '">' . htmlspecialchars($linkText) . '</a>',
+            'md_id' => $model->md_id !== null
                 ? '<a href="' . htmlspecialchars((string) $arrUrl) . '">' . htmlspecialchars($model->md_id) . '</a>'
                 : '<span class="text-muted">&mdash;</span>',
-            'level'          => $model->level !== null
+            'level' => $model->level !== null
                 ? '<a href="' . htmlspecialchars((string) $arrUrl) . '">' . htmlspecialchars((string) $model->level) . '</a>'
                 : '',
-            'state'          => '<span class="label label-' . $stateClass . '">'
+            'state' => '<span class="label label-' . $stateClass . '">'
                 . htmlspecialchars((string) ($model->state ?? '')) . '</span>',
-            'sync_action'    => htmlspecialchars((string) ($model->sync_action ?? 'idle')),
-            'raid_disks'     => $model->raid_disks,
+            'sync_action' => htmlspecialchars((string) ($model->sync_action ?? 'idle')),
+            'raid_disks' => $model->raid_disks,
             'active_devices' => $model->active_devices,
-            'spare_devices'  => $model->spare_devices,
+            'spare_devices' => $model->spare_devices,
             'failed_devices' => '<span class="label label-' . ($failedCnt > 0 ? 'danger' : 'default') . '">'
                 . $failedCnt . '</span>',
-            'size'           => ($model->size_bytes ?? 0) > 0
+            'size' => ($model->size_bytes ?? 0) > 0
                 ? Number::formatBi((int) $model->size_bytes)
                 : '&mdash;',
-            'mismatch_cnt'   => '<span class="label label-' . ($mismatchCnt > 0 ? 'warning' : 'default') . '">'
+            'mismatch_cnt' => '<span class="label label-' . ($mismatchCnt > 0 ? 'warning' : 'default') . '">'
                 . $mismatchCnt . '</span>',
         ];
     }
