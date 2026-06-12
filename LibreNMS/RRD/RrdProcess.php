@@ -75,8 +75,24 @@ class RrdProcess
         $this->runAsync($command);
 
         $this->process->waitUntil(function ($type, $buffer) use ($waitFor) {
-            if ($type === Process::ERR || str_contains($buffer, 'ERROR: ')) {
-                throw RrdException::parse($buffer);
+            if ($type === Process::ERR) {
+                // rrdtool reports a missing file on stderr as "realpath(...): No such file or directory"
+                if (str_contains($buffer, 'No such file')) {
+                    throw new RrdNotFoundException($buffer);
+                }
+                throw new RrdException($buffer);
+            }
+
+            if (str_contains($buffer, 'ERROR: ')) {
+                preg_match('/ERROR: (.*)/', $buffer, $matches);
+                $error = $matches[1];
+                if (str_contains($error, 'No such file')) {
+                    throw new RrdNotFoundException($error);
+                }
+                if (str_contains($error, 'illegal attempt to update using time')) {
+                    throw new RrdUpdateTooFrequentException($error);
+                }
+                throw new RrdException($error);
             }
 
             return str_contains($buffer, $waitFor);
