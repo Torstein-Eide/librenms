@@ -930,3 +930,135 @@ function find_port_id($description, $identifier = '', $device_id = 0, $mac_addre
 
     return (int) dbFetchCell($sql, $params);
 }
+
+/**
+ * Build a map from LM-SENSORS-MIB sensor type and index to entPhysicalIndex
+ * using ENTITY-MIB::entAliasMappingIdentifier.
+ *
+ * Handles OIDs of the form ucdExperimental.16.X.1.1.Y where X identifies
+ * the sensor table (2=lmTempSensors, 3=lmFanSensors, 4=lmVoltSensors,
+ * 5=lmMiscSensors) and Y is the sensor row index.
+ *
+ * @return array<string, array<int, array{entPhysicalIndex: int, parentDescr: string|null}>>  [lmSensorType][sensorIndex] => {entPhysicalIndex, parentDescr}
+ */
+function entity_mib_get_lmsensor_entphysical_map(int $device_id): array
+{
+    if (! \App\Models\EntPhysical::where('device_id', $device_id)->exists()) {
+        return [];
+    }
+
+    static $subtree_to_type = [
+        2 => 'lmTempSensors',
+        3 => 'lmFanSensors',
+        4 => 'lmVoltSensors',
+        5 => 'lmMiscSensors',
+    ];
+
+    $raw = [];
+    $alias_data = \SnmpQuery::cache()->walk('ENTITY-MIB::entAliasMappingIdentifier')->table(2);
+
+    foreach ($alias_data as $entPhysicalIndex => $data) {
+        $oid = $data[0]['ENTITY-MIB::entAliasMappingIdentifier'] ?? $data[1]['ENTITY-MIB::entAliasMappingIdentifier'] ?? null;
+        if ($oid && preg_match('/(?:ucdExperimental|enterprises\.2021\.13)\.16\.(\d+)\.1\.1\.(\d+)/', (string) $oid, $matches)) {
+            $subtree = (int) $matches[1];
+            $sensorIndex = (int) $matches[2];
+            if (isset($subtree_to_type[$subtree])) {
+                $raw[$subtree_to_type[$subtree]][$sensorIndex] = (int) $entPhysicalIndex;
+            }
+        }
+    }
+
+    // load the full entity tree for this device once, then walk it per sensor
+    $tree = \Illuminate\Support\Facades\DB::table('entPhysical')
+        ->where('device_id', $device_id)
+        ->select(['entPhysicalIndex', 'entPhysicalContainedIn', 'entPhysicalName', 'entPhysicalDescr', 'entPhysicalClass', 'entPhysicalParentRelPos'])
+        ->get()
+        ->keyBy('entPhysicalIndex');
+
+    $map = [];
+    foreach ($raw as $type => $entries) {
+        foreach ($entries as $sensorIndex => $entPhysicalIndex) {
+            $map[$type][$sensorIndex] = [
+                'entPhysicalIndex' => $entPhysicalIndex,
+                'parentDescr'      => entity_mib_walk_prefix($entPhysicalIndex, $tree),
+            ];
+        }
+    }
+
+    return $map;
+}
+
+/**
+ * Walk the entPhysical tree upward from a sensor entity to find a meaningful
+ * prefix for its description.
+ *
+ * Preference order while climbing entPhysicalContainedIn:
+ *  1. First ancestor whose entPhysicalName looks like a device instance (nvme0, cpu0, sda ...)
+ *  2. If no device instance is found, use the description of the last ancestor
+ *     before the chassis (typically the baseboard, e.g. "X11SAE-M").
+ *
+ * @param  int  $startIndex  entPhysicalIndex of the sensor entity
+ * @param  \Illuminate\Support\Collection  $tree  full entity table keyed by entPhysicalIndex
+ */
+function entity_mib_walk_prefix(int $startIndex, \Illuminate\Support\Collection $tree): ?string
+{
+    $idx = $startIndex;
+    $visited = [];
+    $hwmonDescr = null;       // description of the hwmon module passed on the way up
+    $hasIntermediate = false; // true if a non-hwmon entity sits between hwmon and baseboard
+    $baseboardDescr = null;   // description of the direct child of the chassis (baseboard)
+
+    while ($idx && ! isset($visited[$idx])) {
+        $visited[$idx] = true;
+        $ent = $tree->get($idx);
+        if (! $ent) {
+            break;
+        }
+
+        $parentIdx = (int) $ent->entPhysicalContainedIn;
+        $parent = $tree->get($parentIdx);
+        $isTopLevel = ! $parent || $parent->entPhysicalClass === 'chassis' || $parentIdx === 0;
+
+        if ($isTopLevel) {
+            // this entity is the direct child of the chassis (e.g. baseboard)
+            $baseboardDescr = $ent->entPhysicalDescr;
+            break;
+        }
+
+        // skip sensor entities and hwmon-named module entities
+        $isHwmon = str_starts_with((string) $ent->entPhysicalName, 'hwmon');
+
+        if ($ent->entPhysicalClass === 'sensor') {
+            $idx = $parentIdx;
+            continue;
+        }
+
+        if ($isHwmon) {
+            $hwmonDescr = $ent->entPhysicalDescr;
+            $idx = $parentIdx;
+            continue;
+        }
+
+        // device-instance name (nvme0, cpu0, ...) → return immediately
+        if (preg_match('/^[a-z][a-z0-9]*\d+$/', (string) $ent->entPhysicalName)
+            && ! in_array($ent->entPhysicalName, ['bios', 'cpu', 'fan', 'psu'])
+        ) {
+            return $ent->entPhysicalName;
+        }
+
+        // any other entity between hwmon and baseboard (e.g. a PCI backplane)
+        if ($hwmonDescr !== null) {
+            $hasIntermediate = true;
+        }
+
+        $idx = $parentIdx;
+    }
+
+    // hwmon sat directly on the baseboard (jc42, acpitz) → use baseboard description
+    // hwmon had intermediate entities above it (pch_skylake via PCI) → use hwmon description
+    if ($hwmonDescr !== null && $hasIntermediate) {
+        return $hwmonDescr;
+    }
+
+    return $baseboardDescr;
+}

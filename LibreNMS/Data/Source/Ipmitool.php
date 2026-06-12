@@ -33,6 +33,7 @@ use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use LibreNMS\Exceptions\IpmiConnectionFailed;
+use LibreNMS\Util\Number;
 
 class Ipmitool
 {
@@ -140,6 +141,41 @@ class Ipmitool
             fn (string $line): array => array_map(trim(...), explode('|', $line)),
             explode("\n", trim($output))
         );
+    }
+
+    /**
+     * Parsed, sorted and filtered IPMI sensors ready for discovery.
+     *
+     * The list is sorted by description and reduced to sensors that have a
+     * reading and a configured unit mapping, giving a stable sequential order.
+     *
+     * @return list<array{class: string, descr: string, current: float, limit_high: string|null, limit_high_warn: string|null, limit_low: string|null, limit_low_warn: string|null}>
+     *
+     * @throws IpmiConnectionFailed
+     */
+    public function discoverySensors(): array
+    {
+        $sensor_values = $this->sensors();
+        usort($sensor_values, fn ($a, $b) => $a[0] <=> $b[0]);
+
+        $sensors = [];
+        foreach ($sensor_values as $values) {
+            [$desc, $current, $unit, $state, $low_nonrecoverable, $low_limit, $low_warn, $high_warn, $high_limit, $high_nonrecoverable] = $values;
+
+            if ($current != 'na' && LibrenmsConfig::has("ipmi_unit.$unit")) {
+                $sensors[] = [
+                    'class' => LibrenmsConfig::get("ipmi_unit.$unit"),
+                    'descr' => $desc,
+                    'current' => Number::cast($current),
+                    'limit_high' => $high_limit == 'na' ? null : $high_limit,
+                    'limit_high_warn' => $high_warn == 'na' ? null : $high_warn,
+                    'limit_low' => $low_limit == 'na' ? null : $low_limit,
+                    'limit_low_warn' => $low_warn == 'na' ? null : $low_warn,
+                ];
+            }
+        }
+
+        return $sensors;
     }
 
     /**

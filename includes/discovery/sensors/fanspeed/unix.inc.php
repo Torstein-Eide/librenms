@@ -28,6 +28,7 @@ use LibreNMS\Util\Oid;
 $snmpData = SnmpQuery::cache()->hideMib()->walk('LM-SENSORS-MIB::lmSensors')->table(1);
 if (! empty($snmpData)) {
     echo 'LM-SENSORS-MIB: ' . PHP_EOL;
+    $entPhysicalMap = entity_mib_get_lmsensor_entphysical_map($device['device_id']);
     foreach ($snmpData as $lmData) {
         $type = 'lmFanSensors';
         $divisor = 1;
@@ -39,9 +40,15 @@ if (! empty($snmpData)) {
         $index = $lmData[$type . 'Index'];
         $descr = $lmData[$type . 'Device'];
         $value = intval($lmData[$type . 'Value']) / $divisor;
+        $entry = $entPhysicalMap[$type][$index] ?? null;
+        $entPhysicalIndex = $entry['entPhysicalIndex'] ?? null;
+        $parentDescr = $entry['parentDescr'] ?? null;
+        if ($parentDescr && ! str_contains($descr, $parentDescr)) {
+            $descr = $parentDescr . ' ' . $descr;
+        }
         if (! empty($descr)) {
             $oid = Oid::of('LM-SENSORS-MIB::' . $type . 'Value.' . $index)->toNumeric();
-            discover_sensor(null, 'fanspeed', $device, $oid, $index, 'lmsensors', $descr, $divisor, 1, null, null, null, null, $value, 'snmp', null, null, null, 'lmsensors');
+            discover_sensor(null, 'fanspeed', $device, $oid, $index, 'lmsensors', $descr, $divisor, 1, null, null, null, null, $value, 'snmp', $entPhysicalIndex, null, null, 'lmsensors');
         }
     }
 }

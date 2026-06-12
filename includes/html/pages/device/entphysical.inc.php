@@ -11,8 +11,12 @@ function printEntPhysical($device, $ent, $level, $class)
     foreach ($ents as $ent) {
         //Let's find if we have any sensors attached to the current entity;
         //We hit this code for every type of entity because not all vendors have 1 'sensor' entity per sensor
+        // The sensor_index fallback excludes poller_type='ipmi': IPMI sensors come from
+        // ipmitool (no ENTITY-MIB entity) and use a sequential sensor_index that would
+        // otherwise mismatch onto unrelated low-index entities. TODO: attach IPMI sensors
+        // to their real hardware entity. See LibreNMS\OS\Linux::discoverEntityPhysical.
         $sensors = DeviceCache::getPrimary()->sensors()->where(fn (Builder $query) => $query->where('entPhysicalIndex', $ent['entPhysicalIndex'])
-            ->orWhere('sensor_index', $ent['entPhysicalIndex']))->get();
+            ->orWhere(fn (Builder $q) => $q->whereNull('entPhysicalIndex')->where('poller_type', '!=', 'ipmi')->where('sensor_index', $ent['entPhysicalIndex'])))->get();
         echo "
  <li class='$class'>";
 
@@ -141,10 +145,194 @@ function printEntPhysical($device, $ent, $level, $class)
     }//end foreach
 }//end printEntPhysical()
 
-echo "<div style='float: right;'>
-       <a href='#' class='button' onClick=\"expandTree('enttree');return false;\"><i class='fa fa-plus fa-lg icon-theme'  aria-hidden='true'></i>Expand All Nodes</a>
+$show_debug = \Illuminate\Support\Facades\Auth::user()->hasRole('admin');
+
+echo "<div style='float: right;'>";
+if ($show_debug) {
+    echo "<button type='button' class='btn btn-default btn-sm' data-toggle='collapse' data-target='#entphysical-debug'><i class='fa fa-bug icon-theme' aria-hidden='true'></i> Debug</button> ";
+}
+echo "<a href='#' class='button' onClick=\"expandTree('enttree');return false;\"><i class='fa fa-plus fa-lg icon-theme'  aria-hidden='true'></i>Expand All Nodes</a>
        <a href='#' class='button' onClick=\"collapseTree('enttree');return false;\"><i class='fa fa-minus fa-lg icon-theme'  aria-hidden='true'></i>Collapse All Nodes</a>
      </div>";
+
+if ($show_debug) {
+    $debug_sensors = DeviceCache::getPrimary()->sensors()
+        ->orderBy('sensor_class')
+        ->orderBy('sensor_index')
+        ->get();
+
+    $debug_lmsensors_count = $debug_sensors->where('sensor_type', 'lmsensors')->count();
+
+    $debug_ent = dbFetchRows(
+        'SELECT entPhysical_id, entPhysicalIndex, entPhysicalContainedIn, entPhysicalParentRelPos, entPhysicalDescr, entPhysicalClass, entPhysicalName, entPhysicalHardwareRev, entPhysicalFirmwareRev, entPhysicalSoftwareRev, entPhysicalSerialNum, entPhysicalMfgName, entPhysicalModelName, entPhysicalAlias, entPhysicalAssetID, entPhysicalIsFRU, entPhysicalVendorType, ifIndex FROM `entPhysical` WHERE device_id = ? ORDER BY entPhysicalIndex',
+        [$device['device_id']]
+    );
+    $debug_ent_map = array_column($debug_ent, null, 'entPhysicalIndex');
+
+    $debug_entity_states = dbFetchRows(
+        'SELECT * FROM `entityState` WHERE device_id = ? ORDER BY entPhysical_id',
+        [$device['device_id']]
+    );
+
+    $debug_ports = dbFetchRows(
+        'SELECT port_id, ifIndex, ifName, ifDescr, ifAlias FROM `ports` WHERE device_id = ? AND ifIndex IS NOT NULL ORDER BY ifIndex',
+        [$device['device_id']]
+    );
+    $debug_port_map = array_column($debug_ports, null, 'ifIndex');
+
+    echo "
+<div style='clear: both;'>
+  <div id='entphysical-debug' class='collapse' style='margin-top: 10px;'>
+    <div class='panel panel-default'>
+      <div class='panel-heading'><strong>Debug: entPhysical page data</strong> (" . $debug_sensors->count() . " sensors, $debug_lmsensors_count lmSensors, " . count($debug_ent) . " entities, " . count($debug_entity_states) . " states)</div>
+      <div class='panel-body' style='overflow-x:auto;'>";
+
+    if ($debug_sensors->isEmpty()) {
+        echo "<p class='text-muted'>No sensors found. Run discovery to populate.</p>";
+    } else {
+        echo "<h4>Sensor linkage</h4>
+        <table class='table table-condensed table-bordered table-hover' style='font-size:12px;'>
+          <thead class='thead-default'><tr>
+            <th>sensor_id</th>
+            <th>sensor_class</th>
+            <th>sensor_index</th>
+            <th>sensor_type</th>
+            <th>sensor_descr</th>
+            <th>sensor_oid</th>
+            <th>sensor_current</th>
+            <th>divisor</th>
+            <th>multiplier</th>
+            <th>limit_low</th>
+            <th>limit_low_warn</th>
+            <th>limit_warn</th>
+            <th>limit_high</th>
+            <th>poller_type</th>
+            <th>rrd_type</th>
+            <th>group</th>
+            <th>user_func</th>
+            <th>entPhysicalIndex</th>
+            <th>entPhysicalIndex_measured</th>
+            <th>match</th>
+            <th>entPhysicalDescr</th>
+            <th>entPhysicalClass</th>
+          </tr></thead><tbody>";
+        foreach ($debug_sensors as $s) {
+            $ent = $debug_ent_map[$s->entPhysicalIndex] ?? $debug_ent_map[$s->sensor_index] ?? null;
+            $linked = $s->entPhysicalIndex !== null;
+            $match = $linked ? 'entPhysicalIndex' : (isset($debug_ent_map[$s->sensor_index]) ? 'sensor_index fallback' : 'none');
+            echo '<tr' . ($linked ? '' : " class='warning'") . '>'
+                . '<td>' . e($s->sensor_id) . '</td>'
+                . '<td>' . e($s->sensor_class) . '</td>'
+                . '<td>' . e($s->sensor_index) . '</td>'
+                . '<td>' . e($s->sensor_type) . '</td>'
+                . '<td>' . e($s->sensor_descr) . '</td>'
+                . '<td><code>' . e($s->sensor_oid) . '</code></td>'
+                . '<td>' . e($s->sensor_current) . '</td>'
+                . '<td>' . e($s->sensor_divisor) . '</td>'
+                . '<td>' . e($s->sensor_multiplier) . '</td>'
+                . '<td>' . e($s->sensor_limit_low ?? '-') . '</td>'
+                . '<td>' . e($s->sensor_limit_low_warn ?? '-') . '</td>'
+                . '<td>' . e($s->sensor_limit_warn ?? '-') . '</td>'
+                . '<td>' . e($s->sensor_limit ?? '-') . '</td>'
+                . '<td>' . e($s->poller_type) . '</td>'
+                . '<td>' . e($s->rrd_type) . '</td>'
+                . '<td>' . e($s->group ?? '-') . '</td>'
+                . '<td>' . e($s->user_func ?? '-') . '</td>'
+                . '<td>' . ($linked ? e($s->entPhysicalIndex) : "<span class='text-danger'>NULL</span>") . '</td>'
+                . '<td>' . e($s->entPhysicalIndex_measured ?? '-') . '</td>'
+                . '<td>' . e($match) . '</td>'
+                . '<td>' . e($ent['entPhysicalDescr'] ?? '-') . '</td>'
+                . '<td>' . e($ent['entPhysicalClass'] ?? '-') . '</td>'
+                . '</tr>';
+        }
+        echo '</tbody></table>';
+        $unlinked = $debug_sensors->whereNull('entPhysicalIndex')->count();
+        if ($unlinked > 0) {
+            echo "<p class='text-warning'><i class='fa fa-warning'></i> $unlinked sensor(s) highlighted in yellow have no entPhysicalIndex. They can only display through the legacy sensor_index fallback.</p>";
+        }
+    }
+
+    echo "<h4>entPhysical rows</h4>
+      <table class='table table-condensed table-bordered table-hover' style='font-size:12px;'>
+        <thead class='thead-default'><tr>
+          <th>id</th>
+          <th>index</th>
+          <th>contained_in</th>
+          <th>parent_rel_pos</th>
+          <th>class</th>
+          <th>name</th>
+          <th>descr</th>
+          <th>model</th>
+          <th>vendor_type</th>
+          <th>serial</th>
+          <th>alias</th>
+          <th>asset_id</th>
+          <th>ifIndex</th>
+          <th>port</th>
+        </tr></thead><tbody>";
+    foreach ($debug_ent as $ent) {
+        $port = $debug_port_map[$ent['ifIndex']] ?? null;
+        echo '<tr>'
+            . '<td>' . e($ent['entPhysical_id']) . '</td>'
+            . '<td>' . e($ent['entPhysicalIndex']) . '</td>'
+            . '<td>' . e($ent['entPhysicalContainedIn']) . '</td>'
+            . '<td>' . e($ent['entPhysicalParentRelPos']) . '</td>'
+            . '<td>' . e($ent['entPhysicalClass']) . '</td>'
+            . '<td>' . e($ent['entPhysicalName']) . '</td>'
+            . '<td>' . e($ent['entPhysicalDescr']) . '</td>'
+            . '<td>' . e($ent['entPhysicalModelName']) . '</td>'
+            . '<td>' . e($ent['entPhysicalVendorType']) . '</td>'
+            . '<td>' . e($ent['entPhysicalSerialNum']) . '</td>'
+            . '<td>' . e($ent['entPhysicalAlias']) . '</td>'
+            . '<td>' . e($ent['entPhysicalAssetID']) . '</td>'
+            . '<td>' . e($ent['ifIndex'] ?? '-') . '</td>'
+            . '<td>' . e($port['ifName'] ?? $port['ifDescr'] ?? '-') . '</td>'
+            . '</tr>';
+    }
+    echo '</tbody></table>';
+
+    echo "<h4>entityState rows</h4>";
+    if (empty($debug_entity_states)) {
+        echo "<p class='text-muted'>No entityState rows found.</p>";
+    } else {
+        echo "<table class='table table-condensed table-bordered table-hover' style='font-size:12px;'>
+          <thead class='thead-default'><tr>
+            <th>entPhysical_id</th>
+            <th>entStateOper</th>
+            <th>oper_display</th>
+            <th>entStateUsage</th>
+            <th>usage_display</th>
+            <th>entStateStandby</th>
+            <th>standby_display</th>
+            <th>entStateAlarm</th>
+            <th>alarm_display</th>
+          </tr></thead><tbody>";
+        foreach ($debug_entity_states as $state) {
+            $oper = parse_entity_state('entStateOper', $state['entStateOper']);
+            $usage = parse_entity_state('entStateUsage', $state['entStateUsage']);
+            $standby = parse_entity_state('entStateStandby', $state['entStateStandby']);
+            $alarms = parse_entity_state_alarm($state['entStateAlarm']);
+            $alarm_display = implode(', ', array_column($alarms, 'text'));
+            echo '<tr>'
+                . '<td>' . e($state['entPhysical_id']) . '</td>'
+                . '<td>' . e($state['entStateOper']) . '</td>'
+                . '<td>' . e($oper['text']) . ' (' . e($oper['color']) . ')</td>'
+                . '<td>' . e($state['entStateUsage']) . '</td>'
+                . '<td>' . e($usage['text']) . ' (' . e($usage['color']) . ')</td>'
+                . '<td>' . e($state['entStateStandby']) . '</td>'
+                . '<td>' . e($standby['text']) . ' (' . e($standby['color']) . ')</td>'
+                . '<td>' . e($state['entStateAlarm']) . '</td>'
+                . '<td>' . e($alarm_display ?: '-') . '</td>'
+                . '</tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    echo "      </div>
+    </div>
+  </div>
+</div>";
+}
 
 echo "<div style='clear: both;'><UL CLASS='mktree' id='enttree'>";
 $level = '0';
