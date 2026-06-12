@@ -322,8 +322,17 @@
                     'Form Factor'     => isset($info['form_factor']) ? $data->decode('form_factor', $info['form_factor']) : null,
                     'ATA Version'     => isset($info['ata_version']) ? $data->decode('ata_version', $info['ata_version']) : null,
                     'SATA Version'    => isset($info['sata_version']) ? $data->decode('sata_version', $info['sata_version']) : null,
+                    'Interface Speed' => $data->interfaceSpeed($info),
                     'Logical Block'   => isset($info['logical_block_size']) && is_numeric($info['logical_block_size']) ? Number::formatSi((int) $info['logical_block_size'], 0, 0, 'B') : null,
                     'Physical Block'  => isset($info['physical_block_size']) && is_numeric($info['physical_block_size']) ? Number::formatSi((int) $info['physical_block_size'], 0, 0, 'B') : null,
+                    'SMART'           => ($info['smart_available'] ?? null) !== null ? (((int) $info['smart_available']) ? 'Available' : 'Not available') : null,
+                    'SMART Enabled'   => ($info['smart_enabled'] ?? null) !== null ? (((int) $info['smart_enabled']) ? 'Yes' : 'No') : null,
+                    'Write Cache'     => ($info['write_cache_enabled'] ?? null) !== null ? (((int) $info['write_cache_enabled']) ? 'Enabled' : 'Disabled') : null,
+                    'Read Look-ahead' => ($info['read_lookahead_enabled'] ?? null) !== null ? (((int) $info['read_lookahead_enabled']) ? 'Enabled' : 'Disabled') : null,
+                    'TRIM'            => ($info['trim_supported'] ?? null) !== null ? (((int) $info['trim_supported']) ? 'Supported' : 'Not supported') : null,
+                    'APM'             => $data->apmLabel($info) !== '-' ? $data->apmLabel($info) : null,
+                    'Security'        => $data->securityLabel($info) !== '-' ? $data->securityLabel($info) : null,
+                    'In smartctl DB'  => ($info['in_smartctl_database'] ?? null) !== null ? (((int) $info['in_smartctl_database']) ? 'Yes' : 'No') : null,
                     'Power On Hours'  => $powerOnHours !== null ? number_format($powerOnHours, 0, '.', ' ') : null,
                     'Power Cycles'    => isset($health['power_cycles']) && is_numeric($health['power_cycles']) ? number_format((int) $health['power_cycles'], 0, '.', ' ') : null,
                     'Last Poll'       => $disk['last_poll_time'] ?? null,
@@ -436,30 +445,51 @@
     @endif
 
     {{-- Self-test log --}}
-    @if(! empty($disk['selftests']))
+    @if(! empty($disk['selftests']) || isset($info['selftest_polling_short_minutes']) || isset($info['offline_collection_completion_secs']))
         @php
             $panelStart('Self-test Log', $selftestPanelBadge);
-            echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover">';
-            echo '<thead><tr><th>#</th><th>Type</th><th>Result</th><th>Hours</th><th>Remaining</th><th>First LBA Error</th></tr></thead><tbody>';
-            foreach ($disk['selftests'] as $entry) {
-                $h = $entry['power_on_hours'] ?? null;
-                $hoursCell = (string) ($h ?? '');
-                if ($powerOnHours !== null && is_numeric($h)) {
-                    $delta = $powerOnHours - (int) $h;
-                    $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
-                }
-                $rem = $entry['remaining_pct'] ?? null;
-                $lba = $entry['lba_first_error'] ?? null;
-                echo '<tr>'
-                    . '<td>' . htmlspecialchars((string) ($entry['entry_num'] ?? '')) . '</td>'
-                    . '<td>' . htmlspecialchars($data->decode('selftest_type', $entry['test_type'] ?? null)) . '</td>'
-                    . '<td>' . htmlspecialchars($data->decode('selftest_result', $entry['result'] ?? null)) . '</td>'
-                    . '<td>' . htmlspecialchars($hoursCell) . '</td>'
-                    . '<td>' . ($rem !== null && is_numeric($rem) ? htmlspecialchars(((int) $rem) . '%') : '') . '</td>'
-                    . '<td>' . ($lba !== null ? htmlspecialchars((string) $lba) : '') . '</td>'
-                    . '</tr>';
+            // Polling minutes summary and offline collection status
+            $pollingRows = [];
+            if (isset($info['selftest_polling_short_minutes']) && is_numeric($info['selftest_polling_short_minutes'])) {
+                $pollingRows[] = 'Short: ' . (int) $info['selftest_polling_short_minutes'] . ' min';
             }
-            echo '</tbody></table></div>';
+            if (isset($info['selftest_polling_extended_minutes']) && is_numeric($info['selftest_polling_extended_minutes'])) {
+                $pollingRows[] = 'Extended: ' . (int) $info['selftest_polling_extended_minutes'] . ' min';
+            }
+            if (isset($info['selftest_polling_conveyance_minutes']) && is_numeric($info['selftest_polling_conveyance_minutes'])) {
+                $pollingRows[] = 'Conveyance: ' . (int) $info['selftest_polling_conveyance_minutes'] . ' min';
+            }
+            if ($pollingRows !== []) {
+                echo '<p style="margin-bottom:6px"><strong>Est. polling minutes:</strong> ' . htmlspecialchars(implode(' / ', $pollingRows)) . '</p>';
+            }
+            $offlineSecs = $info['offline_collection_completion_secs'] ?? null;
+            $offlineStatus = $health['offline_collection_status'] ?? null;
+            if ($offlineSecs !== null && is_numeric($offlineSecs)) {
+                echo '<p style="margin-bottom:6px"><strong>Offline collection:</strong> ' . htmlspecialchars((int) $offlineSecs . ' s') . ($offlineStatus !== null ? ' — ' . htmlspecialchars($data->decode('offline_status', $offlineStatus)) : '') . '</p>';
+            }
+            if (! empty($disk['selftests'])) {
+                echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover">';
+                echo '<thead><tr><th>#</th><th>Type</th><th>Result</th><th>Hours</th><th>Remaining</th><th>First LBA Error</th></tr></thead><tbody>';
+                foreach ($disk['selftests'] as $entry) {
+                    $h = $entry['power_on_hours'] ?? null;
+                    $hoursCell = (string) ($h ?? '');
+                    if ($powerOnHours !== null && is_numeric($h)) {
+                        $delta = $powerOnHours - (int) $h;
+                        $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
+                    }
+                    $rem = $entry['remaining_pct'] ?? null;
+                    $lba = $entry['lba_first_error'] ?? null;
+                    echo '<tr>'
+                        . '<td>' . htmlspecialchars((string) ($entry['entry_num'] ?? '')) . '</td>'
+                        . '<td>' . htmlspecialchars($data->decode('selftest_type', $entry['test_type'] ?? null)) . '</td>'
+                        . '<td>' . htmlspecialchars($data->decode('selftest_result', $entry['result'] ?? null)) . '</td>'
+                        . '<td>' . htmlspecialchars($hoursCell) . '</td>'
+                        . '<td>' . ($rem !== null && is_numeric($rem) ? htmlspecialchars(((int) $rem) . '%') : '') . '</td>'
+                        . '<td>' . ($lba !== null ? htmlspecialchars((string) $lba) : '') . '</td>'
+                        . '</tr>';
+                }
+                echo '</tbody></table></div>';
+            }
             $panelEnd();
         @endphp
     @endif
@@ -590,6 +620,78 @@
                     </div>
                 @endif
             </div>
+        @endif
+
+        {{-- Capabilities --}}
+        @php
+            $capFields = [
+                'capability_selftests_supported'     => 'Self-tests supported',
+                'capability_conveyance_supported'    => 'Conveyance self-test',
+                'capability_selective_supported'     => 'Selective self-test',
+                'capability_error_logging_supported' => 'Error logging',
+                'capability_gp_logging_supported'    => 'GP logging',
+                'capability_exec_offline_immediate'  => 'Exec offline immediate',
+                'capability_offline_aborted_on_cmd'  => 'Offline aborted on command',
+                'capability_offline_surface_scan'    => 'Offline surface scan',
+                'capability_attr_autosave'           => 'Attribute autosave',
+                'sct_error_recovery_supported'       => 'SCT error recovery control',
+                'sct_feature_control_supported'      => 'SCT feature control',
+                'sct_data_table_supported'           => 'SCT data table',
+            ];
+            $capRows = array_filter($capFields, fn ($col) => isset($info[$col]), ARRAY_FILTER_USE_KEY);
+            if ($capRows !== []) {
+                $panelStart('Capabilities');
+                echo '<table class="table table-condensed table-hover" style="width:auto">';
+                foreach ($capRows as $col => $label) {
+                    $val = (int) $info[$col];
+                    $icon = $val ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>';
+                    echo $tableRow(htmlspecialchars($label), $icon);
+                }
+                echo '</table>';
+                $panelEnd();
+            }
+        @endphp
+
+        {{-- Log Directory --}}
+        @if(! empty($disk['log_dir']))
+            @php
+                $panelStart('Log Directory', (string) count($disk['log_dir']));
+                echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover" style="width:auto">';
+                echo '<thead><tr><th>Address</th><th>Name</th><th>Readable</th><th>Writable</th><th>GP Sectors</th><th>SMART Sectors</th></tr></thead><tbody>';
+                foreach ($disk['log_dir'] as $entry) {
+                    $rd = $entry['readable'] ?? null;
+                    $wr = $entry['writable'] ?? null;
+                    echo '<tr>'
+                        . '<td>0x' . sprintf('%02X', (int) ($entry['log_address'] ?? 0)) . '</td>'
+                        . '<td>' . htmlspecialchars((string) ($entry['name'] ?? '')) . '</td>'
+                        . '<td>' . ($rd !== null ? ((int) $rd ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>') : '') . '</td>'
+                        . '<td>' . ($wr !== null ? ((int) $wr ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>') : '') . '</td>'
+                        . '<td>' . htmlspecialchars((string) ($entry['gp_sectors'] ?? '')) . '</td>'
+                        . '<td>' . htmlspecialchars((string) ($entry['smart_sectors'] ?? '')) . '</td>'
+                        . '</tr>';
+                }
+                echo '</tbody></table></div>';
+                $panelEnd();
+            @endphp
+        @endif
+
+        {{-- Selective Self-test --}}
+        @if(! empty($disk['selective_test']))
+            @php
+                $panelStart('Selective Self-test Spans');
+                echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover" style="width:auto">';
+                echo '<thead><tr><th>Slot</th><th>LBA Min</th><th>LBA Max</th><th>Status</th></tr></thead><tbody>';
+                foreach ($disk['selective_test'] as $entry) {
+                    echo '<tr>'
+                        . '<td>' . htmlspecialchars((string) ($entry['slot'] ?? '')) . '</td>'
+                        . '<td>' . htmlspecialchars((string) ($entry['lba_min'] ?? '')) . '</td>'
+                        . '<td>' . htmlspecialchars((string) ($entry['lba_max'] ?? '')) . '</td>'
+                        . '<td>' . htmlspecialchars((string) ($entry['status_value'] ?? '')) . '</td>'
+                        . '</tr>';
+                }
+                echo '</tbody></table></div>';
+                $panelEnd();
+            @endphp
         @endif
     @endif
     @endif

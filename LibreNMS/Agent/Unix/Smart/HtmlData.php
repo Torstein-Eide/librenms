@@ -146,6 +146,8 @@ class HtmlData
         $phyEvents = $this->groupByDiskKey('smart_sata_phy_events', $appId, $diskKeys, 'event_id');
         $erc = $this->groupByDiskKey('smart_sata_erc', $appId, $diskKeys, 'direction');
         $pending = $this->groupByDiskKey('smart_sata_pending_defects', $appId, $diskKeys, 'entry_num');
+        $logDir = $this->groupByDiskKey('smart_sata_log_dir', $appId, $diskKeys, 'log_address');
+        $selectiveTest = $this->groupByDiskKey('smart_sata_selective_test', $appId, $diskKeys, 'slot');
 
         $disks = [];
         foreach ($devices as $dev) {
@@ -173,6 +175,8 @@ class HtmlData
                 'phy_events'       => array_map(fn ($r) => (array) $r, $phyEvents[$key] ?? []),
                 'erc'              => $this->indexByColumn($erc[$key] ?? [], 'direction'),
                 'pending_defects'  => array_map(fn ($r) => (array) $r, $pending[$key] ?? []),
+                'log_dir'          => array_map(fn ($r) => (array) $r, $logDir[$key] ?? []),
+                'selective_test'   => array_map(fn ($r) => (array) $r, $selectiveTest[$key] ?? []),
             ];
         }
 
@@ -678,6 +682,11 @@ class HtmlData
         ],
         // SmartmonScsiErrorDirection (reused for ERC direction labels)
         'erc_direction' => [0 => 'Disabled', 1 => 'Read', 2 => 'Write', 3 => 'Verify'],
+        // SmartmonAtaOfflineStatus (offline collection status)
+        'offline_status' => [
+            0 => 'Never started', 2 => 'Completed', 3 => 'In progress',
+            4 => 'Suspended', 5 => 'Aborted', 6 => 'Aborted (fatal)',
+        ],
     ];
 
     /** Decode a stored integer code to a human label; returns '-' for null/unmapped. */
@@ -690,5 +699,59 @@ class HtmlData
         $map = self::LABELS[$kind] ?? [];
 
         return $map[(int) $value] ?? (string) (int) $value;
+    }
+
+    /** Format interface speed: "6000 / 6000 Mb/s (6.0 / 6.0 Gb/s)" or '-'. */
+    public function interfaceSpeed(array $info): string
+    {
+        $current = $info['if_speed_current_value'] ?? null;
+        $max     = $info['if_speed_max_value'] ?? null;
+        if (! is_numeric($current) && ! is_numeric($max)) {
+            return '-';
+        }
+        $fmt = static function (mixed $mbps): string {
+            if (! is_numeric($mbps)) {
+                return '?';
+            }
+            $mbps = (int) $mbps;
+            $gb   = rtrim(rtrim(number_format($mbps / 1000, 1, '.', ''), '0'), '.');
+            return "{$mbps} Mb/s ({$gb} Gb/s)";
+        };
+
+        if (is_numeric($current) && is_numeric($max) && (int) $current === (int) $max) {
+            return $fmt($current);
+        }
+
+        return $fmt($current) . ' / ' . $fmt($max);
+    }
+
+    /** Format APM: "Enabled, level 254" or "Disabled" or '-'. */
+    public function apmLabel(array $info): string
+    {
+        $enabled = $info['apm_enabled'] ?? null;
+        if ($enabled === null) {
+            return '-';
+        }
+        if (! (int) $enabled) {
+            return 'Disabled';
+        }
+        $level = $info['apm_level'] ?? null;
+
+        return 'Enabled' . (is_numeric($level) ? ', level ' . (int) $level : '');
+    }
+
+    /** Format Security: "Enabled, not frozen" / "Enabled, frozen" / "Disabled" or '-'. */
+    public function securityLabel(array $info): string
+    {
+        $enabled = $info['security_enabled'] ?? null;
+        if ($enabled === null) {
+            return '-';
+        }
+        if (! (int) $enabled) {
+            return 'Disabled';
+        }
+        $frozen = $info['security_frozen'] ?? null;
+
+        return 'Enabled' . (is_numeric($frozen) ? ((int) $frozen ? ', frozen' : ', not frozen') : '');
     }
 }
