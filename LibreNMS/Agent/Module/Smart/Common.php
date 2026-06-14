@@ -57,6 +57,7 @@ class Common extends Application
         'sataPendingDefects' => 12,
     ];
 
+
     /**
      * SmartmonSensorDataType → [LibreNMS sensor_class, sensor_type, index prefix]
      * Types other(1), unknown(2), vibration(8) have no useful LibreNMS mapping and are skipped.
@@ -274,7 +275,7 @@ class Common extends Application
         $this->walkAndSyncSataTable('smartmonSataSelfTestTable',     2, $devices, self::SATA_TID_SELFTEST,       [$this, 'syncSataSelfTestRows']);
         $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable',2, $devices, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
         $this->walkAndSyncSataTable('smartmonSataLogDirTable',       2, $devices, self::SATA_TID_LOG_DIR,        [$this, 'syncSataLogDirRows']);
-        $this->walkAndSyncSataTable('smartmonSataDevStatTable',      3, $devices, self::SATA_TID_DEV_STAT,       [$this, 'syncSataDevStatRows']);
+        $this->walkAndSyncSataTable('smartmonSataDevStatTable',      3, $devices, self::SATA_TID_DEV_STAT,       [$this, 'syncSataDevStatRows'],      true);
 
         // Register all sensor types with the discovery system.
         $this->syncSensorTypes();
@@ -1270,7 +1271,7 @@ class Common extends Application
         }
 
         // Single walk for all devices; depth=3 gives [devIdx][pageNum][offset] => value.
-        $allValueRows = $this->walkSataTable('smartmonSataDevStatValue', 3);
+        $allValueRows = $this->walkSataTable('smartmonSataDevStatValue', 3, true);
 
         foreach ($devices as $devIdx => $dev) {
             if (! $this->sataTableChangedForDevice((string) $devIdx, self::SATA_TID_DEV_STAT)) {
@@ -1334,9 +1335,12 @@ class Common extends Application
     /**
      * Walk one SATA table, normalize rows, and sync each device row that has changed.
      * Pass null for $tableId to sync unconditionally (no change guard).
+     * Pass $numericIndex = true to keep OID index components as integers (needed when the
+     * MIB index type is an enumeration, e.g. SmartmonAtaDevStatPage).
      */
     private function walkAndSyncSataTable(
-        string $table, int $depth, array $devices, ?int $tableId, callable $sync
+        string $table, int $depth, array $devices, ?int $tableId, callable $sync,
+        bool $numericIndex = false
     ): void {
         $unconditional = $tableId === null;
         if (! $unconditional) {
@@ -1349,7 +1353,7 @@ class Common extends Application
 
         $this->vlog("walkAndSyncSataTable: walking {$table} (depth={$depth})");
         $synced = 0;
-        foreach ($this->normalizeNestedIntegerRows($this->walkSataTable($table, $depth)) as $devIdx => $rows) {
+        foreach ($this->normalizeNestedIntegerRows($this->walkSataTable($table, $depth, $numericIndex)) as $devIdx => $rows) {
             if (isset($devices[$devIdx]) && ($unconditional || $this->sataTableChangedForDevice($devIdx, $tableId))) {
                 $sync($devices[$devIdx], $rows);
                 $synced++;
@@ -1767,12 +1771,13 @@ class Common extends Application
         return $count;
     }
 
-    private function walkSataTable(string $table, int $group): array
+    private function walkSataTable(string $table, int $group, bool $numericIndex = false): array
     {
-        return SnmpQuery::mibs(self::SATA_MIBS)
-            ->hideMib()
-            ->walk("SMARTMON-SATA-MIB::$table")
-            ->table($group);
+        $query = SnmpQuery::mibs(self::SATA_MIBS)->hideMib();
+        if ($numericIndex) {
+            $query = $query->numericIndex();
+        }
+        return $query->walk("SMARTMON-SATA-MIB::$table")->table($group);
     }
 
     private function diskKey(array $row, string $fallback): string
