@@ -446,23 +446,27 @@ class Common extends Application
     }
 
     /**
-     * Walk the four poll-relevant attribute columns (change-guarded) and sync DB + RRD
-     * for devices whose attribute table has changed since last poll.
+     * Walk the four poll-relevant attribute columns and write the per-disk RRD.
+     *
+     * RRD is a time-series: it needs a data point every poll, so the SNMP walk
+     * and pollSataDeviceRrd() run unconditionally for every SATA device. The DB
+     * upsert is the slow-changing part and stays behind the per-device change
+     * guard.
      */
     private function walkAndSyncSataAttrPoll(array $devices): void
     {
         $this->sataChangeByDeviceTable();
-        if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable(self::SATA_TID_ATTR)) {
-            return;
-        }
 
         foreach ($this->walkSataAttrLimitedColumns() as $devIdx => $attrRows) {
-            if (! isset($devices[$devIdx]) || ! $this->sataTableChangedForDevice($devIdx, self::SATA_TID_ATTR)) {
+            if (! isset($devices[$devIdx])) {
                 continue;
             }
             $dev = $devices[$devIdx];
-            $this->syncSataAttributeRowsPoll($dev, $attrRows);
             $this->pollSataDeviceRrd($dev, $attrRows);
+
+            if (Debug::isVerbose() || $this->sataTableChangedForDevice($devIdx, self::SATA_TID_ATTR)) {
+                $this->syncSataAttributeRowsPoll($dev, $attrRows);
+            }
         }
     }
 
@@ -478,8 +482,9 @@ class Common extends Application
                 if (! is_array($items)) {
                     continue;
                 }
-                foreach ($items as $idx2 => $value) {
-                    $result[(string) $devIdx][(string) $idx2][$col] = $value;
+                foreach ($items as $idx2 => $leaf) {
+                    // table(2) leaf is [columnName => value]; store the scalar, not the wrapper array.
+                    $result[(string) $devIdx][(string) $idx2][$col] = $this->leafValue($leaf, $col);
                 }
             }
         }
@@ -596,7 +601,7 @@ class Common extends Application
 
     }
 
-    private function updateMibSensor(array $device, Sensor $sensor, ?float $value): void
+    private function updateMibSensor(Device $device, Sensor $sensor, ?float $value): void
     {
         $sensor->sensor_current = $value;
         $sensor->save();
@@ -1251,8 +1256,8 @@ class Common extends Application
             $merged = [];
             foreach ($valueRows[(string) $devIdx] ?? [] as $eventId => $value) {
                 $merged[(string) $eventId] = [
-                    'smartmonSataPhyEventValue'    => $value,
-                    'smartmonSataPhyEventOverflow' => $overflowRows[(string) $devIdx][$eventId] ?? null,
+                    'smartmonSataPhyEventValue'    => $this->leafValue($value, 'smartmonSataPhyEventValue'),
+                    'smartmonSataPhyEventOverflow' => $this->leafValue($overflowRows[(string) $devIdx][$eventId] ?? null, 'smartmonSataPhyEventOverflow'),
                 ];
             }
             $this->syncSataPhyEventValueRows($dev, $merged);
@@ -1289,7 +1294,7 @@ class Common extends Application
                         'disk_key'    => $dev['disk_key'],
                         'page_num'    => (int) $pageNum,
                         'stat_offset' => (int) $offset,
-                        'value'       => $value,
+                        'value'       => $this->leafValue($value, 'smartmonSataDevStatValue'),
                     ];
                 }
             }
@@ -1769,6 +1774,25 @@ class Common extends Application
         }
 
         return $count;
+    }
+
+    /**
+     * Extract the scalar value from a SnmpQuery table() leaf.
+     *
+     * A single-column walk grouped with table($n) yields leaves of the form
+     * [columnName => value]; return the scalar (preferring the named column),
+     * or the value itself when it is already a scalar.
+     */
+    private function leafValue(mixed $leaf, string $col): mixed
+    {
+        if (! is_array($leaf)) {
+            return $leaf;
+        }
+        if (array_key_exists($col, $leaf)) {
+            return $leaf[$col];
+        }
+
+        return $leaf === [] ? null : reset($leaf);
     }
 
     private function walkSataTable(string $table, int $group, bool $numericIndex = false): array

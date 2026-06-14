@@ -562,35 +562,30 @@ class HtmlData
             return [];
         }
 
-        $available = $this->rrdDatasets($diskKey);
-        if ($available === []) {
-            return [];
-        }
-
+        // Attribute list is sourced from the discovered DB rows, not the RRD's
+        // dataset list — so a graph appears as soon as an attribute is known,
+        // independent of RRD readback. The poller writes both a raw (id{N}) and
+        // normalized (id{N}Normalized) dataset for every attribute, so both
+        // lines are graphable.
         $specs = [];
         foreach ($disk['attributes'] as $attr) {
             $id = (int) ($attr['attribute_id'] ?? 0);
-            if ($id <= 0) {
-                continue;
-            }
-            $hasRaw = in_array('id' . $id, $available, true);
-            $hasNorm = in_array('id' . $id . 'Normalized', $available, true);
-            if (! $hasRaw && ! $hasNorm) {
+            if ($id <= 0 || isset($specs[$id])) {
                 continue;
             }
 
             $name = str_replace('_', ' ', trim((string) ($attr['name'] ?? ('Attribute ' . $id))));
             $rawValue = $attr['value_raw_string'] ?? $attr['value_raw'] ?? null;
-            $header = 'Normalized:' . ($hasNorm ? $this->numericString($attr['value_norm'] ?? null) : '-')
-                . ' Raw:' . ($hasRaw ? $this->numericString($rawValue) : '-');
+            $header = 'Normalized:' . $this->numericString($attr['value_norm'] ?? null)
+                . ' Raw:' . $this->numericString($rawValue);
 
             $specs[$id] = [
                 'id'       => $id,
                 'title'    => 'ID# ' . $id . ', ' . $name,
                 'header'   => $header,
                 'thresh'   => is_numeric($attr['value_threshold'] ?? null) ? (float) $attr['value_threshold'] : null,
-                'has_raw'  => $hasRaw,
-                'has_norm' => $hasNorm,
+                'has_raw'  => true,
+                'has_norm' => true,
             ];
         }
 

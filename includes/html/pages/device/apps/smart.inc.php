@@ -12,8 +12,8 @@ require_once base_path('includes/html/debug-panel.inc.php');
 // =============================================================================
 
 /**
- * Build RRD debug entries for every disk: the per-disk attribute RRD and the
- * shared power/temperature RRD the poller writes.
+ * Build RRD debug entries for every disk: the single per-disk attribute RRD the
+ * poller writes (temperature/health/wear are sensors, not app RRDs).
  */
 function smart_debug_rrd_entries(HtmlData $data): array
 {
@@ -31,7 +31,6 @@ function smart_debug_rrd_entries(HtmlData $data): array
 
         foreach ([
             'attributes' => ['app', 'smart', $appId, $idx],
-            'power'      => ['app', 'smart_power', $appId, $idx],
         ] as $kind => $name) {
             $rrdFile = Rrd::name($hostname, $name);
             $entry = [

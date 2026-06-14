@@ -178,7 +178,10 @@ class Rrd extends BaseDatastore
     {
         $output = $this->command('lastupdate', $filename);
 
-        if (preg_match('/((?: \w+)+)\n\n(\d+):((?: [\d.-]+)+)\nOK/', $output, $matches)) {
+        // Values may be plain numbers, scientific notation (1.23e+05), or the
+        // non-numeric tokens rrdtool emits (U, nan, -nan), so accept word chars
+        // plus . + - in the value group — not just [\d.-].
+        if (preg_match('/((?: \w+)+)\n\n(\d+):((?: [\w.+-]+)+)\nOK/', $output, $matches)) {
             $data = array_combine(
                 explode(' ', ltrim($matches[1])),
                 explode(' ', ltrim($matches[3])),

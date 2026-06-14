@@ -465,6 +465,7 @@
 
             $sections = [
                 ['id' => 'smart-overview-all-temp', 'title' => 'All Temperatures', 'type' => 'smart_v2_all_temp'],
+                ['id' => 'smart-overview-all-wear', 'title' => 'Wear Remaining', 'type' => 'smart_v2_all_wear'],
             ];
             foreach ($data->overviewAttributeIds() as $id => $aname) {
                 $sections[] = [
@@ -1407,14 +1408,28 @@
         $hasOther     = $data->hasOtherRrd($selectedDisk);
         $graphBase    = Url::generate($linkArray + ['disk' => (string) $selectedDisk]);
 
+        $diskSensors  = $data->diskSensors($selectedDisk);
+        $wearSensor   = $diskSensors[$idx . '_wear'] ?? null;
+        $statusSensor = $data->selftestStatusSensor($selectedDisk);
+        $shortSensor  = $diskSensors[$idx . '_selftest_short'] ?? null;
+        $longSensor   = $diskSensors[$idx . '_selftest_long'] ?? null;
+        $hasSelftest  = $shortSensor !== null || $longSensor !== null;
+
+        // Power-on hours is ATA attribute 9; it rides the single per-disk attribute RRD.
+        $powerSpec = $specs[9] ?? null;
+
         // Build jump-nav section list.
         $sections = [];
         if ($tempSensor)   { $sections[] = [$anchorPrefix . 'temperature', 'Temperature']; }
         if ($healthSensor) { $sections[] = [$anchorPrefix . 'health', 'Health']; }
-        $sections[] = [$anchorPrefix . 'power', 'Power-on Hours'];
+        if ($wearSensor)   { $sections[] = [$anchorPrefix . 'wear', 'Wear Remaining']; }
+        if ($statusSensor) { $sections[] = [$anchorPrefix . 'selftest-status', 'Self-test Status']; }
+        if ($hasSelftest)  { $sections[] = [$anchorPrefix . 'selftest', 'Self-test Age']; }
+        if ($powerSpec)    { $sections[] = [$anchorPrefix . 'power', 'Power-on Hours']; }
         if ($hasBig5)  { $sections[] = [$anchorPrefix . 'big5', 'Reliability / Age (Big 5 ATA Attributes)']; }
         if ($hasOther) { $sections[] = [$anchorPrefix . 'other', 'Other']; }
         foreach ($specs as $spec) {
+            if ($spec['id'] === 9) { continue; }
             $sections[] = [$anchorPrefix . 'attr-' . $spec['id'], $spec['title']];
         }
 
@@ -1467,7 +1482,26 @@
         if ($healthSensor) {
             $sensorGraph($healthSensor, 'Health', $anchorPrefix . 'health', $healthBadge);
         }
-        $appGraph('smart_v2_power', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk));
+        if ($wearSensor) {
+            $sensorGraph($wearSensor, 'Wear Remaining', $anchorPrefix . 'wear');
+        }
+        if ($statusSensor) {
+            $sensorGraph($statusSensor, 'Self-test Status', $anchorPrefix . 'selftest-status');
+        }
+        if ($hasSelftest) {
+            $stParts = [];
+            if ($shortSensor) { $stParts[] = 'Short: ' . (string) ($shortSensor->sensor_current ?? '-'); }
+            if ($longSensor)  { $stParts[] = 'Long: '  . (string) ($longSensor->sensor_current ?? '-'); }
+            $appGraph('smart_v2_selftest', 'Self-test Age', $anchorPrefix . 'selftest', $stParts !== [] ? implode(' | ', $stParts) : '');
+        }
+        if ($powerSpec) {
+            $appGraph('smart_v2_attributes', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk), [
+                'attr_id'     => '9',
+                'attr_thresh' => $powerSpec['thresh'] !== null ? (string) $powerSpec['thresh'] : '',
+                'has_raw'     => $powerSpec['has_raw'] ? '1' : '0',
+                'has_norm'    => $powerSpec['has_norm'] ? '1' : '0',
+            ]);
+        }
         if ($hasBig5) {
             $appGraph('smart_v2_big5', 'Reliability / Age (Big 5 ATA Attributes)', $anchorPrefix . 'big5', $data->reliabilityHeader($disk));
         }
@@ -1475,8 +1509,9 @@
             $appGraph('smart_v2_other', 'Other', $anchorPrefix . 'other');
         }
 
-        // Per-attribute graphs with a "Scale from zero" toggle.
-        if ($specs !== []) {
+        // Per-attribute graphs with a "Scale from zero" toggle (id 9 is shown above as Power-on Hours).
+        $attrSpecs = array_filter($specs, static fn ($spec) => $spec['id'] !== 9);
+        if ($attrSpecs !== []) {
             $wrapperId = 'smart-attr-graphs-' . htmlspecialchars($idx);
             $toggleId  = 'smart-attr-scale-' . htmlspecialchars($idx);
             echo '<script>
@@ -1493,7 +1528,7 @@ function smartAttrScaleToggle(cb, wrapperId) {
                 . '<label style="float:right;font-size:13px;font-weight:normal;margin-bottom:0;cursor:pointer">'
                 . '<input type="checkbox" id="' . $toggleId . '" checked onchange="smartAttrScaleToggle(this,\'' . $wrapperId . '\')"> Scale from zero</label></h4>';
             echo '<div id="' . $wrapperId . '">';
-            foreach ($specs as $spec) {
+            foreach ($attrSpecs as $spec) {
                 $appGraph('smart_v2_attributes', $spec['title'], $anchorPrefix . 'attr-' . $spec['id'], $spec['header'], [
                     'attr_id'     => (string) $spec['id'],
                     'attr_thresh' => $spec['thresh'] !== null ? (string) $spec['thresh'] : '',
