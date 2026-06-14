@@ -2,6 +2,7 @@
 
 use App\Facades\Rrd;
 use App\Models\Sensor;
+use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 require_once base_path('includes/html/debug-panel.inc.php');
@@ -59,6 +60,70 @@ function smart_debug_rrd_entries(HtmlData $data): array
     }
 
     return $entries;
+}
+
+/**
+ * Build debug panels for all smart_* DB tables for this app.
+ *
+ * Per-disk tables are filtered to $selectedDisk when one is active.
+ * Returns an array of rendered panel HTML strings, one per table.
+ */
+function smart_debug_db_panels(HtmlData $data, ?string $selectedDisk): array
+{
+    $appId  = (int) $data->app->app_id;
+    $diskKey = $selectedDisk !== null && $data->disk($selectedDisk) !== null
+        ? $selectedDisk : null;
+
+    $panels = [];
+
+    // ── App-level tables ────────────────────────────────────────────────────
+
+    $appState = DB::table('smart_app_state')->where('app_id', $appId)->get()->map(fn ($r) => (array) $r)->all();
+    $panels[] = debug_db_table_panel('smart_app_state', $appState, "smart_app_state-{$appId}.csv");
+
+    // smart_sata_change uses device_idx (not disk_key), so always show all rows for the app.
+    $changes = DB::table('smart_sata_change')->where('app_id', $appId)
+        ->orderBy('device_idx')->orderBy('table_id')
+        ->get()->map(fn ($r) => (array) $r)->all();
+    $panels[] = debug_db_table_panel('smart_sata_change', $changes, "smart_sata_change-{$appId}.csv");
+
+    // ── Per-disk tables (shared query builder) ──────────────────────────────
+
+    $diskTables = [
+        'smart_devices'              => null,
+        'smart_sata_info'            => null,
+        'smart_sata_health'          => null,
+        'smart_sata_attributes'      => 'attribute_id',
+        'smart_sata_selftest_log'    => 'entry_num',
+        'smart_sata_error_log'       => 'entry_num',
+        'smart_sata_error_cmd'       => ['error_entry_num', 'cmd_slot'],
+        'smart_sata_dev_stats'       => ['page_num', 'stat_offset'],
+        'smart_sata_phy_events'      => 'event_id',
+        'smart_sata_erc'             => 'direction',
+        'smart_sata_pending_defects' => 'entry_num',
+        'smart_sata_log_dir'         => 'log_address',
+        'smart_sata_selective_test'  => 'slot',
+    ];
+
+    foreach ($diskTables as $table => $orderBy) {
+        $query = DB::table($table)->where('app_id', $appId);
+        if ($diskKey !== null) {
+            $query->where('disk_key', $diskKey);
+        }
+        foreach ((array) $orderBy as $col) {
+            $query->orderBy($col);
+        }
+        $rows = $query->get()->map(fn ($r) => (array) $r)->all();
+
+        $title  = $diskKey !== null ? "{$table} ({$diskKey})" : $table;
+        $csvFile = $diskKey !== null
+            ? "{$table}-{$appId}-" . substr($diskKey, 0, 40) . '.csv'
+            : "{$table}-{$appId}.csv";
+
+        $panels[] = debug_db_table_panel($title, $rows, $csvFile);
+    }
+
+    return $panels;
 }
 
 /**
@@ -147,7 +212,10 @@ function smartDebugSensorFilter(cb) {
         $sensorBody
     );
 
-    debug_render('smart-debug-panels', $dataPanel, $rrdPanel, $sensorPanel);
+    // 4. DB tables.
+    $dbPanels = smart_debug_db_panels($data, $selectedDisk);
+
+    debug_render('smart-debug-panels', $dataPanel, $rrdPanel, $sensorPanel, ...$dbPanels);
 }
 
 // =============================================================================

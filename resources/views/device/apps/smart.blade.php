@@ -37,10 +37,247 @@
     };
     $tableRow = static function (string $label, string $value, string $tooltip = ''): string {
         $labelHtml = $tooltip !== ''
-            ? '<abbr style="cursor:help;text-decoration:underline dotted" title="' . htmlspecialchars($tooltip) . '">' . htmlspecialchars($label) . '</abbr>'
+            ? '<abbr style="cursor:help;text-decoration:underline dotted" title="' . htmlspecialchars($tooltip, ENT_QUOTES) . '">' . htmlspecialchars($label) . '</abbr>'
             : htmlspecialchars($label);
         return '<tr><td style="text-align:right;padding-right:15px;white-space:nowrap"><strong>'
             . "{$labelHtml}</strong></td><td>{$value}</td></tr>\n";
+    };
+    $smartTooltips = [
+        'power cycles' => 'Counts power-on resets or unique device startups during system boot.',
+        'lifetime power on resets' => 'Counts power-on resets or unique device startups during system boot.',
+        'power on hours' => 'Tracks the number of hours the device has been powered on; HDD spindle and head-load time may differ.',
+        'spin power on hours' => 'Hours an HDD spindle motor has been spinning the platters.',
+        'logical sectors written' => 'Counts logical sectors written. Multiply by the logical sector size to estimate bytes written.',
+        'number of write commands' => 'Counts write commands to user-space sectors; one command can transfer one or many sectors.',
+        'logical sectors read' => 'Counts logical sectors read. Multiply by the logical sector size to estimate bytes read.',
+        'number of read commands' => 'Counts read commands to user-space sectors; one command can transfer one or many sectors.',
+        'date and time timestamp' => 'Device timestamp programmed by the host, measured as milliseconds since the Unix epoch.',
+        'pending defects' => 'Sectors currently on the pending defect list until rewrite or reallocation resolves them.',
+        'pending error count' => 'Counts unique sectors that reported read errors and are waiting for rewrite or reallocation.',
+        'workload utilization' => 'Drive firmware percentage showing use relative to the vendor-rated workload.',
+        'utilization usage rate' => 'Similar to workload utilization, calculated from manufacture time to the programmed timestamp.',
+        'resource availability' => 'Percentage of internal drive resources available for workload handling, updated hourly.',
+        'random write resources used' => 'Random-write-specific resource usage; high usage can degrade performance until workload drops.',
+        'free fall events' => 'Counts detected free-fall events; drives with this feature may emergency-retract heads for protection.',
+        'number of free fall events detected' => 'Counts detected free-fall events; drives with this feature may emergency-retract heads for protection.',
+        'overlimit shock events' => 'Counts shock events whose magnitude exceeded the device maximum rating.',
+        'spindle motor power on hours' => 'Hours an HDD spindle motor has been spinning the platters.',
+        'head flying hours' => 'Hours HDD heads have been flying over the media, including idle time before unload or park.',
+        'head load events' => 'Counts moves from parked heads to the media, such as standby-to-active transitions.',
+        'number of reallocated logical sectors' => 'Counts logical sectors reallocated after manufacture because the original location was unusable.',
+        'reallocated logical sectors' => 'Counts logical sectors reallocated after manufacture because the original location was unusable.',
+        'read recovery attempts' => 'Counts reads that required three or more attempts to recover data from media.',
+        'number of mechanical start failures' => 'Counts HDD startup failures where the device could not start normally.',
+        'mechanical start failures' => 'Counts HDD startup failures where the device could not start normally.',
+        'number of reallocation candidate logical sectors' => 'Counts sectors selected for future reallocation when next written.',
+        'reallocation candidate logical sectors' => 'Counts sectors selected for future reallocation when next written.',
+        'number of high priority unload events' => 'Counts emergency head unload events, such as unexpected power loss or self-protection.',
+        'high priority unload events' => 'Counts emergency head unload events, such as unexpected power loss or self-protection.',
+        'number of reported uncorrectable errors' => 'Counts each host read that reported an uncorrectable error, not unique sectors.',
+        'reported uncorrectable errors' => 'Counts each host read that reported an uncorrectable error, not unique sectors.',
+        'cumulative lifetime unrecoverable errors' => 'Counts unrecoverable errors accumulated over the drive lifetime.',
+        'number of resets between command acceptance and command completion' => 'Counts resets after command acceptance but before completion, often seen as command timeouts.',
+        'resets between command acceptance and command completion' => 'Counts resets after command acceptance but before completion, often seen as command timeouts.',
+        'physical element status changed' => 'Counts physical elements, such as HDD heads, whose health moved outside manufacturer limits.',
+        'current temperature' => 'Current device temperature at read time; SATA/SAS report Celsius and NVMe reports Kelvin.',
+        'curent temp' => 'Current device temperature at read time.',
+        'current temp' => 'Current device temperature at read time.',
+        'average temp' => 'Short-term average temperature based on recent samples.',
+        'average short term temperature' => 'Average of the most recent 144 ten-minute samples over a 24-hour period.',
+        'average long term temperature' => 'Average of the most recent 42 short-term daily averages; valid after about 1008 hours.',
+        'highest temperature' => 'Highest temperature recorded by the device since manufacture.',
+        'highest temp' => 'Highest temperature recorded by the device since manufacture.',
+        'lowest temperature' => 'Lowest temperature recorded by the device since manufacture.',
+        'lowest temp' => 'Lowest temperature recorded by the device since manufacture.',
+        'highest average short term temperature' => 'Highest recorded short-term average temperature.',
+        'highest short temp' => 'Highest recorded short-term average temperature.',
+        'lowest average short term temperature' => 'Lowest recorded short-term average temperature.',
+        'lowest short temp' => 'Lowest recorded short-term average temperature.',
+        'highest average long term temperature' => 'Highest recorded long-term average temperature.',
+        'highest long temp' => 'Highest recorded long-term average temperature.',
+        'lowest average long term temperature' => 'Lowest recorded long-term average temperature.',
+        'lowest long temp' => 'Lowest recorded long-term average temperature.',
+        'time in over temperature' => 'Minutes operated above the manufacturer-specified maximum operating temperature.',
+        'over temp time' => 'Minutes operated above the manufacturer-specified maximum operating temperature.',
+        'time in under temperature' => 'Minutes operated below the manufacturer-specified minimum operating temperature.',
+        'under temp time' => 'Minutes operated below the manufacturer-specified minimum operating temperature.',
+        'specified maximum operating temperature' => 'Manufacturer-specified maximum operating temperature for the device.',
+        'max temp' => 'Manufacturer-specified maximum operating temperature for the device.',
+        'specified minimum operating temperature' => 'Manufacturer-specified minimum operating temperature for the device.',
+        'min temp' => 'Manufacturer-specified minimum operating temperature for the device.',
+        'number of hardware resets' => 'Counts hardware resets received by the device; on SATA this includes COMRESETs.',
+        'hardware resets' => 'Counts hardware resets received by the device; on SATA this includes COMRESETs.',
+        'number of asr events' => 'Counts Asynchronous Signal Recovery events when interface signaling is lost.',
+        'asr events' => 'Counts Asynchronous Signal Recovery events when interface signaling is lost.',
+        'number of interface crc errors' => 'Counts interface CRC errors detected since manufacture.',
+        'interface crc errors' => 'Counts interface CRC errors detected since manufacture.',
+        'percentage used endurance indicator' => 'SSD lifetime estimate used by manufacturer prediction; 100% means expected life consumed, not necessarily failed.',
+        'commands by disk radius' => 'Read and write command counts grouped by their approximate disk-radius location.',
+    ];
+    $tooltipForLabel = static function (string $label) use ($smartTooltips): string {
+        $key = strtolower(trim(preg_replace('/[^a-z0-9]+/i', ' ', html_entity_decode($label, ENT_QUOTES))));
+
+        if (isset($smartTooltips[$key])) {
+            return $smartTooltips[$key];
+        }
+
+        return match (true) {
+            $key === 'model number' => 'The device model number. Matches Identify or Inquiry data.',
+            $key === 'serial number' => 'The device serial number. Matches Identify or Unit Serial Number VPD data.',
+            $key === 'firmware revision' => 'Current firmware revision of the device. Matches Identify or Inquiry data.',
+            $key === 'world wide name' => 'Device-unique world wide name. Matches Identify or Device Identification VPD data.',
+            $key === 'date of assembly' => 'The date the drive was assembled, reported as week and year.',
+            $key === 'device interface' => 'String describing the device interface, such as SATA, SAS, or NVMe.',
+            $key === 'capacity' => 'Device capacity in logical blocks. Matches Identify data or Read Capacity data.',
+            $key === 'number of lbas hsmr swr capacity' => 'Number of LBAs on a host-managed SMR drive configured for Sequential Write Required.',
+            $key === 'physical sector size' => 'Physical sector size in bytes.',
+            $key === 'logical sector size' => 'Logical sector size in bytes.',
+            $key === 'device buffer size' => 'Device buffer or cache size in bytes.',
+            $key === 'number of heads' => 'Number of heads in the head disk assembly.',
+            $key === 'drive recording type' => 'Reports whether the drive uses CMR, SMR, or a combination.',
+            $key === 'form factor' => 'Drive form factor. Matches the form factor reported in Identify data.',
+            $key === 'rotation rate' => 'Drive rotation rate. Matches Identify data or Block Device Characteristics VPD data.',
+            $key === 'ata security state' => 'SATA only. Copy of Identify word 128.',
+            $key === 'ata features supported' => 'SATA only. Copy of Identify word 78.',
+            $key === 'ata features enabled' => 'SATA only. Copy of Identify word 79.',
+            $key === 'spindle power on hours' => 'Hours an HDD spindle motor has been spinning the platters.',
+            $key === 'head flight hours' => 'Hours HDD heads have been flying over the media; multi-actuator drives may report this per actuator.',
+            $key === 'power cycle count' => 'Counts power-on resets or unique device startups during system boot.',
+            $key === 'hardware reset count' => 'Counts hardware resets received by the device; on SATA this includes COMRESETs.',
+            $key === 'spin up time' => 'Time in milliseconds the device takes to spin up.',
+            $key === 'time to ready' => 'Time the drive took to become ready during the last power cycle, in milliseconds.',
+            $key === 'time to ready last power cycle' => 'Time the drive took to become ready during the last power cycle, in milliseconds.',
+            $key === 'time held' => 'Time the drive was held in staggered spin-up before being commanded to spin up, in milliseconds.',
+            $key === 'time in staggered spin up last power on' => 'Time the drive was held in staggered spin-up before being commanded to spin up, in milliseconds.',
+            $key === 'nvc status at power on' => 'SAS only. Status of the non-volatile cache at power on.',
+            $key === 'time available to save user data to nvmem' => 'Time, in 100us units, available to save user data to media for non-volatile cache handling.',
+            $key === 'lowest poh timestamp' => 'For time-bounded parameters, the lower-bound timestamp in hours.',
+            $key === 'highest poh timestamp' => 'For time-bounded parameters, the upper-bound timestamp in hours.',
+            $key === 'depopulate status' => 'Storage Element Depopulation status. Reports Depopulated if a head has been depopulated, otherwise Not Depopulated.',
+            $key === 'depopulation head mask' => 'Bitmask indicating which specific heads have been depopulated.',
+            $key === 'depopulated head mask' => 'Bitmask indicating which specific heads have been depopulated.',
+            $key === 'regenerate head mask' => 'Mask of heads marked for regeneration.',
+            $key === 'physical element status' => 'Per-head physical element status. Matches Get Physical Element Status output.',
+            $key === 'max number for reasign' => 'Maximum disc sectors available for reassigning bad LBAs.',
+            $key === 'max number for reassign' => 'Maximum disc sectors available for reassigning bad LBAs.',
+            $key === 'maximum number of available disc sectors for reassignment' => 'Maximum disc sectors available for reassigning bad LBAs.',
+            $key === 'hamr data protect status' => 'On HAMR drives, indicates the drive entered data-protect mode, meaning write protected.',
+            $key === 'poh of most recent farm time series frame' => 'Power-on-hours timestamp in the most recent time-based FARM frame.',
+            $key === 'poh of 2nd most recent farm time series frame' => 'Power-on-hours timestamp in the second most recent time-based FARM frame.',
+            $key === 'seq or before req for active zone config' => 'Sequential or Before Required active-zone configuration on host-managed SMR drives.',
+            $key === 'seq write req active zone config' => 'Sequential Write Required active-zone configuration on host-managed SMR drives.',
+            $key === 'rated workload' => 'Percentage based on collected drive workload data. Obsolete on newer drives.',
+            str_contains($key, 'random read commands') => 'Total random read commands to user LBA space; verify commands are not included.',
+            str_contains($key, 'random write commands') => 'Total random write commands to user LBA space; write-verify and write-same commands are not included.',
+            str_contains($key, 'total') && str_contains($key, 'read commands') => 'Total read commands to user LBA space; verify commands are not included.',
+            str_contains($key, 'total') && str_contains($key, 'write commands') => 'Total write commands to user LBA space; write-verify and write-same commands are not included.',
+            str_contains($key, 'other commands') => 'Total commands that are not reads or writes.',
+            $key === 'lbas written' => 'Logical sectors that have received a write. Multiply by logical sector size to estimate bytes written.',
+            $key === 'lbas read' => 'Logical sectors that have received a read. Multiply by logical sector size to estimate bytes read.',
+            $key === 'dither' => 'Intentionally added random noise used to randomize and smooth out errors in digital processing; this counts events in the current power cycle.',
+            $key === 'dither random' => 'Number of times dithering was held off due to random workloads in the current power cycle.',
+            $key === 'dither sequential' => 'Number of times dithering was held off due to sequential workloads in the current power cycle.',
+            str_contains($key, 'dither events') => 'Number of times dithering was performed in the current power cycle.',
+            str_contains($key, 'dither pause random') => 'Number of times dithering was held off due to random workloads in the current power cycle.',
+            str_contains($key, 'dither pause sequential') => 'Number of times dithering was held off due to sequential workloads in the current power cycle.',
+            str_contains($key, 'r cmds between') => 'Count of read commands in the displayed user-LBA-space range for the covered time period.',
+            str_contains($key, 'w cmds between') => 'Count of write commands in the displayed user-LBA-space range for the covered time period.',
+            str_contains($key, 'r cmds with xfer') => 'Count of read commands whose transfer length falls in the displayed bin.',
+            str_contains($key, 'w cmds with xfer') => 'Count of write commands whose transfer length falls in the displayed bin.',
+            str_contains($key, 'queue depth') && str_contains($key, 'intervals') => 'Number of 30-second intervals where queue depth was in the displayed range.',
+            str_contains($key, 'reads of xfer bin') => 'Reads that fall into the displayed transfer-length bin of the last three SMART Summary Frames.',
+            str_contains($key, 'writes of xfer bin') => 'Writes that fall into the displayed transfer-length bin of the last three SMART Summary Frames.',
+            str_contains($key, 'time that commands cover') => 'Number of hours covered by the related read/write command statistics.',
+            str_contains($key, 'time that queue bins cover') => 'Number of hours covered by the queue-depth bin statistics.',
+            str_contains($key, 'time that xfer bins cover') => 'Number of hours covered by the transfer-length bin statistics.',
+            str_contains($key, 'unrecoverable read errors due to erc') => 'Error Recovery Control timeout prevented further read retries, so the command was considered an unrecoverable read error.',
+            str_contains($key, 'unrecoverable read errors') => 'Total unrecoverable read command errors, including repeated errors at a given LBA.',
+            str_contains($key, 'unrecoverable write errors') => 'Total unrecoverable write command errors, including repeated errors at a given LBA.',
+            $key === 'number of reallocated candidate sectors' => 'Reallocation-candidate sectors. FARM may report this per actuator and as disc sectors rather than whole-drive logical sectors.',
+            str_contains($key, 'reallocated sectors') && ! str_contains($key, 'farm time series frame') => 'Reallocated sectors. FARM may report this per actuator and as disc sectors rather than whole-drive logical sectors.',
+            $key === 'total asr events' => 'Counts Asynchronous Signal Recovery events when interface signaling is lost. SATA only.',
+            $key === 'total crc errors' => 'Counts interface CRC errors detected since manufacture.',
+            str_contains($key, 'read recovery attempts') => 'Logical sectors that required three or more attempts to recover data from media.',
+            str_contains($key, 'mechanical start retries') => 'Retries attempted to get the spindle motor spinning and up to speed; not the same as drive-level mechanical start failures.',
+            $key === 'attr spin retry count' => 'SATA only. Raw Seagate SMART spin-retry counter for spindle-motor spin-up retries.',
+            $key === 'spin retry count' => 'SATA only. Raw Seagate SMART spin-retry counter for spindle-motor spin-up retries.',
+            $key === 'normal spin retry count' => 'SATA only. Normalized/current value field from the Seagate SMART spin-retry attribute.',
+            $key === 'normalized spin retry count' => 'SATA only. Nominal/current value field from the Seagate SMART spin-retry attribute.',
+            $key === 'worst spin rretry count' => 'SATA only. Worst-ever value field from the Seagate SMART spin-retry attribute.',
+            $key === 'worst spin retry count' => 'SATA only. Worst-ever value field from the Seagate SMART spin-retry attribute.',
+            $key === 'worst ever spin retry count' => 'SATA only. Worst-ever value field from the Seagate SMART spin-retry attribute.',
+            str_contains($key, 'ioedc errors') => 'SATA only. Input/Output Error Detection Code errors detected in Seagate end-to-end data protection.',
+            $key === 'command time out count total' => 'SATA only. Command timeout counter related to resets between command acceptance and completion.',
+            $key === 'command time out over 7 seconds count' => 'SATA only. Command timeouts over 7.5 seconds; matches a Seagate SMART raw-data field.',
+            $key === 'command time out over 5 seconds count' => 'SATA only. Command timeouts over 5 seconds; matches a Seagate SMART raw-data field.',
+            str_contains($key, 'command timeouts 7 5 seconds') => 'SATA only. Command timeouts over 7.5 seconds; matches a Seagate SMART raw-data field.',
+            str_contains($key, 'command timeouts 5 seconds') => 'SATA only. Command timeouts over 5 seconds; matches a Seagate SMART raw-data field.',
+            str_contains($key, 'command timeouts') => 'SATA only. Command timeout counter related to resets between command acceptance and completion.',
+            $key === 'fru of smart trip most recent frame' => 'SAS only. Field replaceable unit code associated with the most recently logged SMART trip.',
+            preg_match('/port [ab] invalid dword count/', $key) === 1 => 'SAS only. Count of invalid interface dwords on the displayed port.',
+            preg_match('/port [ab] disparity error count/', $key) === 1 => 'SAS only. Count of data-encoding mismatches between the drive and host path on the displayed port.',
+            preg_match('/port [ab] loss of dword sync/', $key) === 1 => 'SAS only. Count of synchronization losses between the drive and host path on the displayed port.',
+            preg_match('/port [ab] phy reset problem/', $key) === 1 => 'SAS only. Count of PHY resets caused by error conditions on the displayed port.',
+            $key === 'total flash led' => 'Flash LED means a firmware error occurred and set an error code. These are severe errors. The term is a holdover from when drive LEDs blinked error-code patterns, though the LED no longer exists.',
+            $key === 'index flash led' => 'Flash LED means a firmware error occurred and set an error code. These are severe errors. The term is a holdover from when drive LEDs blinked error-code patterns, though the LED no longer exists.',
+            $key === 'total flash led errors' => 'Flash LED means a firmware error occurred and set an error code. These are severe errors. The term is a holdover from when drive LEDs blinked error-code patterns, though the LED no longer exists.',
+            str_contains($key, 'flash led info') => 'Flash LED means a firmware error occurred and set an error code. These are severe errors. The term is a holdover from when drive LEDs blinked error-code patterns, though the LED no longer exists.',
+            $key === 'uncorrectables' => 'Unrecoverable errors reported by FARM error data, including errors that may repeat at a given LBA.',
+            $key === 'cumulative unrecoverable read erc' => 'Error Recovery Control timeout prevented further read retries, so the command was considered an unrecoverable read error.',
+            str_contains($key, 'cumulative lifetime unrecoverable read repeating') => 'Unrecoverable errors that repeat at the same sector due to host read retries.',
+            str_contains($key, 'cumulative lifetime unrecoverable read unique') => 'Uniquely identified unrecoverable errors first encountered at a given LBA.',
+            str_contains($key, 'smart trip flags') => 'Bit field representing SMART trips that occurred.',
+            str_contains($key, 'reallocated sectors since last farm time series frame') => 'Sectors reallocated since the last FARM time-series snapshot was taken.',
+            str_contains($key, 'reallocated sectors between n n 1 farm time series frame') => 'Sectors reallocated between the last two FARM time-series snapshots.',
+            str_contains($key, 'reallocation candidate sectors since last farm time series frame') => 'Reallocation-candidate sectors since the last FARM time-series snapshot was saved.',
+            str_contains($key, 'reallocation candidate between n n 1 farm time series frame') => 'Reallocation-candidate sectors between the last two FARM time-series snapshots.',
+            str_contains($key, 'unique unrecoverable sectors since last farm time series frame') => 'Uniquely identified unrecoverable sectors since the last FARM time-series snapshot was saved.',
+            str_contains($key, 'unique unrecoverable sectors between n n 1 farm time series frame') => 'Uniquely identified unrecoverable sectors between the last two FARM time-series snapshots.',
+            $key === 'current relative humidity' => 'Current relative humidity percentage, from 0-100%, within the head disk enclosure.',
+            $key === 'current motor power scalar' => 'Current power scalar value used by the servo to keep the motor spinning.',
+            $key === 'time coverage for motor power hours' => 'Number of hours covered by the Current Motor Power statistic value.',
+            $key === 'time coverage for 12v 5v voltage hours' => 'Number of hours covered by the 12V and 5V voltage readings.',
+            $key === 'time coverage for 12v 5v power hours' => 'Number of hours covered by the 12V and 5V power readings.',
+            str_contains($key, 'dos scans performed') => 'Total Directed Offline Scan scans performed.',
+            str_contains($key, 'dos ought to scan') => 'Number of times Directed Offline Scan is recommended to scan an area during idle operations.',
+            str_contains($key, 'dos need to scan') => 'Number of times Directed Offline Scan has been marked as needing to scan an area during idle operations.',
+            str_contains($key, 'dos write fault scans') => 'Number of Directed Offline Scan runs caused by write faults exceeding an unsafe limit for adjacent tracks.',
+            str_contains($key, 'lbas corrected by isp') => 'Logical sectors corrected due to Intermediate Super Parity.',
+            str_contains($key, 'lbas corrected by parity sector') => 'LBAs corrected by use of a parity sector.',
+            str_contains($key, 'dvga skip write detect') => 'Number of times a write operation was stopped due to Delta Variable Gain Amplifier readings.',
+            str_contains($key, 'rvga skip write detect') => 'Number of times a write operation was stopped due to Running Average Variable Gain Amplifier readings.',
+            str_contains($key, 'fvga skip write detect') => 'Number of times a write operation was stopped due to Filter Variable Gain Amplifier readings.',
+            str_contains($key, 'skip write detect threshold exceeded') => 'Number of times a write was stopped because a servo sample indicated higher fly height than expected.',
+            str_contains($key, 'read after write') || str_contains($key, 'raw operations') => 'SAS only. Number of times firmware detected the need to read a sector after it was written.',
+            $key === 'read error rate' => 'SATA only. Seagate read-error-rate SMART attribute value.',
+            $key === 'read error rate normalized' => 'SATA only. Normalized/current value from the Seagate read-error-rate SMART attribute.',
+            $key === 'read error rate worst ever' => 'SATA only. Worst-ever value from the Seagate read-error-rate SMART attribute.',
+            $key === 'seek error rate' => 'SATA only. Seagate seek-error-rate SMART attribute value.',
+            $key === 'seek error rate normalized' => 'SATA only. Normalized/current value from the Seagate seek-error-rate SMART attribute.',
+            $key === 'seek error rate worst ever' => 'SATA only. Worst-ever value from the Seagate seek-error-rate SMART attribute.',
+            $key === 'mr head resistance' || $key === 'second mr head resistance' => 'Old drives report ohms; newer drives report percent change since manufacturing to track head performance changes over time.',
+            $key === 'velocity observer' => 'Servo velocity observer errors detected during seek mode in the last 3 SMART Summary Frames.',
+            $key === 'velocity observer no tmd' => 'Servo timing mark detects missed during seek mode in the last 3 SMART Summary Frames.',
+            $key === 'time coverage for velocity observer hours' => 'Time in hours covered by the velocity observer statistics.',
+            str_contains($key, 'h2sat trimmed mean bits in error') => 'Mean bits in error from the read channel in processed codewords, measured on a non-user test track.',
+            str_contains($key, 'h2sat iterations to converge') => 'Software retries between read retries during error recovery measurement on a non-user test track.',
+            str_contains($key, 'average h2sat codeword at iteration level') => 'Percentage of codewords converged at the specified H2SAT iteration level.',
+            str_contains($key, 'average h2sat amplitude') => 'Amplitude measured from the read channel as compensated by VGA response from a previous read.',
+            str_contains($key, 'average h2sat asymmetry') => 'Asymmetry measured from the read channel as compensated by VGA response from a previous read.',
+            str_contains($key, 'fafh appd clr delta') => 'Applied Fly Height Clearance delta tracking head fly-height changes at outer, inner, and middle disk diameters.',
+            str_contains($key, 'disc slip recalibrations') => 'Count of servo recalibrations run to adjust for magnetic-disc position shifts after mishandling.',
+            str_contains($key, 'super parity coverage smr hsmr swr') && str_contains($key, 'actuator 1') => 'Super Parity coverage percentage for SMR/HSMR Sequential Write Required zones on Actuator 1.',
+            str_contains($key, 'super parity coverage smr hsmr swr') => 'Super Parity coverage percentage for SMR/HSMR drives with Sequential Write Required zones.',
+            str_contains($key, 'super parity coverage') => 'Super Parity coverage for the drive, reported as a percentage.',
+            default => '',
+        };
+    };
+    $labelWithTooltip = static function (string $label, string $tooltip = '') use ($tooltipForLabel): string {
+        $tooltip = $tooltip !== '' ? $tooltip : $tooltipForLabel($label);
+
+        return $tooltip !== ''
+            ? '<abbr style="cursor:help;text-decoration:underline dotted" title="' . htmlspecialchars($tooltip, ENT_QUOTES) . '">' . htmlspecialchars($label) . '</abbr>'
+            : htmlspecialchars($label);
     };
 
     // Hours-elapsed → "-3 days 4 hours" style string (matches legacy formatting).
@@ -298,6 +535,28 @@
 
         $showDetailed = $viewMode === 'detailed';
         $showPanels   = $viewMode !== 'graphs';
+
+        $devStatKnownPanels = [
+            'General Statistics',
+            'Free-Fall Statistics',
+            'Rotating Media Statistics',
+            'General Errors Statistics',
+            'Transport Statistics',
+            'FARM Log Header',
+            'FARM Drive Information',
+            'FARM Workload Statistics',
+            'FARM Error Statistics',
+            'FARM Environment Statistics',
+            'FARM Reliability Statistics',
+        ];
+        $devStatUnknownPages = [];
+        foreach ($disk['dev_stats'] as $page) {
+            $pn = $page['page_name'] ?: $data->decode('dev_stat_page', $page['page_num']);
+            if (in_array($pn, \LibreNMS\Agent\Unix\Smart\HtmlData::DEV_STAT_SKIP_PAGES, true)) { continue; }
+            if (! in_array($pn, $devStatKnownPanels, true)) {
+                $devStatUnknownPages[] = $pn;
+            }
+        }
     @endphp
 
     @if($showPanels)
@@ -306,6 +565,12 @@
         .smart-panels .panel { flex:0 0 auto; margin-bottom:0 }
         .smart-panels table { white-space:nowrap }
     </style>
+    @if(! empty($devStatUnknownPages))
+    <div class="alert alert-warning" style="padding:5px 10px;margin-bottom:10px;font-size:12px">
+        <strong>Unrecognized device statistics page(s) — no panel defined:</strong>
+        {{ implode(', ', $devStatUnknownPages) }}
+    </div>
+    @endif
     <div class="smart-panels">
         {{-- Identity --}}
         <div>
@@ -345,7 +610,7 @@
                 ];
                 foreach ($rows as $label => $value) {
                     if ($value !== null && $value !== '') {
-                        echo $tableRow($label, htmlspecialchars((string) $value));
+                        echo $tableRow($label, htmlspecialchars((string) $value), $tooltipForLabel($label));
                     }
                 }
                 echo '</table>';
@@ -443,7 +708,7 @@
                 ];
                 foreach ($hrows as $label => $value) {
                     if ($value !== null && $value !== '') {
-                        echo $tableRow($label, htmlspecialchars((string) $value));
+                        echo $tableRow($label, htmlspecialchars((string) $value), $tooltipForLabel($label));
                     }
                 }
                 echo '</table>';
@@ -515,106 +780,6 @@
     @endif
 
     @if($showDetailed)
-        {{-- Secondary row: SATA PHY Event Counters, Error Recovery Control, Capabilities, Log Directory --}}
-        @php
-            $capFields = [
-                'capability_selftests_supported'     => 'Self-tests supported',
-                'capability_conveyance_supported'    => 'Conveyance self-test',
-                'capability_selective_supported'     => 'Selective self-test',
-                'capability_error_logging_supported' => 'Error logging',
-                'capability_gp_logging_supported'    => 'GP logging',
-                'capability_exec_offline_immediate'  => 'Exec offline immediate',
-                'capability_offline_aborted_on_cmd'  => 'Offline aborted on command',
-                'capability_offline_surface_scan'    => 'Offline surface scan',
-                'capability_attr_autosave'           => 'Attribute autosave',
-                'sct_error_recovery_supported'       => 'SCT error recovery control',
-                'sct_feature_control_supported'      => 'SCT feature control',
-                'sct_data_table_supported'           => 'SCT data table',
-            ];
-            $capRows = array_filter($capFields, fn ($col) => isset($info[$col]), ARRAY_FILTER_USE_KEY);
-        @endphp
-        @if(! empty($disk['phy_events']) || ! empty($disk['erc']) || $capRows !== [] || ! empty($disk['log_dir']))
-        <div class="smart-panels">
-            @if(! empty($disk['phy_events']))
-            <div>
-                @php
-                    $panelStart('SATA PHY Event Counters');
-                    echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover" style="width:auto">';
-                    echo '<thead><tr><th>ID</th><th>Name</th><th>Value</th></tr></thead><tbody>';
-                    foreach ($disk['phy_events'] as $ev) {
-                        $val = (string) ($ev['value'] ?? '');
-                        if (($ev['overflow'] ?? 0)) { $val .= ' <span class="text-warning">(overflow)</span>'; }
-                        echo '<tr><td>' . htmlspecialchars((string) ($ev['event_id'] ?? '')) . '</td>'
-                            . '<td>' . htmlspecialchars((string) ($ev['name'] ?? '')) . '</td>'
-                            . '<td>' . $val . '</td></tr>';
-                    }
-                    echo '</tbody></table></div>';
-                    $panelEnd();
-                @endphp
-            </div>
-            @endif
-
-            @if(! empty($disk['erc']))
-            <div>
-                @php
-                    $panelStart('Error Recovery Control (SCT ERC)');
-                    echo '<table class="table table-condensed table-hover" style="width:auto">';
-                    foreach ($disk['erc'] as $direction => $row) {
-                        $label = $data->decode('erc_direction', $direction);
-                        $ds = $row['deciseconds'] ?? null;
-                        $val = ($row['enabled'] ?? 0)
-                            ? (is_numeric($ds) ? number_format($ds / 10, 1) . ' s' : 'Enabled')
-                            : 'Disabled';
-                        echo $tableRow($label, htmlspecialchars($val));
-                    }
-                    echo '</table>';
-                    $panelEnd();
-                @endphp
-            </div>
-            @endif
-
-            @if($capRows !== [])
-            <div>
-                @php
-                    $panelStart('Capabilities');
-                    echo '<table class="table table-condensed table-hover" style="width:auto">';
-                    foreach ($capRows as $col => $label) {
-                        $val = (int) $info[$col];
-                        $icon = $val ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>';
-                        echo $tableRow(htmlspecialchars($label), $icon);
-                    }
-                    echo '</table>';
-                    $panelEnd();
-                @endphp
-            </div>
-            @endif
-
-            @if(! empty($disk['log_dir']))
-            <div>
-                @php
-                    $panelStart('Log Directory', (string) count($disk['log_dir']));
-                    echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover" style="width:auto">';
-                    echo '<thead><tr><th>Address</th><th>Name</th><th>Readable</th><th>Writable</th><th>GP Sectors</th><th>SMART Sectors</th></tr></thead><tbody>';
-                    foreach ($disk['log_dir'] as $entry) {
-                        $rd = $entry['readable'] ?? null;
-                        $wr = $entry['writable'] ?? null;
-                        echo '<tr>'
-                            . '<td>0x' . sprintf('%02X', (int) ($entry['log_address'] ?? 0)) . '</td>'
-                            . '<td>' . htmlspecialchars((string) ($entry['name'] ?? '')) . '</td>'
-                            . '<td>' . ($rd !== null ? ((int) $rd ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>') : '') . '</td>'
-                            . '<td>' . ($wr !== null ? ((int) $wr ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>') : '') . '</td>'
-                            . '<td>' . htmlspecialchars((string) ($entry['gp_sectors'] ?? '')) . '</td>'
-                            . '<td>' . htmlspecialchars((string) ($entry['smart_sectors'] ?? '')) . '</td>'
-                            . '</tr>';
-                    }
-                    echo '</tbody></table></div>';
-                    $panelEnd();
-                @endphp
-            </div>
-            @endif
-        </div>
-        @endif
-
         {{-- Error log --}}
         @if(! empty($disk['errors']))
             @php
@@ -660,43 +825,450 @@
 
         {{-- Device statistics (one panel per page, flex row) --}}
         @php
-            $devStatPages = array_filter(
-                $disk['dev_stats'],
-                static function ($page) use ($data) {
-                    $pageName = $page['page_name'] ?: $data->decode('dev_stat_page', $page['page_num']);
-                    if (in_array($pageName, \LibreNMS\Agent\Unix\Smart\HtmlData::DEV_STAT_SKIP_PAGES, true)) { return false; }
-                    $rows = array_filter(
-                        $page['rows'],
-                        static fn ($r) => ($r['valid'] ?? 1) != 0
-                            && ! in_array((string) ($r['stat_name'] ?? ''), \LibreNMS\Agent\Unix\Smart\HtmlData::DEV_STAT_SKIP_ROWS, true)
-                    );
-                    return $rows !== [];
+            $fmtStatVal  = static function ($v): string {
+                if (is_numeric($v) && abs((float) $v) >= 1000000) {
+                    return Number::formatSi((float) $v, 2, 0, '');
                 }
-            );
-        @endphp
-        @if(! empty($devStatPages))
-        <div class="smart-panels">
-            @foreach($devStatPages as $page)
-            <div>
-                @php
-                    $pageName = $page['page_name'] ?: $data->decode('dev_stat_page', $page['page_num']);
-                    $rows = array_filter(
-                        $page['rows'],
-                        static fn ($r) => ($r['valid'] ?? 1) != 0
-                            && ! in_array((string) ($r['stat_name'] ?? ''), \LibreNMS\Agent\Unix\Smart\HtmlData::DEV_STAT_SKIP_ROWS, true)
-                    );
-                    $panelStart(htmlspecialchars((string) $pageName));
-                    echo '<table class="table table-condensed table-striped table-hover" style="width:auto">';
-                    echo '<thead><tr><th>Statistic</th><th>Value</th></tr></thead><tbody>';
-                    foreach ($rows as $r) {
-                        $v = $r['value'] ?? null;
-                        if (is_numeric($v) && abs((int) $v) >= 1000000) {
-                            $v = Number::formatSi((float) $v, 2, 0, '');
+                return htmlspecialchars((string) ($v ?? ''));
+            };
+            $fmtStatName = static function (string $s): string {
+                static $exactMap = [
+                    'poh'  => 'Power-on hours',
+                    'spoh' => 'Spin power-on hours',
+                ];
+                static $wordMap = [
+                    'dvga'  => 'Delta Variable Gain Amplifier',
+                    'rvga'  => 'Running Average Variable Gain Amplifier',
+                    'fvga'  => 'Filter Variable Gain Amplifier',
+                    'dos'   => 'Directed Offline Scan',
+                    'isp'   => 'Intermediate Super Parity',
+                    'h2sat' => 'Head Self-Assessment Test',
+                    'mr'    => 'Magneto Resistive',
+                ];
+                if (isset($exactMap[$s])) {
+                    return htmlspecialchars($exactMap[$s]);
+                }
+                $words = array_map(
+                    static fn ($w) => $wordMap[$w] ?? ucfirst($w),
+                    explode('_', strtolower($s))
+                );
+                return htmlspecialchars(implode(' ', $words));
+            };
+            $fmtStatLabel = static function (string $s) use ($fmtStatName, $labelWithTooltip): string {
+                $label = html_entity_decode($fmtStatName($s), ENT_QUOTES);
+
+                return $labelWithTooltip($label);
+            };
+            $fmtFarmStatLabel = static function (string $s) use ($fmtStatName, $labelWithTooltip, $tooltipForLabel): string {
+                $label = html_entity_decode($fmtStatName($s), ENT_QUOTES);
+
+                return $labelWithTooltip($label, $tooltipForLabel($label));
+            };
+            $fmtMilli = static function ($v, string $unit): string {
+                if ($v === null || $v === '') { return ''; }
+                return htmlspecialchars(number_format((float) $v / 1000, 3)) . ' ' . $unit;
+            };
+
+            $farmSubTables = static function (string $pageName, array $rows) use ($fmtStatVal): array {
+                if (! str_starts_with($pageName, 'FARM ')) {
+                    return ['scalars' => $rows, 'groups' => []];
+                }
+                $byName   = [];
+                foreach ($rows as $r) { $byName[$r['stat_name'] ?? ''] = $r; }
+                $scalars  = [];
+                $groups   = [];
+                $extract  = [];
+                $consumed = [];
+
+                if ($pageName === 'FARM Environment Statistics') {
+                    $tempMap = [
+                        'curent_temp'        => ['instant', 'current'],
+                        'highest_temp'       => ['instant', 'highest'],
+                        'lowest_temp'        => ['instant', 'lowest'],
+                        'average_temp'       => ['short',   'average'],
+                        'highest_short_temp' => ['short',   'highest'],
+                        'lowest_short_temp'  => ['short',   'lowest'],
+                        'average_long_temp'  => ['long',    'average'],
+                        'highest_long_temp'  => ['long',    'highest'],
+                        'lowest_long_temp'   => ['long',    'lowest'],
+                    ];
+                    $tempData = [];
+                    foreach ($tempMap as $stat => [$row, $col]) {
+                        if (isset($byName[$stat])) {
+                            $tempData[$row][$col] = $byName[$stat]['value'];
+                            $consumed[$stat]      = true;
                         }
-                        echo '<tr><td>' . htmlspecialchars((string) ($r['stat_name'] ?? '')) . '</td>'
-                            . '<td>' . htmlspecialchars((string) ($v ?? '')) . '</td></tr>';
+                    }
+                    if ($tempData) {
+                        $groups[] = ['title' => 'Temperature (°C)', 'type' => 'temp_matrix', 'data' => $tempData];
+                    }
+
+                    $limitData = [];
+                    foreach ([['max_temp','over_temp_time','Maximum'],['min_temp','under_temp_time','Minimum']] as [$lStat,$tStat,$label]) {
+                        if (isset($byName[$lStat], $byName[$tStat])) {
+                            $limitData[] = ['label' => $label, 'limit' => $byName[$lStat]['value'], 'time' => $byName[$tStat]['value']];
+                            $consumed[$lStat] = $consumed[$tStat] = true;
+                        }
+                    }
+                    if ($limitData) {
+                        $groups[] = ['title' => 'Operating Limits', 'type' => 'limits', 'data' => $limitData];
+                    }
+
+                    $voltageRails = [
+                        '12V (mV)' => ['Current' => 'current_12v_in_mv', 'Minimum' => 'minimum_12v_in_mv', 'Maximum' => 'maximum_12v_in_mv'],
+                        '5V (mV)'  => ['Current' => 'current_5v_in_mv',  'Minimum' => 'minimum_5v_in_mv',  'Maximum' => 'maximum_5v_in_mv'],
+                    ];
+                    $voltData = [];
+                    foreach ($voltageRails as $label => $statCols) {
+                        $row = ['label' => $label];
+                        foreach ($statCols as $col => $stat) {
+                            $row[$col] = isset($byName[$stat]) ? $byName[$stat]['value'] : null;
+                            if (isset($byName[$stat])) { $consumed[$stat] = true; }
+                        }
+                        $voltData[] = $row;
+                    }
+                    if ($voltData) {
+                        $groups[] = ['title' => 'Voltage', 'type' => 'voltage', 'data' => $voltData];
+                    }
+
+                    $powerRails = [
+                        '12V' => ['Average' => 'average_12v_power', 'Minimum' => 'minimum_12v_power', 'Maximum' => 'maximum_12v_power'],
+                        '5V'  => ['Average' => 'average_5v_power',  'Minimum' => 'minimum_5v_power',  'Maximum' => 'maximum_5v_power'],
+                    ];
+                    $powerData = [];
+                    foreach ($powerRails as $label => $statCols) {
+                        $row = ['label' => $label];
+                        foreach ($statCols as $col => $stat) {
+                            $row[$col] = isset($byName[$stat]) ? $byName[$stat]['value'] : null;
+                            if (isset($byName[$stat])) { $consumed[$stat] = true; }
+                        }
+                        $powerData[] = $row;
+                    }
+                    if (isset($byName['current_motor_power'])) {
+                        $powerData[] = ['label' => 'Motor', 'Average' => null, 'Minimum' => null, 'Maximum' => null, 'Current' => $byName['current_motor_power']['value']];
+                        $consumed['current_motor_power'] = true;
+                    }
+                    if ($powerData) {
+                        $groups[] = ['title' => 'Power', 'type' => 'power', 'data' => $powerData];
+                    }
+
+                } elseif ($pageName === 'FARM Error Statistics') {
+                    $flashEvents = [];
+                    $cumulHead   = [];
+                    foreach ($rows as $r) {
+                        $stat = $r['stat_name'] ?? '';
+                        if (preg_match('/^flash_led_event_(\d+)\.(.+)$/', $stat, $m)) {
+                            $flashEvents[(int) $m[1]][$m[2]] = $r['value'];
+                            $consumed[$stat] = true;
+                        } elseif (preg_match('/^cum_lifetime_unrecoverable_by_head_(\d+)\.(.+)$/', $stat, $m)) {
+                            $cumulHead[(int) $m[1]][$m[2]] = $r['value'];
+                            $consumed[$stat] = true;
+                        }
+                    }
+                    if ($flashEvents) {
+                        ksort($flashEvents);
+                        $extract[] = ['title' => 'Flash LED events', 'type' => 'flash_led', 'source' => $pageName,
+                            'data' => ['events' => $flashEvents, 'fields' => array_keys(reset($flashEvents))]];
+                    }
+                    if ($cumulHead) {
+                        ksort($cumulHead);
+                        $extract[] = ['title' => 'Cumulative lifetime unrecoverable errors by head', 'type' => 'cum_head', 'source' => $pageName,
+                            'data' => ['heads' => $cumulHead, 'fields' => array_keys(reset($cumulHead))]];
+                    }
+
+                } elseif ($pageName === 'FARM Reliability Statistics') {
+                    $byHead = [];
+                    foreach ($rows as $r) {
+                        $stat = $r['stat_name'] ?? '';
+                        if (preg_match('/^(.+)_by_head_(\d+)$/', $stat, $m) ||
+                            preg_match('/^(.+)_from_head_(\d+)$/', $stat, $m)) {
+                            $byHead[$m[1]][(int) $m[2]] = $r['value'];
+                            $consumed[$stat] = true;
+                        }
+                    }
+                    if ($byHead) {
+                        $allHeads = [];
+                        foreach ($byHead as $vals) { $allHeads = array_merge($allHeads, array_keys($vals)); }
+                        $allHeads = array_values(array_unique($allHeads));
+                        sort($allHeads);
+                        $extract[] = ['title' => 'By head', 'type' => 'by_head', 'source' => $pageName,
+                            'data' => ['metrics' => $byHead, 'heads' => $allHeads]];
+                    }
+
+                } elseif ($pageName === 'FARM Workload Statistics') {
+                    $radRows = [];
+                    foreach ($rows as $r) {
+                        $stat = $r['stat_name'] ?? '';
+                        if (preg_match('/^(read|write)_commands_by_radius_(\d+)_(\d+)$/', $stat, $m)) {
+                            $range = $m[2] . '-' . $m[3] . '%';
+                            $radRows[$range][$m[1]] = $r['value'];
+                            $consumed[$stat] = true;
+                        }
+                    }
+                    if ($radRows) {
+                        $groups[] = ['title' => 'Commands by disk radius', 'type' => 'by_radius',
+                            'data' => $radRows];
+                    }
+                }
+
+                foreach ($rows as $r) {
+                    if (! isset($consumed[$r['stat_name'] ?? ''])) {
+                        $scalars[] = $r;
+                    }
+                }
+                return ['scalars' => $scalars, 'groups' => $groups, 'extract' => $extract];
+            };
+
+            $renderSubTable = static function (array $group, bool $skipTitle = false, bool $fullWidth = false) use ($fmtStatVal, $fmtStatName, $fmtFarmStatLabel, $fmtMilli, $labelWithTooltip): void {
+                $type  = $group['type'];
+                $data  = $group['data'];
+                $title = htmlspecialchars($group['title']);
+                if (! $skipTitle) {
+                    echo '<h5 style="margin:14px 0 6px;font-size:14px;font-weight:600">' . $title . '</h5>';
+                }
+
+                $tblStyle = ($fullWidth ? 'width:100%' : 'width:auto') . ';font-size:12px';
+
+                if ($type === 'temp_matrix') {
+                    $horizons = ['instant' => 'Instant', 'short' => 'Short-term avg', 'long' => 'Long-term avg'];
+                    $cols     = ['current' => 'Current', 'average' => 'Average', 'highest' => 'Highest', 'lowest' => 'Lowest'];
+                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th></th>';
+                    foreach ($cols as $col => $colLabel) { echo '<th>' . $colLabel . '</th>'; }
+                    echo '</tr></thead><tbody>';
+                    foreach ($horizons as $rowKey => $rowLabel) {
+                        if (! isset($data[$rowKey])) { continue; }
+                        $tooltip = match ($rowKey) {
+                            'instant' => 'Current device temperature at read time.',
+                            'short' => 'Average of the most recent 144 ten-minute samples over a 24-hour period.',
+                            'long' => 'Average of the most recent 42 short-term daily averages; valid after about 1008 hours.',
+                            default => '',
+                        };
+                        echo '<tr><td><strong>' . $labelWithTooltip($rowLabel, $tooltip) . '</strong></td>';
+                        foreach ($cols as $col => $_) {
+                            $v = $data[$rowKey][$col] ?? null;
+                            echo '<td>' . ($v !== null ? $fmtStatVal($v) : '<span class="text-muted">—</span>') . '</td>';
+                        }
+                        echo '</tr>';
                     }
                     echo '</tbody></table>';
+
+                } elseif ($type === 'limits') {
+                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th></th><th>Limit (°C)</th><th>Time over (min)</th></tr></thead><tbody>';
+                    foreach ($data as $row) {
+                        $tooltipLabel = $row['label'] === 'Maximum' ? 'Specified maximum operating temperature' : 'Specified minimum operating temperature';
+                        echo '<tr><td><strong>' . $labelWithTooltip($row['label'], $tooltipLabel === 'Specified maximum operating temperature'
+                            ? 'Manufacturer-specified maximum operating temperature for the device.'
+                            : 'Manufacturer-specified minimum operating temperature for the device.') . '</strong></td>'
+                            . '<td>' . $fmtStatVal($row['limit']) . '</td>'
+                            . '<td>' . $fmtStatVal($row['time']) . '</td></tr>';
+                    }
+                    echo '</tbody></table>';
+
+                } elseif ($type === 'voltage') {
+                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th>Rail</th><th>Current</th><th>Minimum</th><th>Maximum</th></tr></thead><tbody>';
+                    foreach ($data as $row) {
+                        $tooltip = str_starts_with($row['label'], '12V')
+                            ? 'Voltage readings for the 12V power line: current, minimum observed, and maximum observed.'
+                            : 'Voltage readings for the 5V power line: current, minimum observed, and maximum observed.';
+                        echo '<tr><td><strong>' . $labelWithTooltip($row['label'], $tooltip) . '</strong></td>'
+                            . '<td>' . $fmtMilli($row['Current'], 'V') . '</td>'
+                            . '<td>' . $fmtMilli($row['Minimum'], 'V') . '</td>'
+                            . '<td>' . $fmtMilli($row['Maximum'], 'V') . '</td></tr>';
+                    }
+                    echo '</tbody></table>';
+
+                } elseif ($type === 'power') {
+                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th>Rail</th><th>Current</th><th>Average</th><th>Minimum</th><th>Maximum</th></tr></thead><tbody>';
+                    foreach ($data as $row) {
+                        $tooltip = match ($row['label']) {
+                            '12V' => 'Power readings in watts for the 12V power line: average, minimum, and maximum.',
+                            '5V' => 'Power readings in watts for the 5V power line: average, minimum, and maximum.',
+                            'Motor' => 'Current motor power scalar value used by the servo to keep the motor spinning.',
+                            default => '',
+                        };
+                        echo '<tr><td><strong>' . $labelWithTooltip($row['label'], $tooltip) . '</strong></td>'
+                            . '<td>' . $fmtMilli($row['Current'] ?? null, 'W') . '</td>'
+                            . '<td>' . $fmtMilli($row['Average'] ?? null, 'W') . '</td>'
+                            . '<td>' . $fmtMilli($row['Minimum'] ?? null, 'W') . '</td>'
+                            . '<td>' . $fmtMilli($row['Maximum'] ?? null, 'W') . '</td></tr>';
+                    }
+                    echo '</tbody></table>';
+
+                } elseif ($type === 'flash_led') {
+                    $events = $data['events'];
+                    $fields = $data['fields'];
+                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th>Field</th>';
+                    foreach (array_keys($events) as $ev) { echo '<th>Event ' . $ev . '</th>'; }
+                    echo '</tr></thead><tbody>';
+                    foreach ($fields as $field) {
+                        echo '<tr><td>' . $fmtFarmStatLabel($field) . '</td>';
+                        foreach ($events as $ev => $_) {
+                            echo '<td>' . $fmtStatVal($events[$ev][$field] ?? null) . '</td>';
+                        }
+                        echo '</tr>';
+                    }
+                    echo '</tbody></table>';
+
+                } elseif ($type === 'cum_head') {
+                    $heads  = $data['heads'];
+                    $fields = $data['fields'];
+                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th></th>';
+                    foreach (array_keys($heads) as $h) { echo '<th>H' . $h . '</th>'; }
+                    echo '</tr></thead><tbody>';
+                    foreach ($fields as $f) {
+                        echo '<tr><td>' . $fmtFarmStatLabel($f) . '</td>';
+                        foreach ($heads as $h => $vals) { echo '<td>' . $fmtStatVal($vals[$f] ?? null) . '</td>'; }
+                        echo '</tr>';
+                    }
+                    echo '</tbody></table>';
+
+                } elseif ($type === 'by_head') {
+                    $metrics = $data['metrics'];
+                    $heads   = $data['heads'];
+                    $avgMetrics = ['write_workload_power_on_time'];
+                    echo '<table class="table table-condensed table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th>Metric</th>';
+                    foreach ($heads as $h) { echo '<th style="text-align:right">H' . $h . '</th>'; }
+                    echo '<th style="text-align:right">Total / Avg</th></tr></thead><tbody>';
+                    foreach ($metrics as $metric => $headVals) {
+                        $numVals = array_filter(
+                            array_map(static fn ($h) => $headVals[$h] ?? null, $heads),
+                            static fn ($v) => is_numeric($v)
+                        );
+                        $rowMax   = $numVals ? max($numVals) : 0;
+                        $rowMin   = $numVals ? min($numVals) : 0;
+                        $rowRange = $rowMax - $rowMin;
+                        $isAvg    = in_array($metric, $avgMetrics, true);
+                        $aggregate = $numVals
+                            ? ($isAvg
+                                ? array_sum($numVals) / count($numVals)
+                                : array_sum($numVals))
+                            : null;
+                        echo '<tr><td>' . $fmtFarmStatLabel($metric) . '</td>';
+                        foreach ($heads as $h) {
+                            $v   = $headVals[$h] ?? null;
+                            $pct = ($rowRange > 0 && is_numeric($v))
+                                ? round(($v - $rowMin) / $rowRange * 100)
+                                : 0;
+                            $bg  = ($rowMax > 0 && $pct > 0)
+                                ? ' style="text-align:right;background:linear-gradient(to top,rgba(70,130,180,0.22) ' . $pct . '%,transparent ' . $pct . '%)"'
+                                : ' style="text-align:right"';
+                            echo '<td' . $bg . '>' . $fmtStatVal($v) . '</td>';
+                        }
+                        $aggDisplay = $aggregate !== null ? $fmtStatVal(round($aggregate)) : '';
+                        echo '<td style="text-align:right;font-weight:600">' . $aggDisplay . ($isAvg ? ' <small class="text-muted">avg</small>' : '') . '</td>';
+                        echo '</tr>';
+                    }
+                    echo '</tbody></table>';
+
+                } elseif ($type === 'by_radius') {
+                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th>Radius</th><th>Read</th><th>Write</th></tr></thead><tbody>';
+                    foreach ($data as $range => $vals) {
+                        echo '<tr><td>' . $labelWithTooltip((string) $range, 'Read and write command counts grouped by their approximate disk-radius location.') . '</td>'
+                            . '<td>' . $fmtStatVal($vals['read'] ?? null) . '</td>'
+                            . '<td>' . $fmtStatVal($vals['write'] ?? null) . '</td></tr>';
+                    }
+                    echo '</tbody></table>';
+                }
+            };
+
+            $isFarmPage   = static fn (string $pn): bool => str_starts_with($pn, 'FARM ');
+            $skipRows = \LibreNMS\Agent\Unix\Smart\HtmlData::DEV_STAT_SKIP_ROWS;
+
+            $devStatPanelPages = [];
+            foreach ($disk['dev_stats'] as $page) {
+                $pn = $page['page_name'] ?: $data->decode('dev_stat_page', $page['page_num']);
+                if (in_array($pn, \LibreNMS\Agent\Unix\Smart\HtmlData::DEV_STAT_SKIP_PAGES, true)) { continue; }
+                if (! in_array($pn, $devStatKnownPanels, true)) { continue; }
+                $isFarm = $isFarmPage($pn);
+                $rows = array_filter(
+                    $page['rows'],
+                    static fn ($r) => ($isFarm || ($r['valid'] ?? 1) != 0)
+                        && ! in_array((string) ($r['stat_name'] ?? ''), $skipRows, true)
+                );
+                if (! $rows) { continue; }
+                $devStatPanelPages[] = ['page_name' => $pn, 'rows' => array_values($rows)];
+            }
+        @endphp
+        @if(! empty($devStatPanelPages))
+        @php $devStatExtractPanels = []; @endphp
+        <div class="smart-panels">
+            @foreach($devStatPanelPages as $devPage)
+            <div>
+                @php
+                    $pageName = $devPage['page_name'];
+                    $panelStart(htmlspecialchars($pageName));
+                    if (str_starts_with($pageName, 'FARM ')) {
+                        echo '<p style="font-size:11px;margin:0 0 8px">'
+                            . '<a href="https://github.com/Seagate/openSeaChest/wiki/Drive-Health-and-SMART" target="_blank" rel="noopener">Seagate FARM reference</a>'
+                            . '</p>';
+                    }
+                    $sub = $farmSubTables($pageName, $devPage['rows']);
+
+                    if ($sub['scalars']) {
+                        echo '<table class="table table-condensed table-striped table-hover" style="width:auto">';
+                        echo '<thead><tr><th>Statistic</th><th>Value</th></tr></thead><tbody>';
+                        foreach ($sub['scalars'] as $r) {
+                            $statLabel = str_starts_with($pageName, 'FARM ')
+                                ? $fmtFarmStatLabel((string) ($r['stat_name'] ?? ''))
+                                : $fmtStatLabel((string) ($r['stat_name'] ?? ''));
+                            echo '<tr><td>' . $statLabel . '</td>'
+                                . '<td>' . $fmtStatVal($r['value'] ?? null) . '</td></tr>';
+                        }
+                        echo '</tbody></table>';
+                    }
+                    foreach ($sub['groups'] as $group) {
+                        $renderSubTable($group);
+                    }
+                    foreach ($sub['extract'] as $ep) {
+                        $devStatExtractPanels[] = $ep;
+                    }
+                    $panelEnd();
+                @endphp
+            </div>
+            @endforeach
+            @php
+                // Merge by_head + cum_head into one panel
+                $byHeadIdx  = null;
+                $cumHeadIdx = null;
+                foreach ($devStatExtractPanels as $i => $ep) {
+                    if ($ep['type'] === 'by_head')  { $byHeadIdx  = $i; }
+                    if ($ep['type'] === 'cum_head') { $cumHeadIdx = $i; }
+                }
+                if ($byHeadIdx !== null && $cumHeadIdx !== null) {
+                    $cumEp = $devStatExtractPanels[$cumHeadIdx];
+                    $cumMetrics = [];
+                    foreach ($cumEp['data']['fields'] as $f) {
+                        foreach ($cumEp['data']['heads'] as $h => $vals) {
+                            $cumMetrics[$f][$h] = $vals[$f] ?? null;
+                        }
+                    }
+                    $devStatExtractPanels[$byHeadIdx]['data']['metrics'] = array_merge(
+                        $devStatExtractPanels[$byHeadIdx]['data']['metrics'],
+                        $cumMetrics
+                    );
+                    $devStatExtractPanels[$byHeadIdx]['source'] =
+                        $devStatExtractPanels[$byHeadIdx]['source'] . ' &amp; ' . htmlspecialchars($cumEp['source']);
+                    $devStatExtractPanels[$byHeadIdx]['title'] = 'Per-head statistics';
+                    unset($devStatExtractPanels[$cumHeadIdx]);
+                }
+            @endphp
+            @foreach($devStatExtractPanels as $ep)
+            <div style="flex: 0 0 100%; width: 100%">
+                @php
+                    $panelStart(htmlspecialchars($ep['title']));
+                    echo '<p style="font-size:11px;margin:0 0 8px">'
+                        . 'Data from <em>' . $ep['source'] . '</em>'
+                        . ' &mdash; <a href="https://github.com/Seagate/openSeaChest/wiki/Drive-Health-and-SMART" target="_blank" rel="noopener">Seagate FARM reference</a>'
+                        . '</p>';
+                    $renderSubTable($ep, true, true);
                     $panelEnd();
                 @endphp
             </div>
@@ -717,6 +1289,108 @@
                 echo '</tbody></table>';
                 $panelEnd();
             @endphp
+        @endif
+
+        @if($showDetailed)
+        {{-- Last row: SATA PHY Event Counters, Error Recovery Control, Capabilities, Log Directory --}}
+        @php
+            $capFields = [
+                'capability_selftests_supported'     => 'Self-tests supported',
+                'capability_conveyance_supported'    => 'Conveyance self-test',
+                'capability_selective_supported'     => 'Selective self-test',
+                'capability_error_logging_supported' => 'Error logging',
+                'capability_gp_logging_supported'    => 'GP logging',
+                'capability_exec_offline_immediate'  => 'Exec offline immediate',
+                'capability_offline_aborted_on_cmd'  => 'Offline aborted on command',
+                'capability_offline_surface_scan'    => 'Offline surface scan',
+                'capability_attr_autosave'           => 'Attribute autosave',
+                'sct_error_recovery_supported'       => 'SCT error recovery control',
+                'sct_feature_control_supported'      => 'SCT feature control',
+                'sct_data_table_supported'           => 'SCT data table',
+            ];
+            $capRows = array_filter($capFields, fn ($col) => isset($info[$col]), ARRAY_FILTER_USE_KEY);
+        @endphp
+        @if(! empty($disk['phy_events']) || ! empty($disk['erc']) || $capRows !== [] || ! empty($disk['log_dir']))
+        <div class="smart-panels">
+            @if(! empty($disk['erc']))
+            <div>
+                @php
+                    $panelStart('Error Recovery Control (SCT ERC)');
+                    echo '<table class="table table-condensed table-hover" style="width:auto">';
+                    foreach ($disk['erc'] as $direction => $row) {
+                        $label = $data->decode('erc_direction', $direction);
+                        $ds = $row['deciseconds'] ?? null;
+                        $val = ($row['enabled'] ?? 0)
+                            ? (is_numeric($ds) ? number_format($ds / 10, 1) . ' s' : 'Enabled')
+                            : 'Disabled';
+                        echo $tableRow($label, htmlspecialchars($val), $tooltipForLabel($label));
+                    }
+                    echo '</table>';
+                    $panelEnd();
+                @endphp
+            </div>
+            @endif
+
+            @if($capRows !== [])
+            <div>
+                @php
+                    $panelStart('Capabilities');
+                    echo '<table class="table table-condensed table-hover" style="width:auto">';
+                    foreach ($capRows as $col => $label) {
+                        $val = (int) $info[$col];
+                        $icon = $val ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>';
+                        echo $tableRow($label, $icon, $tooltipForLabel($label));
+                    }
+                    echo '</table>';
+                    $panelEnd();
+                @endphp
+            </div>
+            @endif
+
+            @if(! empty($disk['log_dir']))
+            <div>
+                @php
+                    $panelStart('Log Directory', (string) count($disk['log_dir']));
+                    echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover" style="width:auto">';
+                    echo '<thead><tr><th>Address</th><th>Name</th><th>Readable</th><th>Writable</th><th>GP Sectors</th><th>SMART Sectors</th></tr></thead><tbody>';
+                    foreach ($disk['log_dir'] as $entry) {
+                        $rd = $entry['readable'] ?? null;
+                        $wr = $entry['writable'] ?? null;
+                        echo '<tr>'
+                            . '<td>0x' . sprintf('%02X', (int) ($entry['log_address'] ?? 0)) . '</td>'
+                            . '<td>' . htmlspecialchars((string) ($entry['name'] ?? '')) . '</td>'
+                            . '<td>' . ($rd !== null ? ((int) $rd ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>') : '') . '</td>'
+                            . '<td>' . ($wr !== null ? ((int) $wr ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>') : '') . '</td>'
+                            . '<td>' . htmlspecialchars((string) ($entry['gp_sectors'] ?? '')) . '</td>'
+                            . '<td>' . htmlspecialchars((string) ($entry['smart_sectors'] ?? '')) . '</td>'
+                            . '</tr>';
+                    }
+                    echo '</tbody></table></div>';
+                    $panelEnd();
+                @endphp
+            </div>
+            @endif
+
+            @if(! empty($disk['phy_events']))
+            <div>
+                @php
+                    $panelStart('SATA PHY Event Counters');
+                    echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover" style="width:auto">';
+                    echo '<thead><tr><th>ID</th><th>Name</th><th>Value</th></tr></thead><tbody>';
+                    foreach ($disk['phy_events'] as $ev) {
+                        $val = (string) ($ev['value'] ?? '');
+                        if (($ev['overflow'] ?? 0)) { $val .= ' <span class="text-warning">(overflow)</span>'; }
+                        echo '<tr><td>' . htmlspecialchars((string) ($ev['event_id'] ?? '')) . '</td>'
+                            . '<td>' . htmlspecialchars((string) ($ev['name'] ?? '')) . '</td>'
+                            . '<td>' . $val . '</td></tr>';
+                    }
+                    echo '</tbody></table></div>';
+                    $panelEnd();
+                @endphp
+            </div>
+            @endif
+        </div>
+        @endif
         @endif
     @endif
     @endif
