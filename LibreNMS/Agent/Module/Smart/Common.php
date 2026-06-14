@@ -40,6 +40,23 @@ class Common extends Application
     private const SATA_TID_DEV_STAT        = 11;
     private const SATA_TID_PENDING_DEFECTS = 12;
 
+    // SNMP returns enumerated table IDs as named strings (e.g. "sataInfo") when MIBs are loaded.
+    // Map them to the integer constants so change-detection lookups work correctly.
+    private const SATA_TID_NAMES = [
+        'sataInfo'           => 1,
+        'sataHealth'         => 2,
+        'sataAttr'           => 3,
+        'sataErrorLog'       => 4,
+        'sataErrorCmd'       => 5,
+        'sataSelfTest'       => 6,
+        'sataErc'            => 7,
+        'sataPhyEvent'       => 8,
+        'sataSelectiveTest'  => 9,
+        'sataLogDir'         => 10,
+        'sataDevStat'        => 11,
+        'sataPendingDefects' => 12,
+    ];
+
     /**
      * SmartmonSensorDataType → [LibreNMS sensor_class, sensor_type, index prefix]
      * Types other(1), unknown(2), vibration(8) have no useful LibreNMS mapping and are skipped.
@@ -226,13 +243,14 @@ class Common extends Application
         $devices = $this->sataDevices();
         $this->vlog('discoverSata: ' . count($devices) . ' SATA device(s) found');
 
-        $this->walkAndSyncSataTable('smartmonSataInfoTable', 1, $devices, self::SATA_TID_INFO, [$this, 'syncSataInfoRow']);
+        // Info table: sync unconditionally — static identity data not tracked in change table.
+        $this->walkAndSyncSataTable('smartmonSataInfoTable', 1, $devices, null, [$this, 'syncSataInfoRow']);
 
         // Tables needed for sensor discovery (always fetched).
         $this->sataAttributeTable();
         $this->sataHealthTable();
 
-        // For each SATA device: register SATA-specific sensors.
+        // For each SATA device: register SATA-specific sensors and sync health + attributes to DB.
         foreach ($devices as $devIdx => $dev) {
             $this->vlog("discoverSata: device idx={$devIdx} disk_key={$dev['disk_key']}");
             $this->discoverSataDeviceSensors(
@@ -240,6 +258,12 @@ class Common extends Application
                 $this->sataHealth[$devIdx]     ?? [],
                 $this->sataAttributes[$devIdx] ?? []
             );
+            if (isset($this->sataHealth[$devIdx])) {
+                $this->syncSataHealthRow($dev, $this->sataHealth[$devIdx]);
+            }
+            if (isset($this->sataAttributes[$devIdx])) {
+                $this->syncSataAttributeRows($dev, $this->sataAttributes[$devIdx]);
+            }
         }
 
         // Change-guarded tables (per device):
@@ -388,14 +412,7 @@ class Common extends Application
                 ]);
         }
 
-        $pollFailures = DB::table('smart_devices')
-            ->where('app_id', $this->app->app_id)
-            ->where('last_poll_result', '>', 1)
-            ->count();
-
-        update_application($this->app, 'ok', [
-            'poll_failures' => $pollFailures,
-        ]);
+        update_application($this->app, 'ok', null);
     }
 
     /**
@@ -424,7 +441,7 @@ class Common extends Application
         $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable',2, $devices, self::SATA_TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
 
         $this->persistSataChangeSnapshot();
-        update_application($this->app, 'ok', $this->app->data);
+        update_application($this->app, 'ok', null);
     }
 
     /**
@@ -659,10 +676,16 @@ class Common extends Application
         $this->sataChangeRows = [];
         foreach ($this->walkSataTable('smartSATAChangeByDeviceTable', 2) as $devIdx => $tableRows) {
             foreach ($tableRows as $tableId => $row) {
-                if (is_array($row)) {
-                    $this->sataChangeRows[(string) $devIdx][(string) $tableId] =
-                        $row['smartSATAChangeByDeviceLastChange'] ?? null;
+                if (! is_array($row)) {
+                    continue;
                 }
+                // SNMP returns named enum strings ("sataInfo") when MIBs are loaded; normalize to int.
+                $tid = self::SATA_TID_NAMES[(string) $tableId] ?? (is_numeric($tableId) ? (int) $tableId : null);
+                if ($tid === null) {
+                    continue;
+                }
+                $this->sataChangeRows[(string) $devIdx][(string) $tid] =
+                    $row['smartSATAChangeByDeviceLastChange'] ?? null;
             }
         }
 
@@ -675,9 +698,13 @@ class Common extends Application
                 if (! is_array($subindexes)) {
                     continue;
                 }
+                $tid = self::SATA_TID_NAMES[(string) $tableId] ?? (is_numeric($tableId) ? (int) $tableId : null);
+                if ($tid === null) {
+                    continue;
+                }
                 foreach ($subindexes as $subindex => $row) {
                     if (is_array($row)) {
-                        $this->sataSubindexChangeRows[(string) $devIdx][(string) $tableId][(string) $subindex] =
+                        $this->sataSubindexChangeRows[(string) $devIdx][(string) $tid][(string) $subindex] =
                             $row['smartSATAChangeBySubindexLastChange'] ?? null;
                     }
                 }
@@ -1309,18 +1336,21 @@ class Common extends Application
      * Pass null for $tableId to sync unconditionally (no change guard).
      */
     private function walkAndSyncSataTable(
-        string $table, int $depth, array $devices, int $tableId, callable $sync
+        string $table, int $depth, array $devices, ?int $tableId, callable $sync
     ): void {
-        $this->sataChangeByDeviceTable();
-        if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable($tableId)) {
-            $this->vlog("walkAndSyncSataTable: {$table} skipped (no changes)");
-            return;
+        $unconditional = $tableId === null;
+        if (! $unconditional) {
+            $this->sataChangeByDeviceTable();
+            if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable($tableId)) {
+                $this->vlog("walkAndSyncSataTable: {$table} skipped (no changes)");
+                return;
+            }
         }
 
         $this->vlog("walkAndSyncSataTable: walking {$table} (depth={$depth})");
         $synced = 0;
         foreach ($this->normalizeNestedIntegerRows($this->walkSataTable($table, $depth)) as $devIdx => $rows) {
-            if (isset($devices[$devIdx]) && $this->sataTableChangedForDevice($devIdx, $tableId)) {
+            if (isset($devices[$devIdx]) && ($unconditional || $this->sataTableChangedForDevice($devIdx, $tableId))) {
                 $sync($devices[$devIdx], $rows);
                 $synced++;
             }
@@ -1824,7 +1854,7 @@ class Common extends Application
     /** Convert SNMPv2 TruthValue to 1/0/null. TruthValue enum: true(1), false(2). */
     private function snmpTruthValue(mixed $value): ?int
     {
-        $int = $value;
+        $int = $this->intValue($value);
         if ($int === null) {
             return null;
         }
