@@ -41,7 +41,6 @@ use LibreNMS\Exceptions\RrdStoreException;
 use LibreNMS\RRD\RrdProcess;
 use LibreNMS\Util\Debug;
 use LibreNMS\Util\Rewrite;
-use Log;
 use SimpleXMLElement;
 use Symfony\Component\Process\Process;
 
@@ -291,8 +290,7 @@ class Rrd extends BaseDatastore
             return true;
         }
 
-        $result = $this->command('tune', $filename, $options);
-        $output = implode('', $result);
+        $output = $this->command('tune', $filename, $options);
 
         return ! str_contains($output, 'ERROR');
     }
@@ -402,7 +400,7 @@ class Rrd extends BaseDatastore
     private function getLastRateWindow(string $filename): ?array
     {
         // Align to the latest full PDP interval using configured rrd.step.
-        $output = (string) ($this->command('last', $filename)[0] ?? '');
+        $output = $this->command('last', $filename);
         if (! preg_match('/^\s*(\d+)/m', $output, $matches)) {
             return null;
         }
@@ -655,8 +653,7 @@ class Rrd extends BaseDatastore
             return true;
         }
 
-        $result = $this->command('tune', $filename, $options);
-        $output = implode('', $result);
+        $output = $this->command('tune', $filename, $options);
 
         return ! str_contains($output, 'ERROR');
     }
@@ -857,23 +854,13 @@ class Rrd extends BaseDatastore
             return $output;
         }
 
-        // send the command!
-        // info and tune must be synchronous: info output is required by listDatasets(), and tune
-        // errors must be detectable (async returns null output, masking failures).
-        if (in_array($command, ['last', 'list', 'lastupdate', 'info', 'tune']) && $this->init(false)) {
-            // send this to our synchronous process so output is guaranteed
-            $output = $this->sync_process->sendCommand(implode(' ', $cmd));
-        } elseif ($this->init()) {
-            // don't care about the return of other commands, so send them to the faster async process
-            $output = $this->async_process->sendCommand(implode(' ', $cmd));
-        } else {
-            Log::error('rrdtool could not start');
-        }
+        // send the command! RrdProcess::run() is synchronous and returns the full output,
+        // so info/tune output is guaranteed and tune errors remain detectable.
+        $this->init();
+        $output = $this->rrd->run($commandLine);
 
-        if (Debug::isVerbose()) {
-            echo 'RRDtool Output: ';
-            echo $output[0];
-            echo $output[1];
+        if (Debug::isVerbose() && $output) {
+            Log::debug('RRDtool Output: ' . $output);
         }
 
         $this->recordStatistic($stat->end());
