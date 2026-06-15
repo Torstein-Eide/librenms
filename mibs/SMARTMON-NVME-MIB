@@ -623,7 +623,7 @@ SmartmonNvmeHealthEntry ::= SEQUENCE {
     smartmonNvmeWarningTemperatureTimeMinutes   CounterBasedGauge64,
     smartmonNvmeCriticalTemperatureTimeMinutes  CounterBasedGauge64,
     smartmonNvmeCurrentSelfTestOperationValue   Unsigned32,
-    smartmonNvmeCurrentSelfTestOperationString  DisplayString,
+    smartmonNvmeCurrentSelfTestOperationProgress INTEGER,
     smartmonNvmeCurrentSelfTestCompletionPercent Unsigned32
 }
 
@@ -804,15 +804,20 @@ smartmonNvmeCurrentSelfTestOperationValue OBJECT-TYPE
          Zero indicates no self-test is in progress."
     ::= { smartmonNvmeHealthEntry 22 }
 
-smartmonNvmeCurrentSelfTestOperationString OBJECT-TYPE
-    SYNTAX      DisplayString
+smartmonNvmeCurrentSelfTestOperationProgress OBJECT-TYPE
+    SYNTAX      INTEGER {
+                    noOperationInProgress(0),
+                    shortDeviceSelfTest(1),
+                    extendedDeviceSelfTest(2),
+                    vendorSpecific(14)
+                }
     MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION
-        "Human-readable current self-test operation status
-         (nvme_self_test_log.current_self_test_operation.string),
-         for example No self-test in progress or Short device self-test
-         in progress."
+        "Self-test currently in progress, decoded from the NVMe Self-test
+         log current operation field: noOperationInProgress(0),
+         shortDeviceSelfTest(1), extendedDeviceSelfTest(2) or
+         vendorSpecific(14). Replaces the former human-readable string."
     ::= { smartmonNvmeHealthEntry 23 }
 
 smartmonNvmeCurrentSelfTestCompletionPercent OBJECT-TYPE

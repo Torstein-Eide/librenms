@@ -861,6 +861,18 @@ class Common extends Application
         ], $fields);
     }
 
+    /** Human label for the NVMe current self-test operation enum (0 = none → null). */
+    private function nvmeSelfTestOpLabel(?int $op): ?string
+    {
+        return match ($op) {
+            1 => 'Short device self-test in progress',
+            2 => 'Extended device self-test in progress',
+            14 => 'Vendor-specific self-test in progress',
+            null, 0 => null,
+            default => 'Self-test in progress',
+        };
+    }
+
     /** Resolve a SmartmonHealthStatus value (enum int, "passed(1)", or bare name) to 0-4. */
     private function healthStatusValue(mixed $raw): ?int
     {
@@ -1474,6 +1486,13 @@ class Common extends Application
 
     private function syncNvmeHealthRow(array $dev, array $row): void
     {
+        // Current self-test: prefer the new typed Progress enum, fall back to the raw value.
+        $selftestOp = $this->intValue(
+            $row['smartmonNvmeCurrentSelfTestOperationProgress']
+            ?? $row['smartmonNvmeCurrentSelfTestOperationValue']
+            ?? null
+        );
+
         DB::table('smart_nvme_health')->upsert([
             'app_id'               => $this->appId,
             'device_id'            => $this->deviceId,
@@ -1494,9 +1513,8 @@ class Common extends Application
             'num_err_log_entries'  => $this->intValue($row['smartmonNvmeErrorInformationLogEntries'] ?? null),
             'warning_temp_time'    => $this->intValue($row['smartmonNvmeWarningTemperatureTimeMinutes'] ?? null),
             'critical_comp_time'   => $this->intValue($row['smartmonNvmeCriticalTemperatureTimeMinutes'] ?? null),
-            'current_selftest_op'  => $this->intValue($row['smartmonNvmeCurrentSelfTestOperationValue'] ?? null),
-            'current_selftest_str' => isset($row['smartmonNvmeCurrentSelfTestOperationString'])
-                ? substr((string) $row['smartmonNvmeCurrentSelfTestOperationString'], 0, 96) : null,
+            'current_selftest_op'  => $selftestOp,
+            'current_selftest_str' => $this->nvmeSelfTestOpLabel($selftestOp),
             'current_selftest_pct' => $this->intValue($row['smartmonNvmeCurrentSelfTestCompletionPercent'] ?? null),
         ], ['app_id', 'disk_key'], [
             'overall_status', 'critical_warning',
