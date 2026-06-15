@@ -26,7 +26,8 @@
     $fmtBytes = static fn ($v) => is_numeric($v) ? \LibreNMS\Util\Number::formatBi((int) $v) : null;
     $yesNo   = static fn ($v) => $v === null ? null : ((int) $v ? 'Yes' : 'No');
 
-    // Current self-test operation (in progress). 0 = none.
+    // Self-test panel badge: in-progress operation while running, otherwise the
+    // result of the most recent completed self-test.
     $curOp  = (int) ($health['current_selftest_op'] ?? 0);
     $curStr = trim((string) ($health['current_selftest_str'] ?? ''));
     $curPct = $health['current_selftest_pct'] ?? null;
@@ -37,6 +38,22 @@
             $txt .= ' ' . (int) $curPct . '%';
         }
         $selftestBadge = '<span class="label label-info">' . htmlspecialchars($txt) . '</span>';
+    } elseif (! empty($disk['selftests'])) {
+        $latest = null;
+        foreach ($disk['selftests'] as $st) {
+            if ($latest === null || (int) ($st['power_on_hours'] ?? 0) >= (int) ($latest['power_on_hours'] ?? 0)) {
+                $latest = $st;
+            }
+        }
+        $rt = trim((string) ($latest['result_text'] ?? ''));
+        if ($rt === '') {
+            $rt = (string) ($latest['result'] ?? '');
+        }
+        if ($rt !== '') {
+            // Gray (default) for a clean pass; warning otherwise.
+            $ok = stripos($rt, 'without error') !== false || stripos($rt, 'success') !== false || stripos($rt, 'completed') !== false;
+            $selftestBadge = '<span class="label label-' . ($ok ? 'default' : 'warning') . '">' . htmlspecialchars($rt) . '</span>';
+        }
     }
 @endphp
 
