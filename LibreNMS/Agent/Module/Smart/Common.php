@@ -86,22 +86,23 @@ class Common extends Application
 
     private const NVME_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-NVME-MIB'];
 
-    // NVMe SMART/Health columns written to the per-disk RRD: MIB column => [DS name (<=19), DS type].
-    // Throughput-style figures are COUNTER (graphed as a rate); absolute counters are GAUGE.
+    // NVMe SMART/Health columns written to the per-disk smart_nvme RRD: MIB column => [DS name, type].
+    // DS names + types MUST match the V1 nvmeDsMap (smart.php) and smart_v2_nvme.inc.php graph,
+    // since V1 and V2 share the same smart_nvme RRD file. Rate-style figures are DERIVE.
     private const NVME_HEALTH_RRD = [
-        'smartmonNvmeDataUnitsRead'             => ['dataUnitsRead',    'COUNTER'],
-        'smartmonNvmeDataUnitsWritten'          => ['dataUnitsWritten', 'COUNTER'],
-        'smartmonNvmeDataBytesRead'             => ['dataBytesRead',    'COUNTER'],
-        'smartmonNvmeDataBytesWritten'          => ['dataBytesWritten', 'COUNTER'],
-        'smartmonNvmeHostReadCommands'          => ['hostReadCmds',     'COUNTER'],
-        'smartmonNvmeHostWriteCommands'         => ['hostWriteCmds',    'COUNTER'],
-        'smartmonNvmeControllerBusyTimeMinutes' => ['ctrlBusyTime',     'COUNTER'],
-        'smartmonNvmeMediaDataIntegrityErrors'  => ['mediaErrors',      'GAUGE'],
-        'smartmonNvmeErrorInformationLogEntries' => ['errLogEntries',   'GAUGE'],
-        'smartmonNvmePowerCycles'               => ['powerCycles',      'GAUGE'],
-        'smartmonNvmePowerOnHours'              => ['powerOnHours',     'GAUGE'],
-        'smartmonNvmeUnsafeShutdowns'           => ['unsafeShutdowns',  'GAUGE'],
-        'smartmonNvmeCriticalWarning'           => ['critWarning',      'GAUGE'],
+        'smartmonNvmeDataUnitsRead'                  => ['du_rd',        'DERIVE'],
+        'smartmonNvmeDataUnitsWritten'               => ['du_wr',        'DERIVE'],
+        'smartmonNvmeHostReadCommands'               => ['host_rd',      'DERIVE'],
+        'smartmonNvmeHostWriteCommands'              => ['host_wr',      'DERIVE'],
+        'smartmonNvmeControllerBusyTimeMinutes'      => ['ctrl_busy',    'DERIVE'],
+        'smartmonNvmeWarningTemperatureTimeMinutes'  => ['warn_tmp_t',   'DERIVE'],
+        'smartmonNvmeCriticalTemperatureTimeMinutes' => ['crit_cmp_t',   'DERIVE'],
+        'smartmonNvmeMediaDataIntegrityErrors'       => ['media_errors', 'GAUGE'],
+        'smartmonNvmeErrorInformationLogEntries'     => ['err_log_cnt',  'GAUGE'],
+        'smartmonNvmePowerCycles'                    => ['pwr_cycles',   'GAUGE'],
+        'smartmonNvmePowerOnHours'                   => ['pwr_hours',    'GAUGE'],
+        'smartmonNvmeUnsafeShutdowns'                => ['unsafe_shut',  'GAUGE'],
+        'smartmonNvmeCriticalWarning'                => ['crit_warn',    'GAUGE'],
     ];
 
     // SmartmonHealthStatus enum: unknown(0), passed(1), failed(2), warning(3), unavailable(4).
@@ -445,7 +446,6 @@ class Common extends Application
                 $expected[] = "app:smart_mib:{$idx}_selftest_status";
             } elseif (in_array($deviceType, self::NVME_TYPES, true)) {
                 $expected[] = "app:smart_mib:{$idx}_health";
-                $expected[] = "app:smart_mib:{$idx}_nvme_crit_warn";
             }
         }
 
@@ -599,23 +599,14 @@ class Common extends Application
             $idx = $this->mibDiskIndex($diskKey);
             $sensors = $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
 
-            // Health state sensor — overall status stored at poll time
+            // Merged health state — overall status + critical warning stored at poll time.
             if ($sensor = $sensors->get("{$idx}_health")) {
-                $value = DB::table('smart_nvme_health')
+                $row = DB::table('smart_nvme_health')
                     ->where('app_id', $this->appId)
                     ->where('disk_key', $diskKey)
-                    ->value('overall_status');
+                    ->first(['overall_status', 'critical_warning']);
+                $value = $row === null ? null : $this->nvmeHealthLevel($row->overall_status, $row->critical_warning);
                 $this->updateMibSensor($this->device, $sensor, $value !== null ? (float) $value : null);
-            }
-
-            // Critical-warning state: OK(1) when the bitmask is clear, Critical(2) otherwise.
-            if ($sensor = $sensors->get("{$idx}_nvme_crit_warn")) {
-                $raw = DB::table('smart_nvme_health')
-                    ->where('app_id', $this->appId)
-                    ->where('disk_key', $diskKey)
-                    ->value('critical_warning');
-                $state = $raw === null ? null : ($raw ? 2 : 1);
-                $this->updateMibSensor($this->device, $sensor, $state !== null ? (float) $state : null);
             }
         }
     }
@@ -724,6 +715,10 @@ class Common extends Application
 
         $controllers = $this->walkNvmeTable('smartmonNvmeControllerTable', 2);
         $namespaces = $this->walkNvmeTable('smartmonNvmeNamespaceTable', 2);
+        $powerStates = $this->walkNvmeTable('smartmonNvmePowerStateTable', 2);
+        $lbaFormats = $this->walkNvmeTable('smartmonNvmeLbaFormatTable', 3);
+        $capabilities = $this->walkNvmeTable('smartmonNvmeCapabilityTable', 2);
+        $errors = $this->walkNvmeTable('smartmonNvmeErrorLogTable', 2);
         $selftests = $this->walkNvmeTable('smartmonNvmeSelfTestTable', 2);
         $health = $this->walkNvmeTable('smartmonNvmeHealthTable', 2);
 
@@ -735,7 +730,13 @@ class Common extends Application
                 $this->syncNvmeInfoRow($dev, $ctrl);
             }
             $this->syncNvmeNamespaceRows($dev, $this->subRows($namespaces[$key] ?? null));
+            $this->syncNvmePowerStateRows($dev, $this->subRows($powerStates[$key] ?? null));
+            $this->syncNvmeLbaFormatRows($dev, is_array($lbaFormats[$key] ?? null) ? $lbaFormats[$key] : []);
             $this->syncNvmeSelfTestRows($dev, $this->subRows($selftests[$key] ?? null));
+            $this->syncNvmeErrorLogRows($dev, $this->subRows($errors[$key] ?? null));
+            if ($cap = $this->firstSubRow($capabilities[$key] ?? null)) {
+                $this->syncNvmeCapabilityRow($dev, $cap);
+            }
 
             if ($healthRow = $this->firstSubRow($health[$key] ?? null)) {
                 $this->syncNvmeHealthRow($dev, $healthRow);
@@ -746,66 +747,68 @@ class Common extends Application
         $this->syncNvmeSensorTypes();
     }
 
-    /** Register the NVMe health-state and critical-warning state sensors for one device. */
+    /** Register the merged NVMe health-state sensor (overall status + critical warning) for one device. */
     private function discoverNvmeDeviceSensors(array $dev, array $health): void
     {
+        if (! isset($health['smartmonNvmeHealthOverallStatus'])) {
+            return;
+        }
+
         $device = $this->device;
         $idx = $this->mibDiskIndex($dev['disk_key']);
         $devName = $this->sensorLabel($dev, $dev['snmp_index']);
         $group = 'SMART';
 
-        // Health: overall SmartmonHealthStatus enum (0-4).
-        if (isset($health['smartmonNvmeHealthOverallStatus'])) {
-            $overall = $this->healthStatusValue($health['smartmonNvmeHealthOverallStatus']);
-            app('sensor-discovery')
-                ->discover(new Sensor([
-                    'device_id'      => $device['device_id'],
-                    'poller_type'    => 'agent',
-                    'sensor_class'   => 'state',
-                    'sensor_type'    => 'smart_nvme_health',
-                    'sensor_index'   => "{$idx}_health",
-                    'sensor_oid'     => "app:smart_mib:{$idx}_health",
-                    'group'          => $group,
-                    'sensor_descr'   => "{$group} {$devName} Health",
-                    'sensor_current' => $overall,
-                ]))
-                ->withStateTranslations('smart_nvme_health', [
-                    StateTranslation::define('Unknown', 0, Severity::Warning),
-                    StateTranslation::define('OK', 1, Severity::Ok),
-                    StateTranslation::define('Failed', 2, Severity::Error),
-                    StateTranslation::define('Warning', 3, Severity::Warning),
-                    StateTranslation::define('Unavailable', 4, Severity::Warning),
-                ]);
+        $state = $this->nvmeHealthLevel(
+            $health['smartmonNvmeHealthOverallStatus'],
+            $health['smartmonNvmeCriticalWarning'] ?? null
+        );
+
+        app('sensor-discovery')
+            ->discover(new Sensor([
+                'device_id'      => $device['device_id'],
+                'poller_type'    => 'agent',
+                'sensor_class'   => 'state',
+                'sensor_type'    => 'smart_nvme_health',
+                'sensor_index'   => "{$idx}_health",
+                'sensor_oid'     => "app:smart_mib:{$idx}_health",
+                'group'          => $group,
+                'sensor_descr'   => "{$group} {$devName} Health",
+                'sensor_current' => $state,
+            ]))
+            ->withStateTranslations('smart_nvme_health', [
+                StateTranslation::define('OK', 1, Severity::Ok),
+                StateTranslation::define('Warning', 2, Severity::Warning),
+                StateTranslation::define('Failed', 3, Severity::Error),
+                StateTranslation::define('Critical Warning', 4, Severity::Error),
+                StateTranslation::define('Unavailable', 5, Severity::Warning),
+            ]);
+    }
+
+    /**
+     * Merge SmartmonHealthStatus and the Critical Warning bitmask into a single
+     * 1–5 health level. A set critical-warning bit always escalates to Critical(4),
+     * since those conditions (spare low, temp critical, read-only, …) are urgent.
+     */
+    private function nvmeHealthLevel(mixed $overallRaw, mixed $critRaw): int
+    {
+        if ($this->parseBitsValue($critRaw)) {
+            return 4; // Critical Warning
         }
 
-        // Critical warning: collapse the bitmask to OK(1) / Critical(2) for alerting.
-        $critWarn = $this->parseBitsValue($health['smartmonNvmeCriticalWarning'] ?? null);
-        if ($critWarn !== null) {
-            app('sensor-discovery')
-                ->discover(new Sensor([
-                    'device_id'      => $device['device_id'],
-                    'poller_type'    => 'agent',
-                    'sensor_class'   => 'state',
-                    'sensor_type'    => 'smart_nvme_crit_warn',
-                    'sensor_index'   => "{$idx}_nvme_crit_warn",
-                    'sensor_oid'     => "app:smart_mib:{$idx}_nvme_crit_warn",
-                    'group'          => $group,
-                    'sensor_descr'   => "{$group} {$devName} Critical Warning",
-                    'sensor_current' => $critWarn ? 2 : 1,
-                ]))
-                ->withStateTranslations('smart_nvme_crit_warn', [
-                    StateTranslation::define('OK', 1, Severity::Ok),
-                    StateTranslation::define('Critical', 2, Severity::Error),
-                ]);
-        }
+        return match ($this->healthStatusValue($overallRaw)) {
+            1 => 1,       // passed       -> OK
+            2 => 3,       // failed       -> Failed
+            4 => 5,       // unavailable  -> Unavailable
+            3 => 2,       // warning      -> Warning
+            default => 2, // unknown/null -> Warning
+        };
     }
 
     /** Register NVMe-specific sensor types with the discovery system. */
     private function syncNvmeSensorTypes(): void
     {
-        foreach (['smart_nvme_health', 'smart_nvme_crit_warn'] as $type) {
-            app('sensor-discovery')->sync(sensor_type: $type);
-        }
+        app('sensor-discovery')->sync(sensor_type: 'smart_nvme_health');
     }
 
     /**
@@ -821,6 +824,7 @@ class Common extends Application
 
         $health = $this->walkNvmeTable('smartmonNvmeHealthTable', 2);
         $selftests = $this->walkNvmeTable('smartmonNvmeSelfTestTable', 2);
+        $errors = $this->walkNvmeTable('smartmonNvmeErrorLogTable', 2);
 
         foreach ($this->nvmeDeviceList as $devIdx => $dev) {
             $key = (string) $devIdx;
@@ -829,6 +833,7 @@ class Common extends Application
                 $this->pollNvmeDeviceRrd($dev, $healthRow);
             }
             $this->syncNvmeSelfTestRows($dev, $this->subRows($selftests[$key] ?? null));
+            $this->syncNvmeErrorLogRows($dev, $this->subRows($errors[$key] ?? null));
         }
     }
 
@@ -1519,20 +1524,134 @@ class Common extends Application
     {
         foreach ($rows as $entryIndex => $row) {
             DB::table('smart_nvme_selftest_log')->upsert([
-                'app_id'         => $this->appId,
-                'device_id'      => $this->deviceId,
-                'disk_key'       => $dev['disk_key'],
-                'entry_num'      => (int) $entryIndex,
-                'test_type'      => $this->intValue($row['smartmonNvmeSelfTestType'] ?? null),
-                'result'         => $this->intValue($row['smartmonNvmeSelfTestResult'] ?? null),
-                'power_on_hours' => $this->intValue($row['smartmonNvmeSelfTestPowerOnHours'] ?? null),
-                'failing_lba'    => $this->intValue($row['smartmonNvmeSelfTestFailingLba'] ?? null),
-                'nsid'           => $this->intValue($row['smartmonNvmeSelfTestNamespaceId'] ?? null),
+                'app_id'               => $this->appId,
+                'device_id'            => $this->deviceId,
+                'disk_key'             => $dev['disk_key'],
+                'entry_num'            => (int) $entryIndex,
+                'test_type'            => $this->intValue($row['smartmonNvmeSelfTestType'] ?? null),
+                'result'               => $this->intValue($row['smartmonNvmeSelfTestResult'] ?? null),
+                'result_text'          => isset($row['smartmonNvmeSelfTestResultText'])
+                    ? substr((string) $row['smartmonNvmeSelfTestResultText'], 0, 96) : null,
+                'power_on_hours'       => $this->intValue($row['smartmonNvmeSelfTestPowerOnHours'] ?? null),
+                'failing_lba'          => $this->intValue($row['smartmonNvmeSelfTestFailingLba'] ?? null),
+                'nsid'                 => $this->intValue($row['smartmonNvmeSelfTestNamespaceId'] ?? null),
+                'estimated_completion' => $this->parseDateAndTime($row['smartmonNvmeSelfTestEstimatedCompletionTime'] ?? null),
             ], ['app_id', 'disk_key', 'entry_num'], [
-                'test_type', 'result', 'power_on_hours', 'failing_lba', 'nsid',
+                'test_type', 'result', 'result_text', 'power_on_hours',
+                'failing_lba', 'nsid', 'estimated_completion',
             ]);
         }
         $this->pruneStaleRows('smart_nvme_selftest_log', $dev['disk_key'], 'entry_num', array_keys($rows));
+    }
+
+    private function syncNvmePowerStateRows(array $dev, array $rows): void
+    {
+        foreach ($rows as $stateId => $row) {
+            DB::table('smart_nvme_power_states')->upsert([
+                'app_id'                => $this->appId,
+                'device_id'             => $this->deviceId,
+                'disk_key'              => $dev['disk_key'],
+                'state_id'              => (int) $stateId,
+                'operational'           => $this->snmpTruthValue($row['smartmonNvmePowerStateOperational'] ?? null),
+                'max_power_mw'          => $this->intValue($row['smartmonNvmePowerStateMaxPowerMilliWatts'] ?? null),
+                'active_power_mw'       => $this->intValue($row['smartmonNvmePowerStateActivePowerMilliWatts'] ?? null),
+                'idle_power_mw'         => $this->intValue($row['smartmonNvmePowerStateIdlePowerMilliWatts'] ?? null),
+                'read_latency_rank'     => $this->intValue($row['smartmonNvmePowerStateReadLatencyRank'] ?? null),
+                'read_throughput_rank'  => $this->intValue($row['smartmonNvmePowerStateReadThroughputRank'] ?? null),
+                'write_latency_rank'    => $this->intValue($row['smartmonNvmePowerStateWriteLatencyRank'] ?? null),
+                'write_throughput_rank' => $this->intValue($row['smartmonNvmePowerStateWriteThroughputRank'] ?? null),
+                'entry_latency_us'      => $this->intValue($row['smartmonNvmePowerStateEntryLatencyUsec'] ?? null),
+                'exit_latency_us'       => $this->intValue($row['smartmonNvmePowerStateExitLatencyUsec'] ?? null),
+            ], ['app_id', 'disk_key', 'state_id'], [
+                'operational', 'max_power_mw', 'active_power_mw', 'idle_power_mw',
+                'read_latency_rank', 'read_throughput_rank', 'write_latency_rank',
+                'write_throughput_rank', 'entry_latency_us', 'exit_latency_us',
+            ]);
+        }
+        $this->pruneStaleRows('smart_nvme_power_states', $dev['disk_key'], 'state_id', array_keys($rows));
+    }
+
+    /** LBA formats are indexed per namespace: $nsFormats = [nsId => [formatId => row]]. */
+    private function syncNvmeLbaFormatRows(array $dev, array $nsFormats): void
+    {
+        foreach ($nsFormats as $nsId => $formats) {
+            if (! is_array($formats)) {
+                continue;
+            }
+            foreach ($formats as $formatId => $row) {
+                DB::table('smart_nvme_lba_formats')->upsert([
+                    'app_id'               => $this->appId,
+                    'device_id'            => $this->deviceId,
+                    'disk_key'             => $dev['disk_key'],
+                    'ns_id'                => (int) $nsId,
+                    'format_id'            => (int) $formatId,
+                    'current'              => $this->snmpTruthValue($row['smartmonNvmeLbaFormatCurrent'] ?? null),
+                    'data_size_bytes'      => $this->intValue($row['smartmonNvmeLbaFormatDataSizeBytes'] ?? null),
+                    'metadata_size_bytes'  => $this->intValue($row['smartmonNvmeLbaFormatMetadataSizeBytes'] ?? null),
+                    'relative_performance' => $this->intValue($row['smartmonNvmeLbaFormatRelativePerformance'] ?? null),
+                ], ['app_id', 'disk_key', 'ns_id', 'format_id'], [
+                    'current', 'data_size_bytes', 'metadata_size_bytes', 'relative_performance',
+                ]);
+            }
+            $this->pruneStaleRows('smart_nvme_lba_formats', $dev['disk_key'], 'format_id', array_keys($formats), ['ns_id' => (int) $nsId]);
+        }
+        $this->pruneStaleRows('smart_nvme_lba_formats', $dev['disk_key'], 'ns_id', array_keys($nsFormats));
+    }
+
+    private function syncNvmeErrorLogRows(array $dev, array $rows): void
+    {
+        foreach ($rows as $entryIndex => $row) {
+            DB::table('smart_nvme_error_log')->upsert([
+                'app_id'               => $this->appId,
+                'device_id'            => $this->deviceId,
+                'disk_key'             => $dev['disk_key'],
+                'entry_num'            => (int) $entryIndex,
+                'error_count'          => $this->intValue($row['smartmonNvmeErrorCount'] ?? null),
+                'sq_id'                => $this->intValue($row['smartmonNvmeErrorSubmissionQueueId'] ?? null),
+                'command_id'           => $this->intValue($row['smartmonNvmeErrorCommandId'] ?? null),
+                'status_field'         => $this->intValue($row['smartmonNvmeErrorStatusField'] ?? null),
+                'param_error_location' => $this->intValue($row['smartmonNvmeErrorParameterErrorLocation'] ?? null),
+                'lba'                  => $this->intValue($row['smartmonNvmeErrorLba'] ?? null),
+                'ns_id'                => $this->intValue($row['smartmonNvmeErrorNamespaceId'] ?? null),
+                'vendor_info'          => $this->intValue($row['smartmonNvmeErrorVendorSpecificInfo'] ?? null),
+                'status_code'          => $this->intValue($row['smartmonNvmeErrorStatusCode'] ?? null),
+                'status_code_type'     => $this->intValue($row['smartmonNvmeErrorStatusCodeType'] ?? null),
+                'do_not_retry'         => $this->snmpTruthValue($row['smartmonNvmeErrorDoNotRetry'] ?? null),
+                'status_string'        => isset($row['smartmonNvmeErrorStatusString'])
+                    ? substr((string) $row['smartmonNvmeErrorStatusString'], 0, 128) : null,
+                'error_time'           => $this->parseDateAndTime($row['smartmonNvmeErrorTimestamp'] ?? null),
+            ], ['app_id', 'disk_key', 'entry_num'], [
+                'error_count', 'sq_id', 'command_id', 'status_field', 'param_error_location',
+                'lba', 'ns_id', 'vendor_info', 'status_code', 'status_code_type',
+                'do_not_retry', 'status_string', 'error_time',
+            ]);
+        }
+        $this->pruneStaleRows('smart_nvme_error_log', $dev['disk_key'], 'entry_num', array_keys($rows));
+    }
+
+    private function syncNvmeCapabilityRow(array $dev, array $row): void
+    {
+        DB::table('smart_nvme_capability')->upsert([
+            'app_id'                  => $this->appId,
+            'device_id'               => $this->deviceId,
+            'disk_key'                => $dev['disk_key'],
+            'firmware_update_raw'     => $this->intValue($row['smartmonNvmeFirmwareUpdateRaw'] ?? null),
+            'firmware_slot_count'     => $this->intValue($row['smartmonNvmeFirmwareSlotCount'] ?? null),
+            'firmware_reset_required' => $this->snmpTruthValue($row['smartmonNvmeFirmwareResetRequired'] ?? null),
+            'optional_admin_cmd_raw'  => $this->intValue($row['smartmonNvmeOptionalAdminCommandRaw'] ?? null),
+            'optional_nvm_cmd_raw'    => $this->intValue($row['smartmonNvmeOptionalNvmCommandRaw'] ?? null),
+            'log_page_attrs_raw'      => $this->intValue($row['smartmonNvmeLogPageAttributesRaw'] ?? null),
+            'optional_admin_cmd_text' => isset($row['smartmonNvmeOptionalAdminCommandText'])
+                ? substr((string) $row['smartmonNvmeOptionalAdminCommandText'], 0, 255) : null,
+            'optional_nvm_cmd_text'   => isset($row['smartmonNvmeOptionalNvmCommandText'])
+                ? substr((string) $row['smartmonNvmeOptionalNvmCommandText'], 0, 255) : null,
+            'log_page_attrs_text'     => isset($row['smartmonNvmeLogPageAttributesText'])
+                ? substr((string) $row['smartmonNvmeLogPageAttributesText'], 0, 255) : null,
+        ], ['app_id', 'disk_key'], [
+            'firmware_update_raw', 'firmware_slot_count', 'firmware_reset_required',
+            'optional_admin_cmd_raw', 'optional_nvm_cmd_raw', 'log_page_attrs_raw',
+            'optional_admin_cmd_text', 'optional_nvm_cmd_text', 'log_page_attrs_text',
+        ]);
     }
 
     /** Poll-time narrowed walk: value + overflow only (name/size already in DB from discovery). */

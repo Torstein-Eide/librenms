@@ -300,10 +300,84 @@ return new class extends Migration {
             $table->unsignedTinyInteger('entry_num');
             $table->unsignedTinyInteger('test_type')->nullable();
             $table->unsignedTinyInteger('result')->nullable();
+            $table->string('result_text', 96)->nullable();
             $table->unsignedBigInteger('power_on_hours')->nullable();
             $table->unsignedBigInteger('failing_lba')->nullable();
             $table->unsignedInteger('nsid')->nullable();
+            $table->dateTime('estimated_completion')->nullable();
             $table->unique(['app_id', 'disk_key', 'entry_num']);
+        });
+
+        Schema::create('smart_nvme_power_states', function (Blueprint $table) {
+            $table->bigIncrements('id');
+            $table->unsignedInteger('app_id');
+            $table->unsignedInteger('device_id');
+            $table->string('disk_key', 160);
+            $table->unsignedTinyInteger('state_id');
+            $table->boolean('operational')->nullable();
+            $table->unsignedInteger('max_power_mw')->nullable();
+            $table->unsignedInteger('active_power_mw')->nullable();
+            $table->unsignedInteger('idle_power_mw')->nullable();
+            $table->unsignedTinyInteger('read_latency_rank')->nullable();
+            $table->unsignedTinyInteger('read_throughput_rank')->nullable();
+            $table->unsignedTinyInteger('write_latency_rank')->nullable();
+            $table->unsignedTinyInteger('write_throughput_rank')->nullable();
+            $table->unsignedInteger('entry_latency_us')->nullable();
+            $table->unsignedInteger('exit_latency_us')->nullable();
+            $table->unique(['app_id', 'disk_key', 'state_id'], 'smart_nvme_power_states_unique');
+        });
+
+        Schema::create('smart_nvme_lba_formats', function (Blueprint $table) {
+            $table->bigIncrements('id');
+            $table->unsignedInteger('app_id');
+            $table->unsignedInteger('device_id');
+            $table->string('disk_key', 160);
+            $table->unsignedInteger('ns_id');
+            $table->unsignedTinyInteger('format_id');
+            $table->boolean('current')->nullable();
+            $table->unsignedInteger('data_size_bytes')->nullable();
+            $table->unsignedInteger('metadata_size_bytes')->nullable();
+            $table->unsignedTinyInteger('relative_performance')->nullable();
+            $table->unique(['app_id', 'disk_key', 'ns_id', 'format_id'], 'smart_nvme_lba_formats_unique');
+        });
+
+        Schema::create('smart_nvme_error_log', function (Blueprint $table) {
+            $table->bigIncrements('id');
+            $table->unsignedInteger('app_id');
+            $table->unsignedInteger('device_id');
+            $table->string('disk_key', 160);
+            $table->unsignedInteger('entry_num');
+            $table->unsignedBigInteger('error_count')->nullable();
+            $table->unsignedInteger('sq_id')->nullable();
+            $table->unsignedInteger('command_id')->nullable();
+            $table->unsignedInteger('status_field')->nullable();
+            $table->unsignedInteger('param_error_location')->nullable();
+            $table->unsignedBigInteger('lba')->nullable();
+            $table->unsignedInteger('ns_id')->nullable();
+            $table->unsignedInteger('vendor_info')->nullable();
+            $table->unsignedInteger('status_code')->nullable();
+            $table->unsignedInteger('status_code_type')->nullable();
+            $table->boolean('do_not_retry')->nullable();
+            $table->string('status_string', 128)->nullable();
+            $table->dateTime('error_time')->nullable();
+            $table->unique(['app_id', 'disk_key', 'entry_num'], 'smart_nvme_error_log_unique');
+        });
+
+        Schema::create('smart_nvme_capability', function (Blueprint $table) {
+            $table->bigIncrements('id');
+            $table->unsignedInteger('app_id');
+            $table->unsignedInteger('device_id');
+            $table->string('disk_key', 160);
+            $table->unsignedInteger('firmware_update_raw')->nullable();
+            $table->unsignedTinyInteger('firmware_slot_count')->nullable();
+            $table->boolean('firmware_reset_required')->nullable();
+            $table->unsignedInteger('optional_admin_cmd_raw')->nullable();
+            $table->unsignedInteger('optional_nvm_cmd_raw')->nullable();
+            $table->unsignedInteger('log_page_attrs_raw')->nullable();
+            $table->string('optional_admin_cmd_text', 255)->nullable();
+            $table->string('optional_nvm_cmd_text', 255)->nullable();
+            $table->string('log_page_attrs_text', 255)->nullable();
+            $table->unique(['app_id', 'disk_key'], 'smart_nvme_capability_unique');
         });
 
         Schema::create('smart_sas_info', function (Blueprint $table) {
@@ -378,6 +452,10 @@ return new class extends Migration {
         Schema::drop('smart_sas_error_counters');
         Schema::drop('smart_sas_health');
         Schema::drop('smart_sas_info');
+        Schema::drop('smart_nvme_capability');
+        Schema::drop('smart_nvme_error_log');
+        Schema::drop('smart_nvme_lba_formats');
+        Schema::drop('smart_nvme_power_states');
         Schema::drop('smart_nvme_selftest_log');
         Schema::drop('smart_nvme_namespaces');
         Schema::drop('smart_nvme_health');
