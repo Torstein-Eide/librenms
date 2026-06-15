@@ -647,8 +647,16 @@
                     echo '<p style="margin-bottom:6px"><strong>Offline collection:</strong> ' . htmlspecialchars((int) $offlineSecs . ' s') . ($offlineStatus !== null ? ' — ' . htmlspecialchars($data->decode('offline_status', $offlineStatus)) : '') . '</p>';
                 }
                 if (! empty($disk['selftests'])) {
+                    $hasLba = false;
+                    foreach ($disk['selftests'] as $e) {
+                        if (is_numeric($e['lba_first_error'] ?? null) && (int) $e['lba_first_error'] > 0) {
+                            $hasLba = true;
+                            break;
+                        }
+                    }
                     echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover">';
-                    echo '<thead><tr><th>#</th><th>Type</th><th>Result</th><th>Hours</th><th>Remaining</th><th>First LBA Error</th></tr></thead><tbody>';
+                    echo '<thead><tr><th>Hours</th><th>Type</th><th>Status</th><th>Remaining Percent</th>'
+                        . ($hasLba ? '<th>First LBA Error</th>' : '') . '</tr></thead><tbody>';
                     foreach ($disk['selftests'] as $entry) {
                         $h = $entry['power_on_hours'] ?? null;
                         $hoursCell = (string) ($h ?? '');
@@ -657,14 +665,14 @@
                             $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
                         }
                         $rem = $entry['remaining_pct'] ?? null;
+                        $remCell = (is_numeric($rem) && (int) $rem > 0) ? ((int) $rem) . '%' : '';
                         $lba = $entry['lba_first_error'] ?? null;
                         echo '<tr>'
-                            . '<td>' . htmlspecialchars((string) ($entry['entry_num'] ?? '')) . '</td>'
+                            . '<td>' . htmlspecialchars($hoursCell) . '</td>'
                             . '<td>' . htmlspecialchars($data->decode('selftest_type', $entry['test_type'] ?? null)) . '</td>'
                             . '<td>' . htmlspecialchars($data->decode('selftest_result', $entry['result'] ?? null)) . '</td>'
-                            . '<td>' . htmlspecialchars($hoursCell) . '</td>'
-                            . '<td>' . ($rem !== null && is_numeric($rem) ? htmlspecialchars(((int) $rem) . '%') : '') . '</td>'
-                            . '<td>' . ($lba !== null ? htmlspecialchars((string) $lba) : '') . '</td>'
+                            . '<td>' . htmlspecialchars($remCell) . '</td>'
+                            . ($hasLba ? '<td>' . (is_numeric($lba) && (int) $lba > 0 ? htmlspecialchars((string) $lba) : '') . '</td>' : '')
                             . '</tr>';
                     }
                     echo '</tbody></table></div>';

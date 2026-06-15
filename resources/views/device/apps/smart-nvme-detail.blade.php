@@ -135,16 +135,26 @@
     <div>
         @php
             $panelStart('Self-test Log');
+            $hasLba = false;
+            foreach ($disk['selftests'] as $e) {
+                if (is_numeric($e['failing_lba'] ?? null) && (int) $e['failing_lba'] > 0) {
+                    $hasLba = true;
+                    break;
+                }
+            }
             echo '<table class="table table-condensed table-hover"><thead><tr>'
-                . '<th>#</th><th>Type</th><th>Result</th><th>Power On Hours</th><th>NSID</th></tr></thead><tbody>';
+                . '<th>Hours</th><th>Type</th><th>Status</th><th>Remaining Percent</th>'
+                . ($hasLba ? '<th>First LBA Error</th>' : '') . '</tr></thead><tbody>';
             foreach ($disk['selftests'] as $st) {
                 $type = match ((int) ($st['test_type'] ?? 0)) { 1 => 'Short', 2 => 'Extended', 255 => 'Vendor', default => '-' };
                 $result = trim((string) ($st['result_text'] ?? '')) !== '' ? $st['result_text'] : (string) ($st['result'] ?? '-');
-                echo '<tr><td>' . htmlspecialchars((string) ($st['entry_num'] ?? '-')) . '</td>'
+                $lba = $st['failing_lba'] ?? null;
+                echo '<tr><td>' . htmlspecialchars($fmtInt($st['power_on_hours'] ?? null) ?? '-') . '</td>'
                     . '<td>' . htmlspecialchars($type) . '</td>'
                     . '<td>' . htmlspecialchars((string) $result) . '</td>'
-                    . '<td>' . htmlspecialchars($fmtInt($st['power_on_hours'] ?? null) ?? '-') . '</td>'
-                    . '<td>' . htmlspecialchars((string) ($st['nsid'] ?? '-')) . '</td></tr>';
+                    . '<td></td>'
+                    . ($hasLba ? '<td>' . (is_numeric($lba) && (int) $lba > 0 ? htmlspecialchars((string) $lba) : '') . '</td>' : '')
+                    . '</tr>';
             }
             echo '</tbody></table>';
             $panelEnd();
