@@ -260,6 +260,49 @@
                 $critOf = static fn ($s) => $s->sensor_limit ?? $s->sensor_limit_low;
                 $tmin = static fn ($v) => is_numeric($v) ? $fmtInt($v) . ' min' : '';
                 $from = \App\Facades\LibrenmsConfig::get('time.day');
+
+                // Tooltips for the Name column (definitions adapted from the openSeaChest
+                // "Drive Health and SMART" wiki). Keyed by the displayed row/sensor name.
+                $nvTips = [
+                    'Composite'         => 'NVMe composite temperature — an overall temperature computed by the controller. Reported by the drive in Kelvin and shown here in °C.',
+                    'Available Spare'   => 'Remaining spare capacity as a percentage of the manufacturer total. The drive warns when it drops below its spare threshold.',
+                    'Percentage Used'   => 'Estimated percentage of the drive\'s rated endurance consumed. 100% means the manufacturer-expected life is reached — not necessarily failure, and it may exceed 100%.',
+                    'Controller Busy'   => 'Minutes the controller was busy servicing I/O (NVMe SMART/Health log).',
+                    'Media Errors'      => 'Media and data-integrity errors detected by the controller. Also counts CRC/ECC/checksum errors, so it is close to but not exactly uncorrectable read errors (NVMe SMART/Health log).',
+                    'Error Log Entries' => 'Number of entries in the NVMe error information log over the life of the drive.',
+                    'Unsafe Shutdowns'  => 'Power-loss events where the drive was not cleanly shut down (NVMe SMART/Health log).',
+                    'Power On Hours'    => 'Hours the device has been powered on, accumulated across boot cycles (NVMe SMART/Health log).',
+                    'Power Cycles'      => 'Number of power-on resets / unique startups the drive has experienced (NVMe SMART/Health log).',
+                    'Data Read'         => 'Total data read from the drive (NVMe SMART/Health log, reported in 1000 × 512-byte units).',
+                    'Data Written'      => 'Total data written to the drive (NVMe SMART/Health log, reported in 1000 × 512-byte units).',
+                    'Host Reads'        => 'Number of host read commands; each command may transfer one or many blocks (NVMe SMART/Health log).',
+                    'Host Writes'       => 'Number of host write commands; each command may transfer one or many blocks (NVMe SMART/Health log).',
+                ];
+                // Resolve a tooltip for a displayed name (exact, Composite, or "Sensor N").
+                $tipFor = static function (string $name) use ($nvTips): ?string {
+                    if (isset($nvTips[$name])) {
+                        return $nvTips[$name];
+                    }
+                    if (stripos($name, 'Composite') !== false) {
+                        return $nvTips['Composite'];
+                    }
+                    if (preg_match('/^Sensor\b/i', $name)) {
+                        return 'Additional on-die temperature sensor reading (°C).';
+                    }
+
+                    return null;
+                };
+                // Name cell HTML: dotted-underline abbr with the tooltip when one exists.
+                $nameCell = static function (string $name) use ($tipFor): string {
+                    $safe = htmlspecialchars($name);
+                    $tip = $tipFor($name);
+
+                    return $tip !== null
+                        ? '<abbr style="cursor:help;text-decoration:underline dotted" title="'
+                            . htmlspecialchars($tip, ENT_QUOTES) . '">' . $safe . '</abbr>'
+                        : $safe;
+                };
+
                 echo '<table class="table table-condensed table-hover"><thead><tr>'
                     . '<th>Name</th><th>Current</th><th>Graph</th><th>Warn</th><th>Critical</th>'
                     . '<th>Warn Time Over</th><th>Critical Time Over</th></tr></thead><tbody>';
@@ -279,7 +322,7 @@
                         'legend'      => 'no',
                         'popup_title' => htmlspecialchars($device['hostname'] . ' - ' . $nm),
                     ]);
-                    echo '<tr><td>' . htmlspecialchars($nm) . '</td>'
+                    echo '<tr><td>' . $nameCell($nm) . '</td>'
                         . '<td>' . htmlspecialchars($fmtMeasure($s, $s->sensor_current)) . '</td>'
                         . '<td>' . $img . '</td>'
                         . '<td>' . htmlspecialchars($fmtMeasure($s, $warnOf($s))) . '</td>'
@@ -293,7 +336,7 @@
                         continue;
                     }
                     $graph = $metric !== null ? $nvMetricGraph($metric, $label) : '';
-                    echo '<tr><td>' . htmlspecialchars($label) . '</td>'
+                    echo '<tr><td>' . $nameCell($label) . '</td>'
                         . '<td>' . htmlspecialchars((string) $value) . '</td>'
                         . '<td>' . $graph . '</td>'
                         . '<td></td><td></td><td></td><td></td></tr>';
