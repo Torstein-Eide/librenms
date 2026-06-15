@@ -13,7 +13,7 @@
     $healthSensor = $data->healthSensor($selectedDisk);
     $overall = $health['overall_status'] ?? null;
     $healthBadge = match ((int) $overall) {
-        1 => '<span class="label label-success">Passed</span>',
+        1 => '<span class="label label-default">Passed</span>',
         2 => '<span class="label label-danger">Failed</span>',
         3 => '<span class="label label-warning">Warning</span>',
         4 => '<span class="label label-warning">Unavailable</span>',
@@ -155,6 +155,7 @@
                     break;
                 }
             }
+            $curPoh = $health['power_on_hours'] ?? null;
             echo '<table class="table table-condensed table-hover"><thead><tr>'
                 . '<th>Hours</th><th>Type</th><th>Status</th><th>Remaining Percent</th>'
                 . ($hasLba ? '<th>First LBA Error</th>' : '') . '</tr></thead><tbody>';
@@ -162,7 +163,13 @@
                 $type = match ((int) ($st['test_type'] ?? 0)) { 1 => 'Short', 2 => 'Extended', 255 => 'Vendor', default => '-' };
                 $result = trim((string) ($st['result_text'] ?? '')) !== '' ? $st['result_text'] : (string) ($st['result'] ?? '-');
                 $lba = $st['failing_lba'] ?? null;
-                echo '<tr><td>' . htmlspecialchars($fmtInt($st['power_on_hours'] ?? null) ?? '-') . '</td>'
+                $h = $st['power_on_hours'] ?? null;
+                $hoursCell = (string) ($h ?? '-');
+                if (is_numeric($curPoh) && is_numeric($h)) {
+                    $delta = (int) $curPoh - (int) $h;
+                    $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
+                }
+                echo '<tr><td>' . htmlspecialchars($hoursCell) . '</td>'
                     . '<td>' . htmlspecialchars($type) . '</td>'
                     . '<td>' . htmlspecialchars((string) $result) . '</td>'
                     . '<td></td>'

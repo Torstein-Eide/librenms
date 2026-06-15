@@ -519,7 +519,7 @@
         $powerOnHours = $data->powerOnHours($disk);
         $passed  = $health['sct_smart_status_passed'] ?? $health['overall_status'] ?? null;
         $healthBadge = match (true) {
-            (int) $passed === 1 => '<span class="label label-success">Passed</span>',
+            (int) $passed === 1 => '<span class="label label-default">Passed</span>',
             $passed !== null    => '<span class="label label-danger">Failed</span>',
             default             => '',
         };
@@ -532,7 +532,7 @@
             $selftestPanelBadge = '<span class="label label-info">Running' . ($donePct !== null ? " {$donePct}%" : '') . '</span>';
         } elseif ($execRaw !== null) {
             $selftestPanelBadge = (int) $execRaw === 0
-                ? '<span class="label label-success">Passed</span>'
+                ? '<span class="label label-default">Passed</span>'
                 : '<span class="label label-warning">' . htmlspecialchars($data->decode('selftest_exec', (int) $execRaw)) . '</span>';
         } else {
             $selftestPanelBadge = $healthBadge;
