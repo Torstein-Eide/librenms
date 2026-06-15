@@ -82,9 +82,6 @@ class Common extends Application
     // SATA device types: ata=1, sat=2
     private const SATA_TYPES = [1, 2];
 
-    // ATA attribute IDs that carry SSD wear-remaining as normalised value
-    private const ATA_WEAR_ATTR_IDS = [173, 177, 202, 231, 233];
-
     // ATA attributes whose raw DS is COUNTER: [id => smartmontools name].
     // Discovery checks by name (more reliable; ID 251 varies by vendor).
     // Polling falls back to the ID key when rrd_type is not yet stored in DB.
@@ -117,6 +114,13 @@ class Common extends Application
     private array  $sataAttributes       = [];
     private array  $sensorRows           = [];
 
+    // Stable per-run identity context, initialized at the top of discover()/poll().
+    private int     $appId;
+    private int     $deviceId;
+    private Device  $device;
+    // SATA device list for the current run, keyed by snmp_index.
+    private array   $sataDeviceList      = [];
+
 
 
     // ── Public interface ──────────────────────────────────────────────────────
@@ -136,6 +140,8 @@ class Common extends Application
 
     public function discover(): void
     {
+        $this->initContext();
+
         $handler = $this->detectAndPersistHandler();
         $this->vlog("discover: handler={$handler}");
 
@@ -149,6 +155,7 @@ class Common extends Application
 
     public function shouldPoll(): bool
     {
+        // Runs before initContext(); use the raw accessor.
         return DB::table('smart_devices')
             ->where('app_id', $this->app->app_id)
             ->exists();
@@ -156,10 +163,20 @@ class Common extends Application
 
     public function poll(): void
     {
+        $this->initContext();
+
         $this->pollCommon();
         $this->pollSata();
         // $this->pollNvme();  // future
         // $this->pollSAS();  // future
+    }
+
+    /** Cache the stable identity context used throughout discovery and polling. */
+    private function initContext(): void
+    {
+        $this->appId    = $this->app->app_id;
+        $this->deviceId = $this->os->getDeviceId();
+        $this->device   = $this->os->getDevice();
     }
 
     // ── Discovery ─────────────────────────────────────────────────────────────
@@ -186,7 +203,7 @@ class Common extends Application
         // $this->discoverSas();
 
         // SENSOR-MIB sensors: register for every discovered device.
-        $device = $this->os->getDevice();
+        $device = $this->device;
         $group  = 'SMART';
         $this->vlog('discoverMib: registering SENSOR-MIB sensors for ' . count($this->commonDevices) . ' device(s)');
         foreach ($this->commonDevices as $devIdx => $dev) {
@@ -195,7 +212,7 @@ class Common extends Application
             $devName = $this->sensorLabel($dev, (string) $devIdx);
             foreach ($this->sensorRows[$devIdx] ?? [] as $sensorIdx => $row) {
                 $type  = $row['smartmonSensorType'] ?? null;
-                $value = $this->applySensorScale($row);
+                $value = $this->applySensorScaleCol($row, 'smartmonSensorValue');
                 if ($value === null) {
                     continue;
                 }
@@ -241,18 +258,18 @@ class Common extends Application
     {
         // Change index must be loaded first so all table-change guards below are valid.
         $this->sataChangeByDeviceTable();
-        $devices = $this->sataDevices();
-        $this->vlog('discoverSata: ' . count($devices) . ' SATA device(s) found');
+        $this->sataDeviceList = $this->sataDevices();
+        $this->vlog('discoverSata: ' . count($this->sataDeviceList) . ' SATA device(s) found');
 
         // Info table: sync unconditionally — static identity data not tracked in change table.
-        $this->walkAndSyncSataTable('smartmonSataInfoTable', 1, $devices, null, [$this, 'syncSataInfoRow']);
+        $this->walkAndSyncSataTable('smartmonSataInfoTable', 1, null, [$this, 'syncSataInfoRow']);
 
         // Tables needed for sensor discovery (always fetched).
         $this->sataAttributeTable();
         $this->sataHealthTable();
 
         // For each SATA device: register SATA-specific sensors and sync health + attributes to DB.
-        foreach ($devices as $devIdx => $dev) {
+        foreach ($this->sataDeviceList as $devIdx => $dev) {
             $this->vlog("discoverSata: device idx={$devIdx} disk_key={$dev['disk_key']}");
             $this->discoverSataDeviceSensors(
                 $dev,
@@ -268,14 +285,14 @@ class Common extends Application
         }
 
         // Change-guarded tables (per device):
-        $this->walkAndSyncSataTable('smartmonSataErcTable',          2, $devices, self::SATA_TID_ERC,            [$this, 'syncSataErcRows']);
-        $this->walkAndSyncSataTable('smartmonSataPhyEventTable',     2, $devices, self::SATA_TID_PHY_EVENT,      [$this, 'syncSataPhyEventRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorLogTable',     2, $devices, self::SATA_TID_ERROR_LOG,      [$this, 'syncSataErrorLogRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable',     3, $devices, self::SATA_TID_ERROR_LOG,      [$this, 'syncSataErrorCmdRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelfTestTable',     2, $devices, self::SATA_TID_SELFTEST,       [$this, 'syncSataSelfTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable',2, $devices, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataLogDirTable',       2, $devices, self::SATA_TID_LOG_DIR,        [$this, 'syncSataLogDirRows']);
-        $this->walkAndSyncSataTable('smartmonSataDevStatTable',      3, $devices, self::SATA_TID_DEV_STAT,       [$this, 'syncSataDevStatRows'],      true);
+        $this->walkAndSyncSataTable('smartmonSataErcTable',          2, self::SATA_TID_ERC,            [$this, 'syncSataErcRows']);
+        $this->walkAndSyncSataTable('smartmonSataPhyEventTable',     2, self::SATA_TID_PHY_EVENT,      [$this, 'syncSataPhyEventRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorLogTable',     2, self::SATA_TID_ERROR_LOG,      [$this, 'syncSataErrorLogRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable',     3, self::SATA_TID_ERROR_LOG,      [$this, 'syncSataErrorCmdRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelfTestTable',     2, self::SATA_TID_SELFTEST,       [$this, 'syncSataSelfTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable',2, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataLogDirTable',       2, self::SATA_TID_LOG_DIR,        [$this, 'syncSataLogDirRows']);
+        $this->walkAndSyncSataTable('smartmonSataDevStatTable',      3, self::SATA_TID_DEV_STAT,       [$this, 'syncSataDevStatRows'],      true);
 
         // Register all sensor types with the discovery system.
         $this->syncSensorTypes();
@@ -293,7 +310,7 @@ class Common extends Application
         array $health,
         array $attrRows
     ): void {
-        $device  = $this->os->getDevice();
+        $device  = $this->device;
         $diskKey = $dev['disk_key'];
         $devName = $this->sensorLabel($dev, $dev['snmp_index']);
         $idx     = $this->mibDiskIndex($diskKey);
@@ -368,7 +385,7 @@ class Common extends Application
     /** Remove sensors belonging to drives that no longer appear in the device table. */
     private function cleanupStaleMibSensors(): void
     {
-        $device = $this->os->getDevice();
+        $device = $this->device;
         $expected = [];
         foreach ($this->sataDevices() as $snmpIndex => $dev) {
             $idx = $this->mibDiskIndex($dev['disk_key']);
@@ -405,7 +422,7 @@ class Common extends Application
 
         foreach ($rows as $snmpIndex => $row) {
             DB::table('smart_devices')
-                ->where('app_id', $this->app->app_id)
+                ->where('app_id', $this->appId)
                 ->where('snmp_index', (int) $snmpIndex)
                 ->update([
                     'last_poll_result' => $this->intValue($row['smartmonDeviceLastPollResult'] ?? null),
@@ -421,25 +438,25 @@ class Common extends Application
      */
     private function pollSata(): void
     {
-        $devices = $this->sataDevicesFromDb();
+        $this->sataDeviceList = $this->sataDevicesFromDb();
 
         // Table: Health (change-guarded; DB sync — sensors updated from DB in pollSensorValues)
-        $this->walkAndSyncSataTable('smartmonSataHealthTable', 1, $devices, self::SATA_TID_HEALTH, [$this, 'syncSataHealthRow']);
+        $this->walkAndSyncSataTable('smartmonSataHealthTable', 1, self::SATA_TID_HEALTH, [$this, 'syncSataHealthRow']);
 
         // Table: Attributes (change-guarded; limited columns for DB sync + RRD)
-        $this->walkAndSyncSataAttrPoll($devices);
+        $this->walkAndSyncSataAttrPoll();
 
         // SENSOR-MIB: only smartmonSensorValue (common to all device types)
-        $this->pollSensorValues($devices);
+        $this->pollSensorValues();
 
         // Change-guarded tables:
-        $this->walkAndSyncSataPhyEventPoll($devices);
-        $this->walkAndSyncSataDevStatPoll($devices);
-        $this->walkAndSyncSataTable('smartmonSataErrorLogTable',      2, $devices, self::SATA_TID_ERROR_LOG,       [$this, 'syncSataErrorLogRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable',      3, $devices, self::SATA_TID_ERROR_LOG,       [$this, 'syncSataErrorCmdRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelfTestTable',      2, $devices, self::SATA_TID_SELFTEST,        [$this, 'syncSataSelfTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, $devices, self::SATA_TID_SELECTIVE_TEST,  [$this, 'syncSataSelectiveTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable',2, $devices, self::SATA_TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
+        $this->walkAndSyncSataPhyEventPoll();
+        $this->walkAndSyncSataDevStatPoll();
+        $this->walkAndSyncSataTable('smartmonSataErrorLogTable',      2, self::SATA_TID_ERROR_LOG,       [$this, 'syncSataErrorLogRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable',      3, self::SATA_TID_ERROR_LOG,       [$this, 'syncSataErrorCmdRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelfTestTable',      2, self::SATA_TID_SELFTEST,        [$this, 'syncSataSelfTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, self::SATA_TID_SELECTIVE_TEST,  [$this, 'syncSataSelectiveTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable',2, self::SATA_TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
 
         $this->persistSataChangeSnapshot();
         update_application($this->app, 'ok', null);
@@ -454,13 +471,21 @@ class Common extends Application
      * smartSATAChange stamp is unreliable for the frequently-incrementing
      * attribute values.
      */
-    private function walkAndSyncSataAttrPoll(array $devices): void
+    private function walkAndSyncSataAttrPoll(): void
     {
-        foreach ($this->walkSataAttrLimitedColumns() as $devIdx => $attrRows) {
-            if (! isset($devices[$devIdx])) {
+        // Only the four frequently-changing columns: raw value/string, status, normalized.
+        $attrColumns = $this->walkSataColumns([
+            'smartmonSataAttrRawValue',
+            'smartmonSataAttrRawString',
+            'smartmonSataAttrStatus',
+            'smartmonSataAttrValue',
+        ]);
+
+        foreach ($attrColumns as $devIdx => $attrRows) {
+            $dev = $this->sataDeviceList[$devIdx] ?? null;
+            if ($dev === null) {
                 continue;
             }
-            $dev = $devices[$devIdx];
             $this->pollSataDeviceRrd($dev, $attrRows);
             $this->syncSataAttributeRowsPoll($dev, $attrRows);
         }
@@ -489,33 +514,19 @@ class Common extends Application
     }
 
     /**
-     * Walk only the four frequently-changing SATA attribute columns.
-     * Returns [devIdx][attrId] => ['smartmonSataAttr...' => value, ...]
-     */
-    private function walkSataAttrLimitedColumns(): array
-    {
-        return $this->walkSataColumns([
-            'smartmonSataAttrRawValue',
-            'smartmonSataAttrRawString',
-            'smartmonSataAttrStatus',
-            'smartmonSataAttrValue',
-        ]);
-    }
-
-    /**
      * Poll only smartmonSensorValue for all devices (one SNMP walk, all types).
      * Health and self-test state sensors are read from the DB.
      */
-    private function pollSensorValues(array $devices): void
+    private function pollSensorValues(): void
     {
-        $device = $this->os->getDevice();
+        $device = $this->device;
 
         $sensorValues = SnmpQuery::mibs(self::SENSOR_MIBS)
             ->hideMib()
             ->walk('SMARTMON-SENSOR-MIB::smartmonSensorValue')
             ->table(2);
 
-        foreach ($devices as $devIdx => $dev) {
+        foreach ($this->sataDeviceList as $devIdx => $dev) {
             $diskKey = $dev['disk_key'];
             $idx     = $this->mibDiskIndex($diskKey);
 
@@ -546,7 +557,7 @@ class Common extends Application
             // Self-test execution status from DB
             if ($sensor = $sensors->get("{$idx}_selftest_status")) {
                 $raw = DB::table('smart_sata_health')
-                    ->where('app_id', $this->app->app_id)
+                    ->where('app_id', $this->appId)
                     ->where('disk_key', $diskKey)
                     ->value('selftest_exec_status_raw');
                 $this->updateMibSensor($device, $sensor, $raw !== null ? (float) $raw : null);
@@ -557,7 +568,7 @@ class Common extends Application
     /** Write per-disk RRDs for one SATA device. */
     private function pollSataDeviceRrd(array $dev, array $attrRows): void
     {
-        $device  = $this->os->getDevice();
+        $device  = $this->device;
         $diskKey = $dev['disk_key'];
         $idx     = $this->mibDiskIndex($diskKey);
 
@@ -565,7 +576,7 @@ class Common extends Application
         // V2 uses ['app','smart',app_id,idx] with DS id{N} / id{N}Normalized.
         if (! empty($attrRows)) {
             $rrdTypes = DB::table('smart_sata_attributes')
-                ->where('app_id', $this->app->app_id)
+                ->where('app_id', $this->appId)
                 ->where('disk_key', $diskKey)
                 ->pluck('rrd_type', 'attribute_id');
 
@@ -588,9 +599,9 @@ class Common extends Application
             if (! empty($fields)) {
                 app('Datastore')->put($device, 'app', [
                     'name'     => 'smart',
-                    'app_id'   => $this->app->app_id,
+                    'app_id'   => $this->appId,
                     'rrd_def'  => $rrd_def,
-                    'rrd_name' => ['app', 'smart', $this->app->app_id, $idx],
+                    'rrd_name' => ['app', 'smart', $this->appId, $idx],
                 ], $fields);
             }
         }
@@ -614,25 +625,6 @@ class Common extends Application
     }
 
     // ── SNMP table fetchers ───────────────────────────────────────────────────
-
-    private function commonMeta(): void
-    {
-        $response = SnmpQuery::mibs(self::COMMON_MIBS)->hideMib()->get([
-            'SMARTMON-COMMON-MIB::smartmonDeviceTableRowCount.0',
-            'SMARTMON-COMMON-MIB::smartmonDeviceTableLastChange.0',
-            'SMARTMON-COMMON-MIB::smartmonDeviceCountNvme.0',
-            'SMARTMON-COMMON-MIB::smartmonDeviceCountAta.0',
-            // 'SMARTMON-COMMON-MIB::smartmonDeviceCountSas.0',  // SAS not yet implemented
-        ]);
-
-        $this->commonMeta = [
-            'device_row_count'   => $response->value('smartmonDeviceTableRowCount.0'),
-            'device_last_change' => $response->value('smartmonDeviceTableLastChange.0'),
-            'device_count_nvme'  => $response->value('smartmonDeviceCountNvme.0'),
-            'device_count_ata'   => $response->value('smartmonDeviceCountAta.0'),
-            // 'device_count_sas' => ...,  // SAS not yet implemented
-        ];
-    }
 
     private function commonDeviceTable(): void
     {
@@ -721,7 +713,7 @@ class Common extends Application
         $this->sataHealth = [];
         foreach ($this->walkSataTable('smartmonSataHealthTable', 1) as $index => $row) {
             if (is_array($row)) {
-                $this->sataHealth[(string) $index] = $this->normalizeIntegerRow($row);
+                $this->sataHealth[(string) $index] = $row;
             }
         }
     }
@@ -751,14 +743,35 @@ class Common extends Application
 
     // ── Database sync ─────────────────────────────────────────────────────────
 
+    /**
+     * Delete rows for this app/disk whose key is no longer present, so a table
+     * sync mirrors exactly the keys just walked. $extra adds further equality
+     * constraints (used for nested tables keyed by page/error entry).
+     *
+     * @param array<int|string> $keepKeys     keys to retain (everything else is pruned)
+     * @param array<string,mixed> $extra       additional column => value where clauses
+     */
+    private function pruneStaleRows(string $table, string $diskKey, string $keyCol, array $keepKeys, array $extra = []): void
+    {
+        $query = DB::table($table)
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey);
+
+        foreach ($extra as $col => $val) {
+            $query->where($col, $val);
+        }
+
+        $query->whereNotIn($keyCol, $keepKeys)->delete();
+    }
+
     /** Upsert all discovered devices into smart_devices. */
     private function syncDeviceRows(): void
     {
         $this->vlog('syncDeviceRows: upserting ' . count($this->commonDevices) . ' device(s)');
         foreach ($this->commonDevices as $snmpIndex => $dev) {
             DB::table('smart_devices')->upsert([
-                'app_id'           => $this->app->app_id,
-                'device_id'        => $this->os->getDeviceId(),
+                'app_id'           => $this->appId,
+                'device_id'        => $this->deviceId,
                 'disk_key'         => $dev['disk_key'],
                 'snmp_index'       => (int) $snmpIndex,
                 'device_name'      => $dev['device_name'],
@@ -786,8 +799,8 @@ class Common extends Application
     private function syncSataInfoRow(array $dev, array $row): void
     {
         DB::table('smart_sata_info')->upsert([
-            'app_id'                               => $this->app->app_id,
-            'device_id'                            => $this->os->getDeviceId(),
+            'app_id'                               => $this->appId,
+            'device_id'                            => $this->deviceId,
             'disk_key'                             => $dev['disk_key'],
             'ata_version'                          => $this->intValue($row['smartmonSataAtaVersion']                     ?? null),
             'sata_version'                         => $this->intValue($row['smartmonSataVersion']                        ?? null),
@@ -864,8 +877,8 @@ class Common extends Application
     private function syncSataHealthRow(array $dev, array $row): void
     {
         DB::table('smart_sata_health')->upsert([
-            'app_id'                     => $this->app->app_id,
-            'device_id'                  => $this->os->getDeviceId(),
+            'app_id'                     => $this->appId,
+            'device_id'                  => $this->deviceId,
             'disk_key'                   => $dev['disk_key'],
             'overall_status'             => $this->snmpTruthValue($row['smartmonSataHealthOverallStatus']     ?? null),
             'offline_collection_status'  => $row['smartmonSataOfflineCollectionStatusValue']   ?? null,
@@ -921,8 +934,8 @@ class Common extends Application
     {
         foreach ($attrRows as $attrId => $row) {
             DB::table('smart_sata_attributes')->upsert([
-                'app_id'           => $this->app->app_id,
-                'device_id'        => $this->os->getDeviceId(),
+                'app_id'           => $this->appId,
+                'device_id'        => $this->deviceId,
                 'disk_key'         => $dev['disk_key'],
                 'attribute_id'     => (int) ($row['smartmonSataAttrId'] ?? $attrId),
                 'name'             => $row['smartmonSataAttrName']      ?? null,
@@ -949,8 +962,8 @@ class Common extends Application
     {
         foreach ($attrRows as $attrId => $row) {
             DB::table('smart_sata_attributes')->upsert([
-                'app_id'           => $this->app->app_id,
-                'device_id'        => $this->os->getDeviceId(),
+                'app_id'           => $this->appId,
+                'device_id'        => $this->deviceId,
                 'disk_key'         => $dev['disk_key'],
                 'attribute_id'     => (int) $attrId,
                 'value_norm'       => $row['smartmonSataAttrValue']    ?? null,
@@ -969,19 +982,15 @@ class Common extends Application
     {
         foreach ($rows as $direction => $row) {
             DB::table('smart_sata_erc')->upsert([
-                'app_id'      => $this->app->app_id,
-                'device_id'   => $this->os->getDeviceId(),
+                'app_id'      => $this->appId,
+                'device_id'   => $this->deviceId,
                 'disk_key'    => $dev['disk_key'],
                 'direction'   => (int) $direction,
                 'enabled'     => $this->snmpTruthValue($row['smartmonSataErcEnabled']    ?? null),
                 'deciseconds' => $row['smartmonSataErcDeciseconds'] ?? null,
             ], ['app_id', 'disk_key', 'direction'], ['enabled', 'deciseconds']);
         }
-        DB::table('smart_sata_erc')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('direction', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_erc', $dev['disk_key'], 'direction', array_keys($rows));
     }
 
     /** Full discovery sync: name + size_bytes + value + overflow. */
@@ -989,8 +998,8 @@ class Common extends Application
     {
         foreach ($rows as $eventId => $row) {
             DB::table('smart_sata_phy_events')->upsert([
-                'app_id'     => $this->app->app_id,
-                'device_id'  => $this->os->getDeviceId(),
+                'app_id'     => $this->appId,
+                'device_id'  => $this->deviceId,
                 'disk_key'   => $dev['disk_key'],
                 'event_id'   => (int) $eventId,
                 'name'       => isset($row['smartmonSataPhyEventName'])
@@ -1000,11 +1009,7 @@ class Common extends Application
                 'overflow'   => $this->snmpTruthValue($row['smartmonSataPhyEventOverflow'] ?? null),
             ], ['app_id', 'disk_key', 'event_id'], ['name', 'size_bytes', 'value', 'overflow']);
         }
-        DB::table('smart_sata_phy_events')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('event_id', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_phy_events', $dev['disk_key'], 'event_id', array_keys($rows));
     }
 
     /** Poll-only update: value + overflow, no name/size walk needed. */
@@ -1013,8 +1018,8 @@ class Common extends Application
         $upsertRows = [];
         foreach ($rows as $eventId => $row) {
             $upsertRows[] = [
-                'app_id'    => $this->app->app_id,
-                'device_id' => $this->os->getDeviceId(),
+                'app_id'    => $this->appId,
+                'device_id' => $this->deviceId,
                 'disk_key'  => $dev['disk_key'],
                 'event_id'  => (int) $eventId,
                 'value'     => $row['smartmonSataPhyEventValue']    ?? null,
@@ -1034,8 +1039,8 @@ class Common extends Application
     {
         foreach ($rows as $errorIndex => $row) {
             DB::table('smart_sata_error_log')->upsert([
-                'app_id'          => $this->app->app_id,
-                'device_id'       => $this->os->getDeviceId(),
+                'app_id'          => $this->appId,
+                'device_id'       => $this->deviceId,
                 'disk_key'        => $dev['disk_key'],
                 'entry_num'       => (int) $errorIndex,
                 'error_count'     => $row['smartmonSataErrorNumber']         ?? null,
@@ -1050,11 +1055,7 @@ class Common extends Application
                 'device_state', 'status_register', 'error_register',
             ]);
         }
-        DB::table('smart_sata_error_log')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('entry_num', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_error_log', $dev['disk_key'], 'entry_num', array_keys($rows));
     }
 
     private function syncSataErrorCmdRows(array $dev, array $rows): void
@@ -1065,8 +1066,8 @@ class Common extends Application
             }
             foreach ($cmdRows as $cmdIndex => $row) {
                 DB::table('smart_sata_error_cmd')->upsert([
-                    'app_id'          => $this->app->app_id,
-                    'device_id'       => $this->os->getDeviceId(),
+                    'app_id'          => $this->appId,
+                    'device_id'       => $this->deviceId,
                     'disk_key'        => $dev['disk_key'],
                     'error_entry_num' => (int) $errorIndex,
                     'cmd_slot'        => (int) $cmdIndex,
@@ -1084,26 +1085,17 @@ class Common extends Application
                     'reg_feature', 'reg_lba', 'powerup_ms', 'description',
                 ]);
             }
-            DB::table('smart_sata_error_cmd')
-                ->where('app_id', $this->app->app_id)
-                ->where('disk_key', $dev['disk_key'])
-                ->where('error_entry_num', (int) $errorIndex)
-                ->whereNotIn('cmd_slot', array_keys($cmdRows))
-                ->delete();
+            $this->pruneStaleRows('smart_sata_error_cmd', $dev['disk_key'], 'cmd_slot', array_keys($cmdRows), ['error_entry_num' => (int) $errorIndex]);
         }
-        DB::table('smart_sata_error_cmd')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('error_entry_num', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_error_cmd', $dev['disk_key'], 'error_entry_num', array_keys($rows));
     }
 
     private function syncSataSelfTestRows(array $dev, array $rows): void
     {
         foreach ($rows as $testIndex => $row) {
             DB::table('smart_sata_selftest_log')->upsert([
-                'app_id'          => $this->app->app_id,
-                'device_id'       => $this->os->getDeviceId(),
+                'app_id'          => $this->appId,
+                'device_id'       => $this->deviceId,
                 'disk_key'        => $dev['disk_key'],
                 'entry_num'       => (int) $testIndex,
                 'test_type'       => $row['smartmonSataSelfTestType']          ?? null,
@@ -1116,19 +1108,15 @@ class Common extends Application
                 'test_type', 'result', 'result_passed', 'remaining_pct', 'power_on_hours', 'lba_first_error',
             ]);
         }
-        DB::table('smart_sata_selftest_log')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('entry_num', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_selftest_log', $dev['disk_key'], 'entry_num', array_keys($rows));
     }
 
     private function syncSataSelectiveTestRows(array $dev, array $rows): void
     {
         foreach ($rows as $slot => $row) {
             DB::table('smart_sata_selective_test')->upsert([
-                'app_id'       => $this->app->app_id,
-                'device_id'    => $this->os->getDeviceId(),
+                'app_id'       => $this->appId,
+                'device_id'    => $this->deviceId,
                 'disk_key'     => $dev['disk_key'],
                 'slot'         => (int) $slot,
                 'lba_min'      => $row['smartmonSataSelectiveLbaMin']      ?? null,
@@ -1136,19 +1124,15 @@ class Common extends Application
                 'status_value' => $row['smartmonSataSelectiveStatusValue'] ?? null,
             ], ['app_id', 'disk_key', 'slot'], ['lba_min', 'lba_max', 'status_value']);
         }
-        DB::table('smart_sata_selective_test')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('slot', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_selective_test', $dev['disk_key'], 'slot', array_keys($rows));
     }
 
     private function syncSataLogDirRows(array $dev, array $rows): void
     {
         foreach ($rows as $address => $row) {
             DB::table('smart_sata_log_dir')->upsert([
-                'app_id'        => $this->app->app_id,
-                'device_id'     => $this->os->getDeviceId(),
+                'app_id'        => $this->appId,
+                'device_id'     => $this->deviceId,
                 'disk_key'      => $dev['disk_key'],
                 'log_address'   => (int) $address,
                 'name'          => isset($row['smartmonSataLogDirName'])
@@ -1161,11 +1145,7 @@ class Common extends Application
                 'name', 'readable', 'writable', 'gp_sectors', 'smart_sectors',
             ]);
         }
-        DB::table('smart_sata_log_dir')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('log_address', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_log_dir', $dev['disk_key'], 'log_address', array_keys($rows));
     }
 
     /**
@@ -1184,8 +1164,8 @@ class Common extends Application
                 $normalized = $flagsRaw !== null ? (bool) ($flagsRaw & 0x20) : null;
 
                 DB::table('smart_sata_dev_stats')->upsert([
-                    'app_id'      => $this->app->app_id,
-                    'device_id'   => $this->os->getDeviceId(),
+                    'app_id'      => $this->appId,
+                    'device_id'   => $this->deviceId,
                     'disk_key'    => $dev['disk_key'],
                     'page_num'    => (int) $pageNum,
                     'stat_offset' => (int) $offset,
@@ -1201,40 +1181,27 @@ class Common extends Application
                     'page_name', 'stat_name', 'value', 'flags_value', 'valid', 'normalized',
                 ]);
             }
-            DB::table('smart_sata_dev_stats')
-                ->where('app_id', $this->app->app_id)
-                ->where('disk_key', $dev['disk_key'])
-                ->where('page_num', (int) $pageNum)
-                ->whereNotIn('stat_offset', array_keys($offsets))
-                ->delete();
+            $this->pruneStaleRows('smart_sata_dev_stats', $dev['disk_key'], 'stat_offset', array_keys($offsets), ['page_num' => (int) $pageNum]);
         }
-        DB::table('smart_sata_dev_stats')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('page_num', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_dev_stats', $dev['disk_key'], 'page_num', array_keys($rows));
     }
 
     private function syncSataPendingDefectRows(array $dev, array $rows): void
     {
         foreach ($rows as $entryIndex => $row) {
             DB::table('smart_sata_pending_defects')->upsert([
-                'app_id'    => $this->app->app_id,
-                'device_id' => $this->os->getDeviceId(),
+                'app_id'    => $this->appId,
+                'device_id' => $this->deviceId,
                 'disk_key'  => $dev['disk_key'],
                 'entry_num' => (int) $entryIndex,
                 'lba'       => $row['smartmonSataPendingDefectsLba'] ?? null,
             ], ['app_id', 'disk_key', 'entry_num'], ['lba']);
         }
-        DB::table('smart_sata_pending_defects')
-            ->where('app_id', $this->app->app_id)
-            ->where('disk_key', $dev['disk_key'])
-            ->whereNotIn('entry_num', array_keys($rows))
-            ->delete();
+        $this->pruneStaleRows('smart_sata_pending_defects', $dev['disk_key'], 'entry_num', array_keys($rows));
     }
 
     /** Poll-time narrowed walk: value + overflow only (name/size already in DB from discovery). */
-    private function walkAndSyncSataPhyEventPoll(array $devices): void
+    private function walkAndSyncSataPhyEventPoll(): void
     {
         $this->sataChangeByDeviceTable();
         if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable(self::SATA_TID_PHY_EVENT)) {
@@ -1244,7 +1211,7 @@ class Common extends Application
         $valueRows    = $this->walkSataTable('smartmonSataPhyEventValue',    2);
         $overflowRows = $this->walkSataTable('smartmonSataPhyEventOverflow', 2);
 
-        foreach ($devices as $devIdx => $dev) {
+        foreach ($this->sataDeviceList as $devIdx => $dev) {
             if (! $this->sataTableChangedForDevice((string) $devIdx, self::SATA_TID_PHY_EVENT)) {
                 continue;
             }
@@ -1263,7 +1230,7 @@ class Common extends Application
      * Poll-time narrowed walk for DevStat: only value column, with two-level change guards
      * (device-level via sataChangeByDeviceTable, page-level via sataSubindexChangeRows).
      */
-    private function walkAndSyncSataDevStatPoll(array $devices): void
+    private function walkAndSyncSataDevStatPoll(): void
     {
         $this->sataChangeByDeviceTable();
         if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable(self::SATA_TID_DEV_STAT)) {
@@ -1273,7 +1240,7 @@ class Common extends Application
         // Single walk for all devices; depth=3 gives [devIdx][pageNum][offset] => value.
         $allValueRows = $this->walkSataTable('smartmonSataDevStatValue', 3, true);
 
-        foreach ($devices as $devIdx => $dev) {
+        foreach ($this->sataDeviceList as $devIdx => $dev) {
             if (! $this->sataTableChangedForDevice((string) $devIdx, self::SATA_TID_DEV_STAT)) {
                 continue;
             }
@@ -1284,8 +1251,8 @@ class Common extends Application
                 }
                 foreach ($offsets as $offset => $value) {
                     $upsertRows[] = [
-                        'app_id'      => $this->app->app_id,
-                        'device_id'   => $this->os->getDeviceId(),
+                        'app_id'      => $this->appId,
+                        'device_id'   => $this->deviceId,
                         'disk_key'    => $dev['disk_key'],
                         'page_num'    => (int) $pageNum,
                         'stat_offset' => (int) $offset,
@@ -1339,7 +1306,7 @@ class Common extends Application
      * MIB index type is an enumeration, e.g. SmartmonAtaDevStatPage).
      */
     private function walkAndSyncSataTable(
-        string $table, int $depth, array $devices, ?int $tableId, callable $sync,
+        string $table, int $depth, ?int $tableId, callable $sync,
         bool $numericIndex = false
     ): void {
         $unconditional = $tableId === null;
@@ -1353,9 +1320,10 @@ class Common extends Application
 
         $this->vlog("walkAndSyncSataTable: walking {$table} (depth={$depth})");
         $synced = 0;
-        foreach ($this->normalizeNestedIntegerRows($this->walkSataTable($table, $depth, $numericIndex)) as $devIdx => $rows) {
-            if (isset($devices[$devIdx]) && ($unconditional || $this->sataTableChangedForDevice($devIdx, $tableId))) {
-                $sync($devices[$devIdx], $rows);
+        foreach ($this->walkSataTable($table, $depth, $numericIndex) as $devIdx => $rows) {
+            $dev = $this->sataDeviceList[$devIdx] ?? null;
+            if ($dev !== null && ($unconditional || $this->sataTableChangedForDevice($devIdx, $tableId))) {
+                $sync($dev, $rows);
                 $synced++;
             }
         }
@@ -1365,7 +1333,7 @@ class Common extends Application
     private function loadStoredSataChangeSnapshot(): ?array
     {
         $rows = DB::table('smart_sata_change')
-            ->where('app_id', $this->app->app_id)
+            ->where('app_id', $this->appId)
             ->get(['device_idx', 'table_id', 'subindex', 'last_change']);
 
         if ($rows->isEmpty()) {
@@ -1391,7 +1359,7 @@ class Common extends Application
             foreach ($tables as $tableId => $ts) {
                 if ($ts !== null) {
                     $upsertRows[] = [
-                        'app_id'      => $this->app->app_id,
+                        'app_id'      => $this->appId,
                         'device_idx'  => (int) $devIdx,
                         'table_id'    => (int) $tableId,
                         'subindex'    => 0,
@@ -1406,7 +1374,7 @@ class Common extends Application
                 foreach ($subindexes as $subindex => $ts) {
                     if ($ts !== null) {
                         $upsertRows[] = [
-                            'app_id'      => $this->app->app_id,
+                            'app_id'      => $this->appId,
                             'device_idx'  => (int) $devIdx,
                             'table_id'    => (int) $tableId,
                             'subindex'    => (int) $subindex,
@@ -1449,7 +1417,7 @@ class Common extends Application
      */
     private function migrateV1Rrds(): void
     {
-        $deviceModel = Device::find($this->os->getDeviceId());
+        $deviceModel = Device::find($this->deviceId);
         if ($deviceModel === null) {
             return;
         }
@@ -1460,7 +1428,7 @@ class Common extends Application
             $diskKey = $dev['disk_key'];
 
             $alreadyDone = DB::table('smart_devices')
-                ->where('app_id', $this->app->app_id)
+                ->where('app_id', $this->appId)
                 ->where('disk_key', $diskKey)
                 ->value('v1_rrd_migrated');
 
@@ -1469,12 +1437,12 @@ class Common extends Application
             }
 
             $v2Idx = $this->mibDiskIndex($diskKey);
-            $v2Name = ['app', 'smart', $this->app->app_id, $v2Idx];
+            $v2Name = ['app', 'smart', $this->appId, $v2Idx];
 
             // V1 used the raw device path as the disk ID (e.g. /dev/sda).
             $v1DiskId = $dev['device_path'];
             if (! empty($v1DiskId)) {
-                $v1Name = ['app', 'smart', $this->app->app_id, $v1DiskId];
+                $v1Name = ['app', 'smart', $this->appId, $v1DiskId];
                 $rrd->renameFile($deviceModel, $v1Name, $v2Name);
             }
 
@@ -1483,7 +1451,7 @@ class Common extends Application
             $rrd->discardDatasets($rrdFile, self::V1_SATA_DISCARD_DS);
 
             DB::table('smart_devices')
-                ->where('app_id', $this->app->app_id)
+                ->where('app_id', $this->appId)
                 ->where('disk_key', $diskKey)
                 ->update(['v1_rrd_migrated' => 1]);
         }
@@ -1495,7 +1463,7 @@ class Common extends Application
     private function detectAndPersistHandler(): string
     {
         $handler = DB::table('smart_app_state')
-            ->where('app_id', $this->app->app_id)
+            ->where('app_id', $this->appId)
             ->value('handler') ?: null;
 
         if ($handler !== null) {
@@ -1513,7 +1481,7 @@ class Common extends Application
         $this->vlog("detectAndPersistHandler: detected handler={$handler} (MIB valid=" . ($response->isValid() ? 'true' : 'false') . ')');
 
         DB::table('smart_app_state')->upsert(
-            ['app_id' => $this->app->app_id, 'handler' => $handler],
+            ['app_id' => $this->appId, 'handler' => $handler],
             ['app_id'],
             ['handler']
         );
@@ -1532,7 +1500,7 @@ class Common extends Application
                 ->value('smartmonDeviceTableLastChange.0');
 
             $storedTs = DB::table('smart_app_state')
-                ->where('app_id', $this->app->app_id)
+                ->where('app_id', $this->appId)
                 ->value('device_table_last_change');
 
             $this->commonDeviceTable();
@@ -1541,7 +1509,7 @@ class Common extends Application
                 $this->vlog("sataDevices: device table changed (snmp={$snmpTs}, stored={$storedTs}), syncing");
                 $this->syncDeviceRows();
                 DB::table('smart_app_state')
-                    ->where('app_id', $this->app->app_id)
+                    ->where('app_id', $this->appId)
                     ->update(['device_table_last_change' => $snmpTs]);
             } else {
                 $this->vlog("sataDevices: device table unchanged (ts={$snmpTs})");
@@ -1554,10 +1522,7 @@ class Common extends Application
         );
         $this->vlog('sataDevices: ' . count($sata) . ' SATA / ' . count($this->commonDevices) . ' total device(s)');
 
-        return array_filter(
-            $this->commonDevices,
-            fn($dev) => in_array($dev['device_type'] ?? 0, self::SATA_TYPES, true)
-        );
+        return $sata;
     }
 
     /**
@@ -1589,7 +1554,7 @@ class Common extends Application
     private function sataDevicesFromDb(): array
     {
         $rows = DB::table('smart_devices')
-            ->where('app_id', $this->app->app_id)
+            ->where('app_id', $this->appId)
             ->whereIn('protocol_type', self::SATA_TYPES)
             ->whereNotNull('snmp_index')
             ->get(['snmp_index', 'disk_key']);
@@ -1605,79 +1570,73 @@ class Common extends Application
     }
 
     /**
-     * Synthesize a 1–5 health value from the SATA health row and all attribute statuses.
+     * Map an overall SMART status plus all attribute statuses to a 1–5 health value.
+     * Values are coerced through intValue() so the strict comparisons hold whether
+     * SNMP/DB hand back ints or enum strings ("failingNow(2)").
      *
      *  1 = OK
      *  2 = Warning  (SMART overall test not passed)
      *  3 = Warning  (an attribute has failed in the past)
      *  4 = Error    (an attribute is currently failing)
      *  5 = Unavailable
+     *
+     * @param iterable<mixed> $attrStatuses raw smartmonSataAttrStatus values
      */
-    private function synthesizeHealthStatus(array $health, array $attrs): int
+    private function healthLevel(mixed $overall, iterable $attrStatuses): int
     {
-        $overall = $health['smartmonSataHealthOverallStatus'] ?? null;
-
+        $overall = $this->intValue($overall);
         if ($overall === 4) {
             return 5; // unavailable
         }
 
-        $result = 1;
+        $level = ($overall !== null && $overall !== 1) ? 2 : 1;
 
-        if ($overall !== null && $overall !== 1) {
-            $result = 2;
-        }
-
-        foreach ($attrs as $row) {
-            if (! is_array($row)) {
-                continue;
-            }
-            $status = $row['smartmonSataAttrStatus'] ?? null;
+        foreach ($attrStatuses as $status) {
+            $status = $this->intValue($status);
             if ($status === 3) {       // failedInPast
-                $result = max($result, 3);
+                $level = max($level, 3);
             } elseif ($status === 2) { // failingNow
-                $result = max($result, 4);
+                $level = max($level, 4);
             }
         }
 
-        return $result;
+        return $level;
+    }
+
+    /** Synthesize the 1–5 health value from a discovery-time health row + attribute rows. */
+    private function synthesizeHealthStatus(array $health, array $attrs): int
+    {
+        $statuses = [];
+        foreach ($attrs as $row) {
+            if (is_array($row)) {
+                $statuses[] = $row['smartmonSataAttrStatus'] ?? null;
+            }
+        }
+
+        return $this->healthLevel(
+            $health['smartmonSataHealthOverallStatus'] ?? null,
+            $statuses
+        );
     }
 
     /** Load health + attribute statuses from DB and run the same 1–5 synthesis. */
     private function synthesizeHealthFromDb(string $diskKey): ?int
     {
         $health = DB::table('smart_sata_health')
-            ->where('app_id', $this->app->app_id)
+            ->where('app_id', $this->appId)
             ->where('disk_key', $diskKey)
-            ->first(['overall_status', 'selftest_exec_status_raw']);
+            ->first(['overall_status']);
 
         if ($health === null) {
             return null;
         }
 
-        $overall = $health->overall_status;
-        if ($overall === 4) {
-            return 5; // unavailable
-        }
-
-        $result = 1;
-        if ($overall !== null && $overall !== 1) {
-            $result = 2;
-        }
-
         $statuses = DB::table('smart_sata_attributes')
-            ->where('app_id', $this->app->app_id)
+            ->where('app_id', $this->appId)
             ->where('disk_key', $diskKey)
             ->pluck('status');
 
-        foreach ($statuses as $status) {
-            if ($status === 3) {       // failedInPast
-                $result = max($result, 3);
-            } elseif ($status === 2) { // failingNow
-                $result = max($result, 4);
-            }
-        }
-
-        return $result;
+        return $this->healthLevel($health->overall_status, $statuses);
     }
 
     /** Human-readable sensor label: "Model Serial (name)" or graceful fallbacks. */
@@ -1703,12 +1662,6 @@ class Common extends Application
         return substr(preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
     }
 
-    /** UI navigation link for a MIB-sourced disk. */
-    private function mibDiskNavigation(string $diskKey): string
-    {
-        return 'tab=apps/app=smart/disk=' . rawurlencode($diskKey) . '/';
-    }
-
     /**
      * Compute the actual physical value from a SENSOR-MIB row.
      * Actual value = col × 10^(scale_exponent − precision)
@@ -1725,50 +1678,6 @@ class Common extends Application
         $exp       = self::SENSOR_SCALE_EXP[$scaleEnum] ?? 0;
 
         return (float) $raw * (10 ** ($exp - $precision));
-    }
-
-    private function applySensorScale(array $row): ?float
-    {
-        return $this->applySensorScaleCol($row, 'smartmonSensorValue');
-    }
-
-    /**
-     * Extract wear-remaining percentage from ATA/SATA attribute rows.
-     * Returns null when no SSD wear attribute is present.
-     */
-    private function extractAtaWear(array $attrRows): ?float
-    {
-        foreach (self::ATA_WEAR_ATTR_IDS as $id) {
-            $row = $attrRows[$id] ?? $attrRows[(string) $id] ?? null;
-            if ($row === null) {
-                foreach ($attrRows as $candidate) {
-                    if (is_array($candidate) && (int) ($candidate['smartmonSataAttrId'] ?? -1) === $id) {
-                        $row = $candidate;
-                        break;
-                    }
-                }
-            }
-            if ($row !== null) {
-                $norm = $row['smartmonSataAttrValue'] ?? null;
-                if ($norm !== null) {
-                    return (float) $norm;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private function pollFailureCount(array $devices): int
-    {
-        $count = 0;
-        foreach ($devices as $device) {
-            if (($device['last_poll_result'] ?? 1) !== 1 || ($device['last_poll_exit_status'] ?? 0) !== 0) {
-                $count++;
-            }
-        }
-
-        return $count;
     }
 
     /**
@@ -1813,43 +1722,6 @@ class Common extends Application
         }
 
         return $fallback;
-    }
-
-    private function normalizeIntegerRow(array $row): array
-    {
-        foreach ($row as $key => $value) {
-            $integer = $value;
-            if ($integer !== null) {
-                $row[$key] = $integer;
-            }
-        }
-
-        return $row;
-    }
-
-    private function normalizeNestedIntegerRows(array $data): array
-    {
-        foreach ($data as $key => $value) {
-            if (! is_array($value)) {
-                continue;
-            }
-            $data[$key] = $this->isLeafRow($value)
-                ? $this->normalizeIntegerRow($value)
-                : $this->normalizeNestedIntegerRows($value);
-        }
-
-        return $data;
-    }
-
-    private function isLeafRow(array $row): bool
-    {
-        foreach (array_keys($row) as $key) {
-            if (is_string($key) && str_starts_with($key, 'smart')) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
