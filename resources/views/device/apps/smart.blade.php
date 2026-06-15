@@ -507,6 +507,10 @@
     {{-- ================================================================== --}}
     {{-- Per-disk detail                                                     --}}
     {{-- ================================================================== --}}
+    @php $detailDisk = $data->disk($selectedDisk); @endphp
+    @if($detailDisk !== null && $data->isNvme($detailDisk))
+        @include('device.apps.smart-nvme-detail', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @else
     @php
         $disk    = $data->disk($selectedDisk);
         $idx     = $disk['idx'];
@@ -1638,4 +1642,5 @@ function smartAttrScaleToggle(cb, wrapperId) {
             echo '</div>';
         }
     @endphp
+    @endif
 @endif

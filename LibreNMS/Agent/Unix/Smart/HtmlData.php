@@ -16,9 +16,9 @@ use Illuminate\Support\Facades\DB;
  * {@see \LibreNMS\Agent\Module\Smart\Common} and exposes a clean, pre-decoded
  * per-disk structure for the Blade view. Modelled on the mdadm HtmlData layer.
  *
- * Scope: SATA / ATA devices (protocol_type 1 = ata, 2 = sat). NVMe and SAS
- * tables exist in the schema but are not yet populated by the MIB handler, so
- * they are intentionally not loaded here.
+ * Scope: SATA / ATA devices (protocol_type 1 = ata, 2 = sat) and NVMe devices
+ * (protocol_type 5). SAS tables exist in the schema but are not yet populated
+ * by the MIB handler, so they are intentionally not loaded here.
  *
  * Integer codes stored in the database are SMARTMON-TC-MIB textual-convention
  * enumeration values; this class owns the value → human-label mappings.
@@ -29,6 +29,9 @@ class HtmlData
 
     /** SATA device protocol_type values (SmartmonDeviceType: ata=1, sat=2). */
     private const SATA_TYPES = [1, 2];
+
+    /** NVMe device protocol_type value (SmartmonDeviceType: nvme=5). */
+    private const NVME_TYPES = [5];
 
     /** ATA SMART attribute IDs that carry SSD wear-remaining as the normalised value. */
     private const WEAR_ATTR_IDS = [173, 177, 202, 231, 233];
@@ -127,34 +130,53 @@ class HtmlData
 
         $devices = DB::table('smart_devices')
             ->where('app_id', $appId)
-            ->whereIn('protocol_type', self::SATA_TYPES)
+            ->whereIn('protocol_type', array_merge(self::SATA_TYPES, self::NVME_TYPES))
             ->get();
 
         if ($devices->isEmpty()) {
             return [];
         }
 
-        $diskKeys = $devices->pluck('disk_key')->all();
+        $sataKeys = $devices->whereIn('protocol_type', self::SATA_TYPES)->pluck('disk_key')->all();
+        $nvmeKeys = $devices->whereIn('protocol_type', self::NVME_TYPES)->pluck('disk_key')->all();
 
-        $info = $this->groupByDiskKey('smart_sata_info', $appId, $diskKeys);
-        $health = $this->groupByDiskKey('smart_sata_health', $appId, $diskKeys);
-        $attributes = $this->groupByDiskKey('smart_sata_attributes', $appId, $diskKeys, 'attribute_id');
-        $selftests = $this->groupByDiskKey('smart_sata_selftest_log', $appId, $diskKeys, 'entry_num');
-        $errors = $this->groupByDiskKey('smart_sata_error_log', $appId, $diskKeys, 'entry_num');
-        $errorCmds = $this->groupByDiskKey('smart_sata_error_cmd', $appId, $diskKeys, ['error_entry_num', 'cmd_slot']);
-        $devStats = $this->groupByDiskKey('smart_sata_dev_stats', $appId, $diskKeys, ['page_num', 'stat_offset']);
-        $phyEvents = $this->groupByDiskKey('smart_sata_phy_events', $appId, $diskKeys, 'event_id');
-        $erc = $this->groupByDiskKey('smart_sata_erc', $appId, $diskKeys, 'direction');
-        $pending = $this->groupByDiskKey('smart_sata_pending_defects', $appId, $diskKeys, 'entry_num');
-        $logDir = $this->groupByDiskKey('smart_sata_log_dir', $appId, $diskKeys, 'log_address');
-        $selectiveTest = $this->groupByDiskKey('smart_sata_selective_test', $appId, $diskKeys, 'slot');
+        $info = $this->groupByDiskKey('smart_sata_info', $appId, $sataKeys);
+        $health = $this->groupByDiskKey('smart_sata_health', $appId, $sataKeys);
+        $attributes = $this->groupByDiskKey('smart_sata_attributes', $appId, $sataKeys, 'attribute_id');
+        $selftests = $this->groupByDiskKey('smart_sata_selftest_log', $appId, $sataKeys, 'entry_num');
+        $errors = $this->groupByDiskKey('smart_sata_error_log', $appId, $sataKeys, 'entry_num');
+        $errorCmds = $this->groupByDiskKey('smart_sata_error_cmd', $appId, $sataKeys, ['error_entry_num', 'cmd_slot']);
+        $devStats = $this->groupByDiskKey('smart_sata_dev_stats', $appId, $sataKeys, ['page_num', 'stat_offset']);
+        $phyEvents = $this->groupByDiskKey('smart_sata_phy_events', $appId, $sataKeys, 'event_id');
+        $erc = $this->groupByDiskKey('smart_sata_erc', $appId, $sataKeys, 'direction');
+        $pending = $this->groupByDiskKey('smart_sata_pending_defects', $appId, $sataKeys, 'entry_num');
+        $logDir = $this->groupByDiskKey('smart_sata_log_dir', $appId, $sataKeys, 'log_address');
+        $selectiveTest = $this->groupByDiskKey('smart_sata_selective_test', $appId, $sataKeys, 'slot');
+
+        // NVMe tables (only loaded when NVMe disks are present).
+        $nvInfo = $nvHealth = $nvNs = $nvPwr = $nvLba = $nvSt = $nvErr = $nvCap = [];
+        if ($nvmeKeys !== []) {
+            $nvInfo = $this->groupByDiskKey('smart_nvme_info', $appId, $nvmeKeys);
+            $nvHealth = $this->groupByDiskKey('smart_nvme_health', $appId, $nvmeKeys);
+            $nvNs = $this->groupByDiskKey('smart_nvme_namespaces', $appId, $nvmeKeys, 'ns_id');
+            $nvPwr = $this->groupByDiskKey('smart_nvme_power_states', $appId, $nvmeKeys, 'state_id');
+            $nvLba = $this->groupByDiskKey('smart_nvme_lba_formats', $appId, $nvmeKeys, ['ns_id', 'format_id']);
+            $nvSt = $this->groupByDiskKey('smart_nvme_selftest_log', $appId, $nvmeKeys, 'entry_num');
+            $nvErr = $this->groupByDiskKey('smart_nvme_error_log', $appId, $nvmeKeys, 'entry_num');
+            $nvCap = $this->groupByDiskKey('smart_nvme_capability', $appId, $nvmeKeys);
+        }
+
+        $rowsToArrays = static fn (array $rows): array => array_map(static fn ($r) => (array) $r, $rows);
 
         $disks = [];
         foreach ($devices as $dev) {
             $key = (string) $dev->disk_key;
-            $disks[$key] = [
+            $isNvme = in_array((int) $dev->protocol_type, self::NVME_TYPES, true);
+
+            $common = [
                 'disk_key'         => $key,
                 'idx'              => $this->diskIndex($key),
+                'kind'             => $isNvme ? 'nvme' : 'sata',
                 'protocol'         => $dev->protocol_type !== null ? (int) $dev->protocol_type : null,
                 'device_name'      => $dev->device_name,
                 'device_path'      => $dev->device_path,
@@ -165,18 +187,37 @@ class HtmlData
                 'wwn'              => $dev->wwn,
                 'last_poll_time'   => $dev->last_poll_time,
                 'last_poll_result' => $dev->last_poll_result !== null ? (int) $dev->last_poll_result : null,
+            ];
+
+            if ($isNvme) {
+                $disks[$key] = $common + [
+                    'info'            => isset($nvInfo[$key][0]) ? (array) $nvInfo[$key][0] : [],
+                    'health'          => isset($nvHealth[$key][0]) ? (array) $nvHealth[$key][0] : [],
+                    'attributes'      => [],
+                    'selftests'       => $rowsToArrays($nvSt[$key] ?? []),
+                    'nvme_namespaces' => $rowsToArrays($nvNs[$key] ?? []),
+                    'nvme_power_states' => $rowsToArrays($nvPwr[$key] ?? []),
+                    'nvme_lba_formats' => $rowsToArrays($nvLba[$key] ?? []),
+                    'nvme_errors'     => $rowsToArrays($nvErr[$key] ?? []),
+                    'nvme_capability' => isset($nvCap[$key][0]) ? (array) $nvCap[$key][0] : [],
+                ];
+
+                continue;
+            }
+
+            $disks[$key] = $common + [
                 'info'             => isset($info[$key][0]) ? (array) $info[$key][0] : [],
                 'health'           => isset($health[$key][0]) ? (array) $health[$key][0] : [],
-                'attributes'       => array_map(fn ($r) => (array) $r, $attributes[$key] ?? []),
-                'selftests'        => array_map(fn ($r) => (array) $r, $selftests[$key] ?? []),
-                'errors'           => array_map(fn ($r) => (array) $r, $errors[$key] ?? []),
+                'attributes'       => $rowsToArrays($attributes[$key] ?? []),
+                'selftests'        => $rowsToArrays($selftests[$key] ?? []),
+                'errors'           => $rowsToArrays($errors[$key] ?? []),
                 'error_cmds'       => $this->indexErrorCmds($errorCmds[$key] ?? []),
                 'dev_stats'        => $this->indexDevStats($devStats[$key] ?? []),
-                'phy_events'       => array_map(fn ($r) => (array) $r, $phyEvents[$key] ?? []),
+                'phy_events'       => $rowsToArrays($phyEvents[$key] ?? []),
                 'erc'              => $this->indexByColumn($erc[$key] ?? [], 'direction'),
-                'pending_defects'  => array_map(fn ($r) => (array) $r, $pending[$key] ?? []),
-                'log_dir'          => array_map(fn ($r) => (array) $r, $logDir[$key] ?? []),
-                'selective_test'   => array_map(fn ($r) => (array) $r, $selectiveTest[$key] ?? []),
+                'pending_defects'  => $rowsToArrays($pending[$key] ?? []),
+                'log_dir'          => $rowsToArrays($logDir[$key] ?? []),
+                'selective_test'   => $rowsToArrays($selectiveTest[$key] ?? []),
             ];
         }
 
@@ -369,15 +410,24 @@ class HtmlData
         return trim((string) ($disk['serial_number'] ?? ''));
     }
 
-    /** Human label for the device protocol/media (e.g. "SATA SSD", "SATA HDD"). */
+    /** True for NVMe disks. */
+    public function isNvme(array $disk): bool
+    {
+        return ($disk['kind'] ?? '') === 'nvme';
+    }
+
+    /** Human label for the device protocol/media (e.g. "SATA SSD", "NVMe SSD"). */
     public function typeLabel(array $disk): string
     {
         $protocol = $this->decode('protocol', $disk['protocol'] ?? null);
         $protocol = $protocol === '-' ? '' : $protocol;
 
+        // NVMe is always solid-state; SATA media is derived from the rotation rate.
         $rotation = $disk['info']['rotation_rate'] ?? null;
         $media = null;
-        if (is_numeric($rotation)) {
+        if ($this->isNvme($disk)) {
+            $media = 'SSD';
+        } elseif (is_numeric($rotation)) {
             $media = (int) $rotation === 0 ? 'SSD' : 'HDD';
         }
 
@@ -386,13 +436,34 @@ class HtmlData
         return $label !== '' ? $label : '-';
     }
 
-    /** SSD wear-remaining percentage from the normalised value of a wear attribute, or null. */
+    /**
+     * SSD wear-remaining percentage. SATA reads the normalised value of a wear
+     * attribute; NVMe derives it from the "Percentage Used" sensor (100 − used).
+     */
     public function wearRemaining(array $disk): ?float
     {
+        if ($this->isNvme($disk)) {
+            return $this->nvmeWearRemaining((string) $disk['disk_key']);
+        }
+
         foreach ($disk['attributes'] as $attr) {
             if (in_array((int) ($attr['attribute_id'] ?? -1), self::WEAR_ATTR_IDS, true)
                 && is_numeric($attr['value_norm'] ?? null)) {
                 return (float) $attr['value_norm'];
+            }
+        }
+
+        return null;
+    }
+
+    /** NVMe wear-remaining from the "Percentage Used" SENSOR-MIB sensor (100 − used), or null. */
+    private function nvmeWearRemaining(string $diskKey): ?float
+    {
+        foreach ($this->diskSensors($diskKey) as $sensor) {
+            if ($sensor->sensor_class === 'percent'
+                && stripos((string) $sensor->sensor_descr, 'used') !== false
+                && is_numeric($sensor->sensor_current)) {
+                return max(0.0, min(100.0, 100.0 - (float) $sensor->sensor_current));
             }
         }
 
@@ -734,7 +805,7 @@ class HtmlData
     public function interfaceSpeed(array $info): string
     {
         $current = $info['if_speed_current_value'] ?? null;
-        $max     = $info['if_speed_max_value'] ?? null;
+        $max = $info['if_speed_max_value'] ?? null;
         if (! is_numeric($current) && ! is_numeric($max)) {
             return '-';
         }
@@ -743,7 +814,8 @@ class HtmlData
                 return '?';
             }
             $mbps = (int) $mbps;
-            $gb   = rtrim(rtrim(number_format($mbps / 1000, 1, '.', ''), '0'), '.');
+            $gb = rtrim(rtrim(number_format($mbps / 1000, 1, '.', ''), '0'), '.');
+
             return "{$mbps} Mb/s ({$gb} Gb/s)";
         };
 
