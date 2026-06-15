@@ -125,10 +125,6 @@
                 'Media Errors'     => $fmtInt($health['media_errors'] ?? null),
                 'Error Log Entries' => $fmtInt($health['num_err_log_entries'] ?? null),
                 'Unsafe Shutdowns' => $fmtInt($health['unsafe_shutdowns'] ?? null),
-                'Warning Temp Time' => isset($health['warning_temp_time']) && is_numeric($health['warning_temp_time'])
-                    ? $fmtInt($health['warning_temp_time']) . ' min' : null,
-                'Critical Temp Time' => isset($health['critical_comp_time']) && is_numeric($health['critical_comp_time'])
-                    ? $fmtInt($health['critical_comp_time']) . ' min' : null,
             ];
             foreach ($rows as $label => $value) {
                 if ($value !== null && $value !== '') {
@@ -136,31 +132,42 @@
                 }
             }
             echo '</table>';
-            $panelEnd();
-        @endphp
-    </div>
 
-    {{-- Temperatures --}}
-    @if(! empty($tempSensors))
-    <div>
-        @php
-            $panelStart('Temperatures');
-            echo '<table class="table table-condensed table-hover"><thead><tr>'
-                . '<th>Sensor</th><th>Current</th><th>Warn</th><th>Crit</th></tr></thead><tbody>';
-            $tdeg = static fn ($v) => is_numeric($v) ? rtrim(rtrim(sprintf('%.1f', (float) $v), '0'), '.') . '°C' : '-';
-            foreach ($tempSensors as $s) {
-                // Strip the "SMART <label> " prefix to leave just the sensor name (e.g. Composite).
-                $nm = preg_replace('/^SMART\s+/', '', (string) $s->sensor_descr);
-                echo '<tr><td>' . htmlspecialchars($nm) . '</td>'
-                    . '<td>' . htmlspecialchars($tdeg($s->sensor_current)) . '</td>'
-                    . '<td>' . htmlspecialchars($tdeg($s->sensor_limit_warn)) . '</td>'
-                    . '<td>' . htmlspecialchars($tdeg($s->sensor_limit)) . '</td></tr>';
+            // Temperature sensors: current, mini graph, limits, and (Composite only)
+            // time spent over the warning / critical thresholds.
+            if (! empty($tempSensors)) {
+                $tdeg = static fn ($v) => is_numeric($v) ? rtrim(rtrim(sprintf('%.1f', (float) $v), '0'), '.') . '°C' : '-';
+                $tmin = static fn ($v) => is_numeric($v) ? $fmtInt($v) . ' min' : '';
+                $from = \App\Facades\LibrenmsConfig::get('time.day');
+                echo '<table class="table table-condensed table-hover" style="margin-top:8px"><thead><tr>'
+                    . '<th>Name</th><th>Current</th><th>Graph</th><th>Warn</th><th>Critical</th>'
+                    . '<th>Warn Time Over</th><th>Critical Time Over</th></tr></thead><tbody>';
+                foreach ($tempSensors as $s) {
+                    // Strip the "SMART <label> " prefix to leave just the sensor name (e.g. Composite).
+                    $nm = preg_replace('/^SMART\s+/', '', (string) $s->sensor_descr);
+                    $isComposite = stripos($nm, 'Composite') !== false;
+                    $img = \LibreNMS\Util\Url::graphTag([
+                        'id'     => $s->sensor_id,
+                        'type'   => 'sensor_' . $s->sensor_class,
+                        'from'   => $from,
+                        'to'     => $now,
+                        'width'  => 100,
+                        'height' => 65,
+                        'legend' => 'no',
+                    ]);
+                    echo '<tr><td>' . htmlspecialchars($nm) . '</td>'
+                        . '<td>' . htmlspecialchars($tdeg($s->sensor_current)) . '</td>'
+                        . '<td>' . $img . '</td>'
+                        . '<td>' . htmlspecialchars($tdeg($s->sensor_limit_warn)) . '</td>'
+                        . '<td>' . htmlspecialchars($tdeg($s->sensor_limit)) . '</td>'
+                        . '<td>' . htmlspecialchars($isComposite ? $tmin($health['warning_temp_time'] ?? null) : '') . '</td>'
+                        . '<td>' . htmlspecialchars($isComposite ? $tmin($health['critical_comp_time'] ?? null) : '') . '</td></tr>';
+                }
+                echo '</tbody></table>';
             }
-            echo '</tbody></table>';
             $panelEnd();
         @endphp
     </div>
-    @endif
 
     {{-- Namespaces & LBA Formats (combined, grouped by namespace) — detailed view only --}}
     @if($showDetailed && ! empty($disk['nvme_namespaces']))
