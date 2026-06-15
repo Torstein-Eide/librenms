@@ -243,7 +243,8 @@ class Common extends Application
             $idx = $this->mibDiskIndex($diskKey);
             $devName = $this->sensorLabel($dev, (string) $devIdx);
             foreach ($this->sensorRows[$devIdx] ?? [] as $sensorIdx => $row) {
-                $type = $row['smartmonSensorType'] ?? null;
+                // smartmonSensorType is an enum returned as a name ("celsius(3)") when MIBs load.
+                $type = $this->intValue($row['smartmonSensorType'] ?? null);
                 $value = $this->applySensorScaleCol($row, 'smartmonSensorValue');
                 if ($value === null) {
                     continue;
@@ -432,7 +433,7 @@ class Common extends Application
 
             // Generic SENSOR-MIB sensors (temperature, NVMe spare/used) — all device types.
             foreach ($this->sensorRows[$snmpIndex] ?? [] as $sensorIdx => $row) {
-                $type = $row['smartmonSensorType'] ?? null;
+                $type = $this->intValue($row['smartmonSensorType'] ?? null);
                 $meta = self::SENSOR_TYPE_MAP[$type] ?? null;
                 if ($meta !== null) {
                     $expected[] = "app:smart_mib:{$idx}_{$meta[2]}_{$sensorIdx}";
@@ -2185,8 +2186,9 @@ class Common extends Application
             return null;
         }
 
-        $scaleEnum = $row['smartmonSensorScale'] ?? 9; // units(9 = 10^0)
-        $precision = $row['smartmonSensorPrecision'] ?? 0;
+        // smartmonSensorScale is an enum returned as a name ("units(9)") when MIBs load.
+        $scaleEnum = $this->intValue($row['smartmonSensorScale'] ?? null) ?? 9; // units(9 = 10^0)
+        $precision = $this->intValue($row['smartmonSensorPrecision'] ?? null) ?? 0;
         $exp = self::SENSOR_SCALE_EXP[$scaleEnum] ?? 0;
 
         return (float) $raw * (10 ** ($exp - $precision));
