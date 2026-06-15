@@ -8,9 +8,9 @@ use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Application;
 use LibreNMS\Data\Store\Rrd;
-use LibreNMS\Util\Debug;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
+use LibreNMS\Util\Debug;
 use SnmpQuery;
 
 /**
@@ -23,21 +23,21 @@ use SnmpQuery;
 class Common extends Application
 {
     private const COMMON_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB'];
-    private const SATA_MIBS   = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SATA-MIB'];
+    private const SATA_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SATA-MIB'];
     private const SENSOR_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SENSOR-MIB'];
 
     // smartSATAChangeByDeviceTable IDs (matches sata_table_meta_for() in the agentx)
-    private const SATA_TID_INFO            = 1;
-    private const SATA_TID_HEALTH          = 2;
-    private const SATA_TID_ATTR            = 3;
-    private const SATA_TID_ERROR_LOG       = 4;
-    private const SATA_TID_ERROR_CMD       = 5;
-    private const SATA_TID_SELFTEST        = 6;
-    private const SATA_TID_ERC             = 7;
-    private const SATA_TID_PHY_EVENT       = 8;
-    private const SATA_TID_SELECTIVE_TEST  = 9;
-    private const SATA_TID_LOG_DIR         = 10;
-    private const SATA_TID_DEV_STAT        = 11;
+    private const SATA_TID_INFO = 1;
+    private const SATA_TID_HEALTH = 2;
+    private const SATA_TID_ATTR = 3;
+    private const SATA_TID_ERROR_LOG = 4;
+    private const SATA_TID_ERROR_CMD = 5;
+    private const SATA_TID_SELFTEST = 6;
+    private const SATA_TID_ERC = 7;
+    private const SATA_TID_PHY_EVENT = 8;
+    private const SATA_TID_SELECTIVE_TEST = 9;
+    private const SATA_TID_LOG_DIR = 10;
+    private const SATA_TID_DEV_STAT = 11;
     private const SATA_TID_PENDING_DEFECTS = 12;
 
     // SNMP returns enumerated table IDs as named strings (e.g. "sataInfo") when MIBs are loaded.
@@ -56,7 +56,6 @@ class Common extends Application
         'sataDevStat'        => 11,
         'sataPendingDefects' => 12,
     ];
-
 
     /**
      * SmartmonSensorDataType → [LibreNMS sensor_class, sensor_type, index prefix]
@@ -97,7 +96,7 @@ class Common extends Application
     ];
 
     private const HANDLER_MIB = 'mib'; // SMARTMON-*-MIB
-    private const HANDLER_V1  = 'v1';  // Json
+    private const HANDLER_V1 = 'v1';  // Json
 
     // V1 RRD datasets that have no equivalent in V2 and should be discarded on migration.
     // V1 stored these as self-test pass/fail counters; V2 handles self-test via the log table.
@@ -106,22 +105,20 @@ class Common extends Application
         'extended', 'short', 'conveyance', 'selective',
     ];
 
-    private ?array $commonDevices        = null;
-    private ?array $sataChangeRows       = null;
+    private ?array $commonDevices = null;
+    private ?array $sataChangeRows = null;
     private ?array $sataSubindexChangeRows = null;
-    private ?array $prevSataChange       = null;
-    private array  $sataHealth           = [];
-    private array  $sataAttributes       = [];
-    private array  $sensorRows           = [];
+    private ?array $prevSataChange = null;
+    private array  $sataHealth = [];
+    private array  $sataAttributes = [];
+    private array  $sensorRows = [];
 
     // Stable per-run identity context, initialized at the top of discover()/poll().
     private int     $appId;
     private int     $deviceId;
     private Device  $device;
     // SATA device list for the current run, keyed by snmp_index.
-    private array   $sataDeviceList      = [];
-
-
+    private array   $sataDeviceList = [];
 
     // ── Public interface ──────────────────────────────────────────────────────
 
@@ -147,6 +144,7 @@ class Common extends Application
 
         if ($handler !== self::HANDLER_MIB) {
             $this->vlog('discover: non-MIB handler, skipping MIB discovery');
+
             return;
         }
 
@@ -174,9 +172,9 @@ class Common extends Application
     /** Cache the stable identity context used throughout discovery and polling. */
     private function initContext(): void
     {
-        $this->appId    = $this->app->app_id;
+        $this->appId = $this->app->app_id;
         $this->deviceId = $this->os->getDeviceId();
-        $this->device   = $this->os->getDevice();
+        $this->device = $this->os->getDevice();
     }
 
     // ── Discovery ─────────────────────────────────────────────────────────────
@@ -204,14 +202,14 @@ class Common extends Application
 
         // SENSOR-MIB sensors: register for every discovered device.
         $device = $this->device;
-        $group  = 'SMART';
+        $group = 'SMART';
         $this->vlog('discoverMib: registering SENSOR-MIB sensors for ' . count($this->commonDevices) . ' device(s)');
         foreach ($this->commonDevices as $devIdx => $dev) {
             $diskKey = $dev['disk_key'];
-            $idx     = $this->mibDiskIndex($diskKey);
+            $idx = $this->mibDiskIndex($diskKey);
             $devName = $this->sensorLabel($dev, (string) $devIdx);
             foreach ($this->sensorRows[$devIdx] ?? [] as $sensorIdx => $row) {
-                $type  = $row['smartmonSensorType'] ?? null;
+                $type = $row['smartmonSensorType'] ?? null;
                 $value = $this->applySensorScaleCol($row, 'smartmonSensorValue');
                 if ($value === null) {
                     continue;
@@ -221,13 +219,13 @@ class Common extends Application
                     continue;
                 }
                 [$sensorClass, $sensorType, $prefix] = $meta;
-                $name     = trim((string) ($row['smartmonSensorName'] ?? ''));
-                $sIdx     = "{$idx}_{$prefix}_{$sensorIdx}";
-                $descr    = $name !== '' ? "{$group} {$devName} {$name}" : "{$group} {$devName}";
+                $name = trim((string) ($row['smartmonSensorName'] ?? ''));
+                $sIdx = "{$idx}_{$prefix}_{$sensorIdx}";
+                $descr = $name !== '' ? "{$group} {$devName} {$name}" : "{$group} {$devName}";
                 $highCrit = $this->applySensorScaleCol($row, 'smartmonSensorHighCritical');
                 $highWarn = $this->applySensorScaleCol($row, 'smartmonSensorHighWarning');
-                $lowWarn  = $this->applySensorScaleCol($row, 'smartmonSensorLowWarning');
-                $lowCrit  = $this->applySensorScaleCol($row, 'smartmonSensorLowCritical');
+                $lowWarn = $this->applySensorScaleCol($row, 'smartmonSensorLowWarning');
+                $lowCrit = $this->applySensorScaleCol($row, 'smartmonSensorLowCritical');
                 $attrs = [
                     'device_id'         => $device['device_id'],
                     'poller_type'       => 'agent',
@@ -240,10 +238,18 @@ class Common extends Application
                     'sensor_descr'      => $descr,
                     'sensor_current'    => $value,
                 ];
-                if ($highCrit !== null) { $attrs['sensor_limit']          = $highCrit; }
-                if ($highWarn !== null) { $attrs['sensor_limit_warn']     = $highWarn; }
-                if ($lowWarn  !== null) { $attrs['sensor_limit_low_warn'] = $lowWarn; }
-                if ($lowCrit  !== null) { $attrs['sensor_limit_low']      = $lowCrit; }
+                if ($highCrit !== null) {
+                    $attrs['sensor_limit'] = $highCrit;
+                }
+                if ($highWarn !== null) {
+                    $attrs['sensor_limit_warn'] = $highWarn;
+                }
+                if ($lowWarn !== null) {
+                    $attrs['sensor_limit_low_warn'] = $lowWarn;
+                }
+                if ($lowCrit !== null) {
+                    $attrs['sensor_limit_low'] = $lowCrit;
+                }
                 app('sensor-discovery')->discover(new Sensor($attrs));
             }
         }
@@ -273,7 +279,7 @@ class Common extends Application
             $this->vlog("discoverSata: device idx={$devIdx} disk_key={$dev['disk_key']}");
             $this->discoverSataDeviceSensors(
                 $dev,
-                $this->sataHealth[$devIdx]     ?? [],
+                $this->sataHealth[$devIdx] ?? [],
                 $this->sataAttributes[$devIdx] ?? []
             );
             if (isset($this->sataHealth[$devIdx])) {
@@ -285,14 +291,14 @@ class Common extends Application
         }
 
         // Change-guarded tables (per device):
-        $this->walkAndSyncSataTable('smartmonSataErcTable',          2, self::SATA_TID_ERC,            [$this, 'syncSataErcRows']);
-        $this->walkAndSyncSataTable('smartmonSataPhyEventTable',     2, self::SATA_TID_PHY_EVENT,      [$this, 'syncSataPhyEventRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorLogTable',     2, self::SATA_TID_ERROR_LOG,      [$this, 'syncSataErrorLogRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable',     3, self::SATA_TID_ERROR_LOG,      [$this, 'syncSataErrorCmdRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelfTestTable',     2, self::SATA_TID_SELFTEST,       [$this, 'syncSataSelfTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable',2, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataLogDirTable',       2, self::SATA_TID_LOG_DIR,        [$this, 'syncSataLogDirRows']);
-        $this->walkAndSyncSataTable('smartmonSataDevStatTable',      3, self::SATA_TID_DEV_STAT,       [$this, 'syncSataDevStatRows'],      true);
+        $this->walkAndSyncSataTable('smartmonSataErcTable', 2, self::SATA_TID_ERC, [$this, 'syncSataErcRows']);
+        $this->walkAndSyncSataTable('smartmonSataPhyEventTable', 2, self::SATA_TID_PHY_EVENT, [$this, 'syncSataPhyEventRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorLogTable', 2, self::SATA_TID_ERROR_LOG, [$this, 'syncSataErrorLogRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable', 3, self::SATA_TID_ERROR_LOG, [$this, 'syncSataErrorCmdRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelfTestTable', 2, self::SATA_TID_SELFTEST, [$this, 'syncSataSelfTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataLogDirTable', 2, self::SATA_TID_LOG_DIR, [$this, 'syncSataLogDirRows']);
+        $this->walkAndSyncSataTable('smartmonSataDevStatTable', 3, self::SATA_TID_DEV_STAT, [$this, 'syncSataDevStatRows'], true);
 
         // Register all sensor types with the discovery system.
         $this->syncSensorTypes();
@@ -310,11 +316,11 @@ class Common extends Application
         array $health,
         array $attrRows
     ): void {
-        $device  = $this->device;
+        $device = $this->device;
         $diskKey = $dev['disk_key'];
         $devName = $this->sensorLabel($dev, $dev['snmp_index']);
-        $idx     = $this->mibDiskIndex($diskKey);
-        $group   = 'SMART';
+        $idx = $this->mibDiskIndex($diskKey);
+        $group = 'SMART';
 
         // Health: synthesised from overall status + attribute statuses
         if (isset($health['smartmonSataHealthOverallStatus'])) {
@@ -333,11 +339,11 @@ class Common extends Application
                     'sensor_current'    => $synthesized,
                 ]))
                 ->withStateTranslations('smart_mib_health', [
-                    StateTranslation::define('OK',                   1, Severity::Ok),
-                    StateTranslation::define('Warning',              2, Severity::Warning),
+                    StateTranslation::define('OK', 1, Severity::Ok),
+                    StateTranslation::define('Warning', 2, Severity::Warning),
                     StateTranslation::define('Warning: Attr Failed', 3, Severity::Warning),
-                    StateTranslation::define('Error: Attr Failing',  4, Severity::Error),
-                    StateTranslation::define('Unavailable',          5, Severity::Warning),
+                    StateTranslation::define('Error: Attr Failing', 4, Severity::Error),
+                    StateTranslation::define('Unavailable', 5, Severity::Warning),
                 ]);
         }
 
@@ -359,16 +365,16 @@ class Common extends Application
                     'sensor_current'    => $statusNibble,
                 ]))
                 ->withStateTranslations('smart_selftest_status', [
-                    StateTranslation::define('Completed without error',    0x0, Severity::Ok),
-                    StateTranslation::define('Aborted by host',            0x1, Severity::Ok),
-                    StateTranslation::define('Interrupted (host reset)',   0x2, Severity::Ok),
-                    StateTranslation::define('Fatal or unknown error',     0x3, Severity::Warning),
+                    StateTranslation::define('Completed without error', 0x0, Severity::Ok),
+                    StateTranslation::define('Aborted by host', 0x1, Severity::Ok),
+                    StateTranslation::define('Interrupted (host reset)', 0x2, Severity::Ok),
+                    StateTranslation::define('Fatal or unknown error', 0x3, Severity::Warning),
                     StateTranslation::define('Completed: unknown failure', 0x4, Severity::Warning),
                     StateTranslation::define('Completed: electrical fail', 0x5, Severity::Warning),
-                    StateTranslation::define('Completed: servo failure',   0x6, Severity::Warning),
-                    StateTranslation::define('Completed: read failure',    0x7, Severity::Warning),
+                    StateTranslation::define('Completed: servo failure', 0x6, Severity::Warning),
+                    StateTranslation::define('Completed: read failure', 0x7, Severity::Warning),
                     StateTranslation::define('Completed: handling damage', 0x8, Severity::Warning),
-                    StateTranslation::define('Self-test in progress',      0xf, Severity::Ok),
+                    StateTranslation::define('Self-test in progress', 0xf, Severity::Ok),
                 ]);
         }
     }
@@ -452,11 +458,11 @@ class Common extends Application
         // Change-guarded tables:
         $this->walkAndSyncSataPhyEventPoll();
         $this->walkAndSyncSataDevStatPoll();
-        $this->walkAndSyncSataTable('smartmonSataErrorLogTable',      2, self::SATA_TID_ERROR_LOG,       [$this, 'syncSataErrorLogRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable',      3, self::SATA_TID_ERROR_LOG,       [$this, 'syncSataErrorCmdRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelfTestTable',      2, self::SATA_TID_SELFTEST,        [$this, 'syncSataSelfTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, self::SATA_TID_SELECTIVE_TEST,  [$this, 'syncSataSelectiveTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable',2, self::SATA_TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorLogTable', 2, self::SATA_TID_ERROR_LOG, [$this, 'syncSataErrorLogRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable', 3, self::SATA_TID_ERROR_LOG, [$this, 'syncSataErrorCmdRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelfTestTable', 2, self::SATA_TID_SELFTEST, [$this, 'syncSataSelfTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable', 2, self::SATA_TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
 
         $this->persistSataChangeSnapshot();
         update_application($this->app, 'ok', null);
@@ -528,7 +534,7 @@ class Common extends Application
 
         foreach ($this->sataDeviceList as $devIdx => $dev) {
             $diskKey = $dev['disk_key'];
-            $idx     = $this->mibDiskIndex($diskKey);
+            $idx = $this->mibDiskIndex($diskKey);
 
             $sensors = Sensor::where('device_id', $device['device_id'])
                 ->where('sensor_oid', 'like', "app:smart_mib:{$idx}_%")
@@ -568,9 +574,9 @@ class Common extends Application
     /** Write per-disk RRDs for one SATA device. */
     private function pollSataDeviceRrd(array $dev, array $attrRows): void
     {
-        $device  = $this->device;
+        $device = $this->device;
         $diskKey = $dev['disk_key'];
-        $idx     = $this->mibDiskIndex($diskKey);
+        $idx = $this->mibDiskIndex($diskKey);
 
         // Attribute RRD
         // V2 uses ['app','smart',app_id,idx] with DS id{N} / id{N}Normalized.
@@ -581,20 +587,20 @@ class Common extends Application
                 ->pluck('rrd_type', 'attribute_id');
 
             $rrd_def = RrdDefinition::make();
-            $fields  = [];
+            $fields = [];
             foreach ($attrRows as $attrId => $row) {
-                $id     = (int) ($row['smartmonSataAttrId'] ?? $attrId);
-                $dsRaw  = 'id' . $id;
+                $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
+                $dsRaw = 'id' . $id;
                 $dsNorm = 'id' . $id . 'Normalized';
                 if (strlen($dsNorm) > 19) {
                     continue;
                 }
                 $rawType = $rrdTypes[$id]
                     ?? (isset(self::ATA_COUNTER_ATTRS[$id]) ? 'COUNTER' : 'GAUGE');
-                $rrd_def->addDataset($dsRaw,  $rawType, 0);
+                $rrd_def->addDataset($dsRaw, $rawType, 0);
                 $rrd_def->addDataset($dsNorm, 'GAUGE', 0);
-                $fields[$dsRaw]  = $row['smartmonSataAttrRawValue'] ?? null;
-                $fields[$dsNorm] = $row['smartmonSataAttrValue']    ?? null;
+                $fields[$dsRaw] = $row['smartmonSataAttrRawValue'] ?? null;
+                $fields[$dsNorm] = $row['smartmonSataAttrValue'] ?? null;
             }
             if (! empty($fields)) {
                 app('Datastore')->put($device, 'app', [
@@ -605,7 +611,6 @@ class Common extends Application
                 ], $fields);
             }
         }
-
     }
 
     private function updateMibSensor(Device $device, Sensor $sensor, ?float $value): void
@@ -641,19 +646,19 @@ class Common extends Application
             $this->commonDevices[(string) $index] = [
                 'snmp_index'           => (string) $index,
                 'disk_key'             => $this->diskKey($row, (string) $index),
-                'device_name'          => $row['smartmonDeviceName']            ?? null,
-                'device_path'          => $row['smartmonDevicePath']            ?? null,
+                'device_name'          => $row['smartmonDeviceName'] ?? null,
+                'device_path'          => $row['smartmonDevicePath'] ?? null,
                 'device_type'          => $this->intValue($row['smartmonDeviceType'] ?? null),
-                'last_poll_time'       => $row['smartmonDeviceLastPollTime']    ?? null,
+                'last_poll_time'       => $row['smartmonDeviceLastPollTime'] ?? null,
                 'last_poll_result'     => $this->intValue($row['smartmonDeviceLastPollResult'] ?? null),
                 'last_poll_exit_status'=> $this->intValue($row['smartmonDeviceLastPollExitStatus'] ?? null),
                 'physical_index'       => $this->intValue($row['smartmonDevicePhysicalIndex'] ?? null),
-                'uris'                 => $row['smartmonDeviceUris']            ?? null,
-                'model_family'         => $row['smartmonDeviceModelFamily']     ?? null,
-                'model_name'           => $row['smartmonDeviceModelName']       ?? null,
-                'serial_number'        => $row['smartmonDeviceSerialNumber']    ?? null,
+                'uris'                 => $row['smartmonDeviceUris'] ?? null,
+                'model_family'         => $row['smartmonDeviceModelFamily'] ?? null,
+                'model_name'           => $row['smartmonDeviceModelName'] ?? null,
+                'serial_number'        => $row['smartmonDeviceSerialNumber'] ?? null,
                 'firmware_version'     => $row['smartmonDeviceFirmwareVersion'] ?? null,
-                'wwn'                  => $row['smartmonDeviceWwn']             ?? null,
+                'wwn'                  => $row['smartmonDeviceWwn'] ?? null,
             ];
         }
     }
@@ -802,56 +807,56 @@ class Common extends Application
             'app_id'                               => $this->appId,
             'device_id'                            => $this->deviceId,
             'disk_key'                             => $dev['disk_key'],
-            'ata_version'                          => $this->intValue($row['smartmonSataAtaVersion']                     ?? null),
-            'sata_version'                         => $this->intValue($row['smartmonSataVersion']                        ?? null),
-            'rotation_rate'                        => $row['smartmonSataRotationRate']                                    ?? null,
-            'form_factor'                          => $this->intValue($row['smartmonSataFormFactor']                     ?? null),
-            'logical_block_size'                   => $row['smartmonSataLogicalBlockSize']                               ?? null,
-            'physical_block_size'                  => $row['smartmonSataPhysicalBlockSize']                              ?? null,
-            'user_capacity_bytes'                  => $row['smartmonSataUserCapacityBytes']                              ?? null,
-            'sct_hist_op_limit_min'                => $row['smartmonSataSctHistOpLimitMin']                              ?? null,
-            'sct_hist_op_limit_max'                => $row['smartmonSataSctHistOpLimitMax']                              ?? null,
-            'sct_hist_limit_min'                   => $row['smartmonSataSctHistLimitMin']                                ?? null,
-            'sct_hist_limit_max'                   => $row['smartmonSataSctHistLimitMax']                                ?? null,
+            'ata_version'                          => $this->intValue($row['smartmonSataAtaVersion'] ?? null),
+            'sata_version'                         => $this->intValue($row['smartmonSataVersion'] ?? null),
+            'rotation_rate'                        => $row['smartmonSataRotationRate'] ?? null,
+            'form_factor'                          => $this->intValue($row['smartmonSataFormFactor'] ?? null),
+            'logical_block_size'                   => $row['smartmonSataLogicalBlockSize'] ?? null,
+            'physical_block_size'                  => $row['smartmonSataPhysicalBlockSize'] ?? null,
+            'user_capacity_bytes'                  => $row['smartmonSataUserCapacityBytes'] ?? null,
+            'sct_hist_op_limit_min'                => $row['smartmonSataSctHistOpLimitMin'] ?? null,
+            'sct_hist_op_limit_max'                => $row['smartmonSataSctHistOpLimitMax'] ?? null,
+            'sct_hist_limit_min'                   => $row['smartmonSataSctHistLimitMin'] ?? null,
+            'sct_hist_limit_max'                   => $row['smartmonSataSctHistLimitMax'] ?? null,
             // New columns
-            'ata_version_major'                    => $this->intValue($row['smartmonSataAtaVersionMajor']               ?? null),
-            'ata_version_minor'                    => $this->intValue($row['smartmonSataAtaVersionMinor']               ?? null),
-            'user_capacity_blocks'                 => $row['smartmonSataUserCapacityBlocks']                             ?? null,
-            'in_smartctl_database'                 => $this->snmpTruthValue($row['smartmonSataInSmartctlDatabase']      ?? null),
-            'smart_available'                      => $this->snmpTruthValue($row['smartmonSataSmartAvailable']          ?? null),
-            'smart_enabled'                        => $this->snmpTruthValue($row['smartmonSataSmartEnabled']            ?? null),
-            'trim_supported'                       => $this->snmpTruthValue($row['smartmonSataTrimSupported']           ?? null),
-            'write_cache_enabled'                  => $this->snmpTruthValue($row['smartmonSataWriteCacheEnabled']       ?? null),
-            'read_lookahead_enabled'               => $this->snmpTruthValue($row['smartmonSataReadLookaheadEnabled']    ?? null),
-            'apm_enabled'                          => $this->snmpTruthValue($row['smartmonSataApmEnabled']              ?? null),
-            'apm_level'                            => $this->intValue($row['smartmonSataApmLevel']                      ?? null),
-            'security_state'                       => $row['smartmonSataSecurityState']                                  ?? null,
-            'security_enabled'                     => $this->snmpTruthValue($row['smartmonSataSecurityEnabled']         ?? null),
-            'security_frozen'                      => $this->snmpTruthValue($row['smartmonSataSecurityFrozen']          ?? null),
-            'if_speed_current_value'               => $row['smartmonSataIfSpeedCurrentValue']                           ?? null,
-            'if_speed_max_value'                   => $row['smartmonSataIfSpeedMaxValue']                               ?? null,
-            'selftest_polling_short_minutes'       => $row['smartmonSataSelfTestPollingShortMinutes']                   ?? null,
-            'selftest_polling_extended_minutes'    => $row['smartmonSataSelfTestPollingExtendedMinutes']                 ?? null,
-            'selftest_polling_conveyance_minutes'  => $row['smartmonSataSelfTestPollingConveyanceMinutes']              ?? null,
-            'offline_collection_completion_secs'   => $row['smartmonSataOfflineCollectionCompletionSecs']               ?? null,
-            'attr_revision'                        => $row['smartmonSataAttrRevision']                                   ?? null,
-            'error_log_revision'                   => $row['smartmonSataErrorLogRevision']                              ?? null,
-            'error_log_sectors'                    => $row['smartmonSataErrorLogSectors']                               ?? null,
-            'selftest_log_revision'                => $row['smartmonSataSelfTestLogRevision']                           ?? null,
-            'selftest_log_sectors'                 => $row['smartmonSataSelfTestLogSectors']                            ?? null,
-            'pending_defects_size'                 => $row['smartmonSataPendingDefectsSize']                            ?? null,
-            'capability_selftests_supported'       => $this->snmpTruthValue($row['smartmonSataCapabilitySelfTestsSupported']       ?? null),
-            'capability_conveyance_supported'      => $this->snmpTruthValue($row['smartmonSataCapabilityConveyanceSupported']      ?? null),
-            'capability_selective_supported'       => $this->snmpTruthValue($row['smartmonSataCapabilitySelectiveSupported']       ?? null),
-            'capability_error_logging_supported'   => $this->snmpTruthValue($row['smartmonSataCapabilityErrorLoggingSupported']    ?? null),
-            'capability_gp_logging_supported'      => $this->snmpTruthValue($row['smartmonSataCapabilityGpLoggingSupported']       ?? null),
-            'capability_exec_offline_immediate'    => $this->snmpTruthValue($row['smartmonSataCapabilityExecOfflineImmediate']     ?? null),
-            'capability_offline_aborted_on_cmd'    => $this->snmpTruthValue($row['smartmonSataCapabilityOfflineAbortedOnCmd']      ?? null),
-            'capability_offline_surface_scan'      => $this->snmpTruthValue($row['smartmonSataCapabilityOfflineSurfaceScan']       ?? null),
-            'capability_attr_autosave'             => $this->snmpTruthValue($row['smartmonSataCapabilityAttrAutosave']             ?? null),
-            'sct_error_recovery_supported'         => $this->snmpTruthValue($row['smartmonSataSctErrorRecoverySupported']          ?? null),
-            'sct_feature_control_supported'        => $this->snmpTruthValue($row['smartmonSataSctFeatureControlSupported']         ?? null),
-            'sct_data_table_supported'             => $this->snmpTruthValue($row['smartmonSataSctDataTableSupported']              ?? null),
+            'ata_version_major'                    => $this->intValue($row['smartmonSataAtaVersionMajor'] ?? null),
+            'ata_version_minor'                    => $this->intValue($row['smartmonSataAtaVersionMinor'] ?? null),
+            'user_capacity_blocks'                 => $row['smartmonSataUserCapacityBlocks'] ?? null,
+            'in_smartctl_database'                 => $this->snmpTruthValue($row['smartmonSataInSmartctlDatabase'] ?? null),
+            'smart_available'                      => $this->snmpTruthValue($row['smartmonSataSmartAvailable'] ?? null),
+            'smart_enabled'                        => $this->snmpTruthValue($row['smartmonSataSmartEnabled'] ?? null),
+            'trim_supported'                       => $this->snmpTruthValue($row['smartmonSataTrimSupported'] ?? null),
+            'write_cache_enabled'                  => $this->snmpTruthValue($row['smartmonSataWriteCacheEnabled'] ?? null),
+            'read_lookahead_enabled'               => $this->snmpTruthValue($row['smartmonSataReadLookaheadEnabled'] ?? null),
+            'apm_enabled'                          => $this->snmpTruthValue($row['smartmonSataApmEnabled'] ?? null),
+            'apm_level'                            => $this->intValue($row['smartmonSataApmLevel'] ?? null),
+            'security_state'                       => $row['smartmonSataSecurityState'] ?? null,
+            'security_enabled'                     => $this->snmpTruthValue($row['smartmonSataSecurityEnabled'] ?? null),
+            'security_frozen'                      => $this->snmpTruthValue($row['smartmonSataSecurityFrozen'] ?? null),
+            'if_speed_current_value'               => $row['smartmonSataIfSpeedCurrentValue'] ?? null,
+            'if_speed_max_value'                   => $row['smartmonSataIfSpeedMaxValue'] ?? null,
+            'selftest_polling_short_minutes'       => $row['smartmonSataSelfTestPollingShortMinutes'] ?? null,
+            'selftest_polling_extended_minutes'    => $row['smartmonSataSelfTestPollingExtendedMinutes'] ?? null,
+            'selftest_polling_conveyance_minutes'  => $row['smartmonSataSelfTestPollingConveyanceMinutes'] ?? null,
+            'offline_collection_completion_secs'   => $row['smartmonSataOfflineCollectionCompletionSecs'] ?? null,
+            'attr_revision'                        => $row['smartmonSataAttrRevision'] ?? null,
+            'error_log_revision'                   => $row['smartmonSataErrorLogRevision'] ?? null,
+            'error_log_sectors'                    => $row['smartmonSataErrorLogSectors'] ?? null,
+            'selftest_log_revision'                => $row['smartmonSataSelfTestLogRevision'] ?? null,
+            'selftest_log_sectors'                 => $row['smartmonSataSelfTestLogSectors'] ?? null,
+            'pending_defects_size'                 => $row['smartmonSataPendingDefectsSize'] ?? null,
+            'capability_selftests_supported'       => $this->snmpTruthValue($row['smartmonSataCapabilitySelfTestsSupported'] ?? null),
+            'capability_conveyance_supported'      => $this->snmpTruthValue($row['smartmonSataCapabilityConveyanceSupported'] ?? null),
+            'capability_selective_supported'       => $this->snmpTruthValue($row['smartmonSataCapabilitySelectiveSupported'] ?? null),
+            'capability_error_logging_supported'   => $this->snmpTruthValue($row['smartmonSataCapabilityErrorLoggingSupported'] ?? null),
+            'capability_gp_logging_supported'      => $this->snmpTruthValue($row['smartmonSataCapabilityGpLoggingSupported'] ?? null),
+            'capability_exec_offline_immediate'    => $this->snmpTruthValue($row['smartmonSataCapabilityExecOfflineImmediate'] ?? null),
+            'capability_offline_aborted_on_cmd'    => $this->snmpTruthValue($row['smartmonSataCapabilityOfflineAbortedOnCmd'] ?? null),
+            'capability_offline_surface_scan'      => $this->snmpTruthValue($row['smartmonSataCapabilityOfflineSurfaceScan'] ?? null),
+            'capability_attr_autosave'             => $this->snmpTruthValue($row['smartmonSataCapabilityAttrAutosave'] ?? null),
+            'sct_error_recovery_supported'         => $this->snmpTruthValue($row['smartmonSataSctErrorRecoverySupported'] ?? null),
+            'sct_feature_control_supported'        => $this->snmpTruthValue($row['smartmonSataSctFeatureControlSupported'] ?? null),
+            'sct_data_table_supported'             => $this->snmpTruthValue($row['smartmonSataSctDataTableSupported'] ?? null),
         ], ['app_id', 'disk_key'], [
             'ata_version', 'sata_version', 'rotation_rate', 'form_factor',
             'logical_block_size', 'physical_block_size', 'user_capacity_bytes',
@@ -880,29 +885,29 @@ class Common extends Application
             'app_id'                     => $this->appId,
             'device_id'                  => $this->deviceId,
             'disk_key'                   => $dev['disk_key'],
-            'overall_status'             => $this->snmpTruthValue($row['smartmonSataHealthOverallStatus']     ?? null),
-            'offline_collection_status'  => $row['smartmonSataOfflineCollectionStatusValue']   ?? null,
-            'selftest_exec_status_raw'   => $row['smartmonSataSelfTestExecutionStatusValue']   ?? null,
-            'power_cycles'               => $row['smartmonSataPowerCycles']                    ?? null,
-            'power_on_hours'             => $row['smartmonSataPowerOnHours']                   ?? null,
-            'error_log_count'            => $row['smartmonSataErrorLogCount']                  ?? null,
-            'pending_defects_count'      => $row['smartmonSataPendingDefectsCount']            ?? null,
-            'selftest_log_count'         => $row['smartmonSataSelfTestLogCount']               ?? null,
-            'selftest_log_err_total'     => $row['smartmonSataSelfTestLogErrTotal']            ?? null,
-            'selftest_log_err_outdated'  => $row['smartmonSataSelfTestLogErrOutdated']         ?? null,
-            'selftest_remaining_pct'     => $row['smartmonSataSelfTestExecutionRemainingPct']  ?? null,
-            'sct_format_version'         => $row['smartmonSataSctStatusFormatVersion']         ?? null,
-            'sct_version'                => $row['smartmonSataSctStatusSctVersion']            ?? null,
-            'sct_device_state'           => $row['smartmonSataSctStatusDeviceState']           ?? null,
-            'sct_temp_power_cycle_min'   => $row['smartmonSataSctTempPowerCycleMin']           ?? null,
-            'sct_temp_power_cycle_max'   => $row['smartmonSataSctTempPowerCycleMax']           ?? null,
-            'sct_temp_lifetime_min'      => $row['smartmonSataSctTempLifetimeMin']             ?? null,
-            'sct_temp_lifetime_max'      => $row['smartmonSataSctTempLifetimeMax']             ?? null,
-            'sct_temp_under_limit_count' => $row['smartmonSataSctTempUnderLimitCount']         ?? null,
-            'sct_temp_over_limit_count'  => $row['smartmonSataSctTempOverLimitCount']          ?? null,
-            'sct_smart_status_passed'               => $this->snmpTruthValue($row['smartmonSataSctSmartStatusPassed']            ?? null),
+            'overall_status'             => $this->snmpTruthValue($row['smartmonSataHealthOverallStatus'] ?? null),
+            'offline_collection_status'  => $row['smartmonSataOfflineCollectionStatusValue'] ?? null,
+            'selftest_exec_status_raw'   => $row['smartmonSataSelfTestExecutionStatusValue'] ?? null,
+            'power_cycles'               => $row['smartmonSataPowerCycles'] ?? null,
+            'power_on_hours'             => $row['smartmonSataPowerOnHours'] ?? null,
+            'error_log_count'            => $row['smartmonSataErrorLogCount'] ?? null,
+            'pending_defects_count'      => $row['smartmonSataPendingDefectsCount'] ?? null,
+            'selftest_log_count'         => $row['smartmonSataSelfTestLogCount'] ?? null,
+            'selftest_log_err_total'     => $row['smartmonSataSelfTestLogErrTotal'] ?? null,
+            'selftest_log_err_outdated'  => $row['smartmonSataSelfTestLogErrOutdated'] ?? null,
+            'selftest_remaining_pct'     => $row['smartmonSataSelfTestExecutionRemainingPct'] ?? null,
+            'sct_format_version'         => $row['smartmonSataSctStatusFormatVersion'] ?? null,
+            'sct_version'                => $row['smartmonSataSctStatusSctVersion'] ?? null,
+            'sct_device_state'           => $row['smartmonSataSctStatusDeviceState'] ?? null,
+            'sct_temp_power_cycle_min'   => $row['smartmonSataSctTempPowerCycleMin'] ?? null,
+            'sct_temp_power_cycle_max'   => $row['smartmonSataSctTempPowerCycleMax'] ?? null,
+            'sct_temp_lifetime_min'      => $row['smartmonSataSctTempLifetimeMin'] ?? null,
+            'sct_temp_lifetime_max'      => $row['smartmonSataSctTempLifetimeMax'] ?? null,
+            'sct_temp_under_limit_count' => $row['smartmonSataSctTempUnderLimitCount'] ?? null,
+            'sct_temp_over_limit_count'  => $row['smartmonSataSctTempOverLimitCount'] ?? null,
+            'sct_smart_status_passed'               => $this->snmpTruthValue($row['smartmonSataSctSmartStatusPassed'] ?? null),
             'selftest_estimated_completion_time'    => $this->parseDateAndTime($row['smartmonSataSelfTestEstimatedCompletionTime'] ?? null),
-            'selftest_estimated_bytes_sec'          => $row['smartmonSataSelfTestEstimatedBytesSec']                              ?? null,
+            'selftest_estimated_bytes_sec'          => $row['smartmonSataSelfTestEstimatedBytesSec'] ?? null,
         ], ['app_id', 'disk_key'], [
             'overall_status',
             'offline_collection_status',
@@ -938,15 +943,15 @@ class Common extends Application
                 'device_id'        => $this->deviceId,
                 'disk_key'         => $dev['disk_key'],
                 'attribute_id'     => (int) ($row['smartmonSataAttrId'] ?? $attrId),
-                'name'             => $row['smartmonSataAttrName']      ?? null,
-                'value_norm'       => $row['smartmonSataAttrValue']     ?? null,
-                'value_worst'      => $row['smartmonSataAttrWorst']     ?? null,
+                'name'             => $row['smartmonSataAttrName'] ?? null,
+                'value_norm'       => $row['smartmonSataAttrValue'] ?? null,
+                'value_worst'      => $row['smartmonSataAttrWorst'] ?? null,
                 'value_threshold'  => $row['smartmonSataAttrThreshold'] ?? null,
-                'value_raw'        => $row['smartmonSataAttrRawValue']  ?? null,
+                'value_raw'        => $row['smartmonSataAttrRawValue'] ?? null,
                 'value_raw_string' => isset($row['smartmonSataAttrRawString'])
                     ? substr((string) $row['smartmonSataAttrRawString'], 0, 32)
                     : null,
-                'status'           => $row['smartmonSataAttrStatus']    ?? null,
+                'status'           => $row['smartmonSataAttrStatus'] ?? null,
                 'flags'            => $this->parseAttrFlags($row['smartmonSataAttrFlags'] ?? null),
                 'rrd_type'         => in_array($row['smartmonSataAttrName'] ?? null, self::ATA_COUNTER_ATTRS, true)
                     ? 'COUNTER' : 'GAUGE',
@@ -966,12 +971,12 @@ class Common extends Application
                 'device_id'        => $this->deviceId,
                 'disk_key'         => $dev['disk_key'],
                 'attribute_id'     => (int) $attrId,
-                'value_norm'       => $row['smartmonSataAttrValue']    ?? null,
+                'value_norm'       => $row['smartmonSataAttrValue'] ?? null,
                 'value_raw'        => $row['smartmonSataAttrRawValue'] ?? null,
                 'value_raw_string' => isset($row['smartmonSataAttrRawString'])
                     ? substr((string) $row['smartmonSataAttrRawString'], 0, 32)
                     : null,
-                'status'           => $row['smartmonSataAttrStatus']   ?? null,
+                'status'           => $row['smartmonSataAttrStatus'] ?? null,
             ], ['app_id', 'disk_key', 'attribute_id'], [
                 'value_norm', 'value_raw', 'value_raw_string', 'status',
             ]);
@@ -986,7 +991,7 @@ class Common extends Application
                 'device_id'   => $this->deviceId,
                 'disk_key'    => $dev['disk_key'],
                 'direction'   => (int) $direction,
-                'enabled'     => $this->snmpTruthValue($row['smartmonSataErcEnabled']    ?? null),
+                'enabled'     => $this->snmpTruthValue($row['smartmonSataErcEnabled'] ?? null),
                 'deciseconds' => $row['smartmonSataErcDeciseconds'] ?? null,
             ], ['app_id', 'disk_key', 'direction'], ['enabled', 'deciseconds']);
         }
@@ -1004,8 +1009,8 @@ class Common extends Application
                 'event_id'   => (int) $eventId,
                 'name'       => isset($row['smartmonSataPhyEventName'])
                     ? substr((string) $row['smartmonSataPhyEventName'], 0, 128) : null,
-                'size_bytes' => $row['smartmonSataPhyEventSize']     ?? null,
-                'value'      => $row['smartmonSataPhyEventValue']    ?? null,
+                'size_bytes' => $row['smartmonSataPhyEventSize'] ?? null,
+                'value'      => $row['smartmonSataPhyEventValue'] ?? null,
                 'overflow'   => $this->snmpTruthValue($row['smartmonSataPhyEventOverflow'] ?? null),
             ], ['app_id', 'disk_key', 'event_id'], ['name', 'size_bytes', 'value', 'overflow']);
         }
@@ -1022,7 +1027,7 @@ class Common extends Application
                 'device_id' => $this->deviceId,
                 'disk_key'  => $dev['disk_key'],
                 'event_id'  => (int) $eventId,
-                'value'     => $row['smartmonSataPhyEventValue']    ?? null,
+                'value'     => $row['smartmonSataPhyEventValue'] ?? null,
                 'overflow'  => $this->snmpTruthValue($row['smartmonSataPhyEventOverflow'] ?? null),
             ];
         }
@@ -1043,13 +1048,13 @@ class Common extends Application
                 'device_id'       => $this->deviceId,
                 'disk_key'        => $dev['disk_key'],
                 'entry_num'       => (int) $errorIndex,
-                'error_count'     => $row['smartmonSataErrorNumber']         ?? null,
-                'lifetime_hours'  => $row['smartmonSataErrorLifetimeHours']  ?? null,
+                'error_count'     => $row['smartmonSataErrorNumber'] ?? null,
+                'lifetime_hours'  => $row['smartmonSataErrorLifetimeHours'] ?? null,
                 'error_type'      => isset($row['smartmonSataErrorDescription'])
                     ? substr((string) $row['smartmonSataErrorDescription'], 0, 64) : null,
-                'device_state'    => $row['smartmonSataErrorState']          ?? null,
-                'status_register' => $row['smartmonSataErrorCompRegStatus']  ?? null,
-                'error_register'  => $row['smartmonSataErrorCompRegError']   ?? null,
+                'device_state'    => $row['smartmonSataErrorState'] ?? null,
+                'status_register' => $row['smartmonSataErrorCompRegStatus'] ?? null,
+                'error_register'  => $row['smartmonSataErrorCompRegError'] ?? null,
             ], ['app_id', 'disk_key', 'entry_num'], [
                 'error_count', 'lifetime_hours', 'error_type',
                 'device_state', 'status_register', 'error_register',
@@ -1071,13 +1076,13 @@ class Common extends Application
                     'disk_key'        => $dev['disk_key'],
                     'error_entry_num' => (int) $errorIndex,
                     'cmd_slot'        => (int) $cmdIndex,
-                    'reg_command'     => $row['smartmonSataErrorCmdRegCommand']     ?? null,
-                    'reg_count'       => $row['smartmonSataErrorCmdRegCount']       ?? null,
-                    'reg_device'      => $row['smartmonSataErrorCmdRegDevice']      ?? null,
-                    'reg_error'       => $row['smartmonSataErrorCmdRegError']       ?? null,
-                    'reg_feature'     => $row['smartmonSataErrorCmdRegFeature']     ?? null,
-                    'reg_lba'         => $row['smartmonSataErrorCmdRegLba']         ?? null,
-                    'powerup_ms'      => $row['smartmonSataErrorCmdTimestamp']      ?? null,
+                    'reg_command'     => $row['smartmonSataErrorCmdRegCommand'] ?? null,
+                    'reg_count'       => $row['smartmonSataErrorCmdRegCount'] ?? null,
+                    'reg_device'      => $row['smartmonSataErrorCmdRegDevice'] ?? null,
+                    'reg_error'       => $row['smartmonSataErrorCmdRegError'] ?? null,
+                    'reg_feature'     => $row['smartmonSataErrorCmdRegFeature'] ?? null,
+                    'reg_lba'         => $row['smartmonSataErrorCmdRegLba'] ?? null,
+                    'powerup_ms'      => $row['smartmonSataErrorCmdTimestamp'] ?? null,
                     'description'     => isset($row['smartmonSataErrorCmdDescription'])
                         ? substr((string) $row['smartmonSataErrorCmdDescription'], 0, 128) : null,
                 ], ['app_id', 'disk_key', 'error_entry_num', 'cmd_slot'], [
@@ -1098,10 +1103,10 @@ class Common extends Application
                 'device_id'       => $this->deviceId,
                 'disk_key'        => $dev['disk_key'],
                 'entry_num'       => (int) $testIndex,
-                'test_type'       => $row['smartmonSataSelfTestType']          ?? null,
-                'result'          => $row['smartmonSataSelfTestResult']        ?? null,
+                'test_type'       => $row['smartmonSataSelfTestType'] ?? null,
+                'result'          => $row['smartmonSataSelfTestResult'] ?? null,
                 'result_passed'   => $this->snmpTruthValue($row['smartmonSataSelfTestResultPassed'] ?? null),
-                'remaining_pct'   => $row['smartmonSataSelfTestRemainingPct']  ?? null,
+                'remaining_pct'   => $row['smartmonSataSelfTestRemainingPct'] ?? null,
                 'power_on_hours'  => $row['smartmonSataSelfTestLifetimeHours'] ?? null,
                 'lba_first_error' => $row['smartmonSataSelfTestLbaFirstError'] ?? null,
             ], ['app_id', 'disk_key', 'entry_num'], [
@@ -1119,8 +1124,8 @@ class Common extends Application
                 'device_id'    => $this->deviceId,
                 'disk_key'     => $dev['disk_key'],
                 'slot'         => (int) $slot,
-                'lba_min'      => $row['smartmonSataSelectiveLbaMin']      ?? null,
-                'lba_max'      => $row['smartmonSataSelectiveLbaMax']      ?? null,
+                'lba_min'      => $row['smartmonSataSelectiveLbaMin'] ?? null,
+                'lba_max'      => $row['smartmonSataSelectiveLbaMax'] ?? null,
                 'status_value' => $row['smartmonSataSelectiveStatusValue'] ?? null,
             ], ['app_id', 'disk_key', 'slot'], ['lba_min', 'lba_max', 'status_value']);
         }
@@ -1139,7 +1144,7 @@ class Common extends Application
                     ? substr((string) $row['smartmonSataLogDirName'], 0, 128) : null,
                 'readable'      => $this->snmpTruthValue($row['smartmonSataLogDirReadable'] ?? null),
                 'writable'      => $this->snmpTruthValue($row['smartmonSataLogDirWritable'] ?? null),
-                'gp_sectors'    => $row['smartmonSataLogDirGpSectors']    ?? null,
+                'gp_sectors'    => $row['smartmonSataLogDirGpSectors'] ?? null,
                 'smart_sectors' => $row['smartmonSataLogDirSmartSectors'] ?? null,
             ], ['app_id', 'disk_key', 'log_address'], [
                 'name', 'readable', 'writable', 'gp_sectors', 'smart_sectors',
@@ -1159,8 +1164,8 @@ class Common extends Application
                 continue;
             }
             foreach ($offsets as $offset => $row) {
-                $flagsRaw   = $this->parseBitsValue($row['smartmonSataDevStatFlagsValue'] ?? null);
-                $valid      = $flagsRaw !== null ? (bool) ($flagsRaw & 0x40) : null;
+                $flagsRaw = $this->parseBitsValue($row['smartmonSataDevStatFlagsValue'] ?? null);
+                $valid = $flagsRaw !== null ? (bool) ($flagsRaw & 0x40) : null;
                 $normalized = $flagsRaw !== null ? (bool) ($flagsRaw & 0x20) : null;
 
                 DB::table('smart_sata_dev_stats')->upsert([
@@ -1173,7 +1178,7 @@ class Common extends Application
                         ? substr((string) $row['smartmonSataDevStatPageName'], 0, 64) : null,
                     'stat_name'   => isset($row['smartmonSataDevStatName'])
                         ? substr((string) $row['smartmonSataDevStatName'], 0, 128) : null,
-                    'value'       => $row['smartmonSataDevStatValue']      ?? null,
+                    'value'       => $row['smartmonSataDevStatValue'] ?? null,
                     'flags_value' => $flagsRaw,
                     'valid'       => $valid,
                     'normalized'  => $normalized,
@@ -1208,7 +1213,7 @@ class Common extends Application
             return;
         }
 
-        $valueRows    = $this->walkSataTable('smartmonSataPhyEventValue',    2);
+        $valueRows = $this->walkSataTable('smartmonSataPhyEventValue', 2);
         $overflowRows = $this->walkSataTable('smartmonSataPhyEventOverflow', 2);
 
         foreach ($this->sataDeviceList as $devIdx => $dev) {
@@ -1275,7 +1280,7 @@ class Common extends Application
     private function sataTableChangedForDevice(string $devIdx, int $tableId): bool
     {
         $current = $this->sataChangeRows[$devIdx][$tableId] ?? null;
-        $prev    = $this->prevSataChange !== null ? ($this->prevSataChange[$devIdx][$tableId][0] ?? null) : null;
+        $prev = $this->prevSataChange !== null ? ($this->prevSataChange[$devIdx][$tableId][0] ?? null) : null;
 
         return $current !== $prev;
     }
@@ -1283,7 +1288,7 @@ class Common extends Application
     private function sataTableChangedForDevicePage(string $devIdx, int $tableId, int $subindex): bool
     {
         $current = $this->sataSubindexChangeRows[$devIdx][$tableId][$subindex] ?? null;
-        $prev    = $this->prevSataChange !== null ? ($this->prevSataChange[$devIdx][$tableId][$subindex] ?? null) : null;
+        $prev = $this->prevSataChange !== null ? ($this->prevSataChange[$devIdx][$tableId][$subindex] ?? null) : null;
 
         return $current !== $prev;
     }
@@ -1314,6 +1319,7 @@ class Common extends Application
             $this->sataChangeByDeviceTable();
             if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable($tableId)) {
                 $this->vlog("walkAndSyncSataTable: {$table} skipped (no changes)");
+
                 return;
             }
         }
@@ -1468,6 +1474,7 @@ class Common extends Application
 
         if ($handler !== null) {
             $this->vlog("detectAndPersistHandler: using stored handler={$handler}");
+
             return $handler;
         }
 
@@ -1518,7 +1525,7 @@ class Common extends Application
 
         $sata = array_filter(
             $this->commonDevices,
-            fn($dev) => in_array($dev['device_type'] ?? 0, self::SATA_TYPES, true)
+            fn ($dev) => in_array($dev['device_type'] ?? 0, self::SATA_TYPES, true)
         );
         $this->vlog('sataDevices: ' . count($sata) . ' SATA / ' . count($this->commonDevices) . ' total device(s)');
 
@@ -1642,9 +1649,9 @@ class Common extends Application
     /** Human-readable sensor label: "Model Serial (name)" or graceful fallbacks. */
     private function sensorLabel(array $dev, string $fallback): string
     {
-        $model  = trim((string) ($dev['model_name']    ?? ''));
+        $model = trim((string) ($dev['model_name'] ?? ''));
         $serial = trim((string) ($dev['serial_number'] ?? ''));
-        $name   = trim((string) ($dev['device_name']   ?? ''));
+        $name = trim((string) ($dev['device_name'] ?? ''));
 
         $parts = array_filter([$model, $serial]);
         $label = implode(' ', $parts);
@@ -1675,7 +1682,7 @@ class Common extends Application
 
         $scaleEnum = $row['smartmonSensorScale'] ?? 9; // units(9 = 10^0)
         $precision = $row['smartmonSensorPrecision'] ?? 0;
-        $exp       = self::SENSOR_SCALE_EXP[$scaleEnum] ?? 0;
+        $exp = self::SENSOR_SCALE_EXP[$scaleEnum] ?? 0;
 
         return (float) $raw * (10 ** ($exp - $precision));
     }
@@ -1705,6 +1712,7 @@ class Common extends Application
         if ($numericIndex) {
             $query = $query->numericIndex();
         }
+
         return $query->walk("SMARTMON-SATA-MIB::$table")->table($group);
     }
 
@@ -1715,7 +1723,7 @@ class Common extends Application
             return $wwn;
         }
 
-        $model  = trim((string) ($row['smartmonDeviceModelName']   ?? ''));
+        $model = trim((string) ($row['smartmonDeviceModelName'] ?? ''));
         $serial = trim((string) ($row['smartmonDeviceSerialNumber'] ?? ''));
         if ($model !== '' || $serial !== '') {
             return $model . '+' . $serial;
