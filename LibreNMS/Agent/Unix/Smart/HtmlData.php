@@ -479,36 +479,70 @@ class HtmlData
     }
 
     /**
-     * Human-readable flag lines for an attribute, for the Flags tooltip.
-     * Only type (pre-fail/old-age) and update mode are available in the DB.
+     * Human-readable flag lines for an attribute, for the Flags tooltip,
+     * derived from the smartmonSataAttrFlags bitmask.
      *
      * @return array<int, string>
      */
     public function attributeFlagLines(array $attr): array
     {
         $lines = [];
-        if (isset($attr['attr_type'])) {
-            $lines[] = 'Type: ' . $this->decode('attr_type', $attr['attr_type']);
-        }
-        if (isset($attr['updated_when'])) {
-            $lines[] = 'Updated: ' . $this->decode('attr_updated', $attr['updated_when']);
+        $flags = $attr['flags'] ?? null;
+        if ($flags !== null && $flags !== '') {
+            $mask = (int) $flags;
+            foreach (self::ATTR_FLAG_BITS as $bit => [$letter, $label]) {
+                if ($mask & (1 << $bit)) {
+                    $lines[] = $letter . ' = ' . $label;
+                }
+            }
         }
 
         return $lines;
     }
 
-    /** Short flags summary shown in the attribute table cell. */
-    public function attributeFlagsShort(array $attr): string
+    /** smartmonSataAttrFlags bit => [letter, label], canonical order P O S R C K. */
+    private const ATTR_FLAG_BITS = [
+        0 => ['P', 'Pre-fail'],
+        1 => ['O', 'Updated online'],
+        2 => ['S', 'Speed/performance'],
+        3 => ['R', 'Error rate'],
+        4 => ['C', 'Event count'],
+        5 => ['K', 'Auto-keep'],
+    ];
+
+    /**
+     * Fixed-width smartmontools-style flag string in canonical order P O S R C K,
+     * built from the stored smartmonSataAttrFlags bitmask. Each slot is its
+     * letter when the flag is set, or '-' otherwise.
+     */
+    public function attributeFlagsPositional(array $attr): string
     {
-        $parts = [];
-        if (($t = (int) ($attr['attr_type'] ?? 0)) > 0) {
-            $parts[] = $t === 1 ? 'P' : 'O';
-        }
-        if (($u = (int) ($attr['updated_when'] ?? 0)) > 0) {
-            $parts[] = $u === 1 ? 'C' : 'O';
+        $mask = (int) ($attr['flags'] ?? 0);
+        $out = '';
+        foreach (self::ATTR_FLAG_BITS as $bit => [$letter]) {
+            $out .= ($mask & (1 << $bit)) ? $letter : '-';
         }
 
-        return implode('-', $parts);
+        return $out;
+    }
+
+    /**
+     * Add thin thousands separators to every long digit run in a raw reading,
+     * leaving surrounding text intact: "433684413" => "433 684 413",
+     * "0/433684413" => "0/433 684 413", "31 (Min/Max 24/40)" unchanged.
+     */
+    public function formatRawSpaced(mixed $raw): string
+    {
+        $s = trim((string) $raw);
+        if ($s === '') {
+            return '';
+        }
+
+        return preg_replace_callback(
+            '/\d{4,}/',
+            static fn ($m) => preg_replace('/\B(?=(\d{3})+(?!\d))/', ' ', $m[0]),
+            $s
+        );
     }
 
     /** Device-statistics rows hidden in the detailed view (shown elsewhere). */

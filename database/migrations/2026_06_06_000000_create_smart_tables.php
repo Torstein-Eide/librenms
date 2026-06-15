@@ -100,8 +100,9 @@ return new class extends Migration
             $table->string('disk_key', 160);
             $table->unsignedTinyInteger('attribute_id');
             $table->string('name', 64)->nullable();
-            $table->unsignedTinyInteger('attr_type')->nullable();
-            $table->unsignedTinyInteger('updated_when')->nullable();
+            // smartmonSataAttrFlags BITS bitmask: bit0 prefailure, bit1 onlineCollection,
+            // bit2 performance, bit3 errorRate, bit4 eventCount, bit5 autoKeep.
+            $table->unsignedSmallInteger('flags')->nullable();
             $table->unsignedTinyInteger('value_norm')->nullable();
             $table->unsignedTinyInteger('value_worst')->nullable();
             $table->unsignedTinyInteger('value_threshold')->nullable();

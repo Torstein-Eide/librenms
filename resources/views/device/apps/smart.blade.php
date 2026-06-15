@@ -723,31 +723,68 @@
     @if(! empty($disk['attributes']))
         @php
             $panelStart('SMART Attributes');
-            echo '<div class="table-responsive"><table class="table table-condensed table-striped table-hover">';
-            echo '<thead><tr><th>ID</th><th>Name</th><th>Flags</th><th>Value</th><th>Worst</th><th>Thresh</th><th>Raw</th><th>When Failed</th></tr></thead><tbody>';
+
+            $attrAppId = $data->app->app_id;
+            $attrNow   = LibrenmsConfig::get('time.now');
+            $attrFrom  = LibrenmsConfig::get('time.day');
+            $tblId     = 'smart-attr-tbl-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $idx);
+
+            // Toolbar: text filter + failing-only toggle.
+            echo '<div style="margin-bottom:8px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">'
+                . '<input type="text" class="form-control input-sm" style="width:220px" placeholder="Filter attributes…"'
+                . ' oninput="smartAttrFilter(\'' . $tblId . '\')" id="' . $tblId . '-q">'
+                . '<label style="font-weight:normal;margin:0;cursor:pointer"><input type="checkbox" id="' . $tblId . '-fail"'
+                . ' onchange="smartAttrFilter(\'' . $tblId . '\')"> Failing / failed only</label>'
+                . '<span id="' . $tblId . '-flags" style="font-family:monospace"><span class="text-muted" style="font-size:12px;font-family:initial">Flags:</span> '
+                . implode(' ', array_map(static fn ($f) => '<label style="font-weight:normal;margin:0;cursor:pointer">'
+                    . '<input type="checkbox" value="' . $f . '" onchange="smartAttrFilter(\'' . $tblId . '\')"> ' . $f . '</label>', ['P', 'O', 'S', 'R', 'C', 'K']))
+                . '</span>'
+                . '<span class="text-muted" style="font-size:12px">Click a column header to sort.</span>'
+                . '</div>';
+
+            echo '<div class="table-responsive"><table id="' . $tblId . '" class="table table-condensed table-hover smart-attr-table">';
+            echo '<thead><tr>'
+                . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">ID</th>'
+                . '<th class="smart-attr-sort" data-type="str" onclick="smartAttrSort(this)" style="cursor:pointer">Name</th>'
+                . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Status</th>'
+                . '<th>Trend</th>'
+                . '<th>Flags</th>'
+                . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Value</th>'
+                . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Worst</th>'
+                . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Thresh</th>'
+                . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Raw</th>'
+                . '</tr></thead><tbody>';
+
+            $dark = session('applied_site_style') === 'dark';
+
             foreach ($disk['attributes'] as $attr) {
-                $status = $attr['status'] ?? null;
-                $whenFailed = match ((int) $status) {
-                    2 => 'now',
-                    3 => 'past',
+                $status = (int) ($attr['status'] ?? 0);
+                $statusLabel = $status === -1 ? 'NA' : $data->decode('attr_status', $attr['status'] ?? null);
+
+                // Row shading by status (dark-mode aware): 2 red, 3 light red, -1 muted.
+                $rowStyle = match ($status) {
+                    2  => $dark ? 'background-color:#5a2a2a' : 'background-color:#f2a8a8',
+                    3  => $dark ? 'background-color:#3f2a2c' : 'background-color:#fbdede',
+                    -1 => $dark ? 'background-color:#15171a' : 'background-color:#f4f4f4',
                     default => '',
                 };
-                $rowClass = match ($whenFailed) {
-                    'now'  => ' class="danger"',
-                    'past' => ' class="warning"',
-                    default => '',
-                };
-                $thresh = $attr['value_threshold'] ?? null;
-                $value  = $attr['value_norm'] ?? null;
-                $worst  = $attr['value_worst'] ?? null;
-                $raw    = $attr['value_raw_string'] ?? $attr['value_raw'] ?? '';
+                $isFail = ($status === 2 || $status === 3) ? '1' : '0';
+
+                $thresh   = $attr['value_threshold'] ?? null;
+                $value    = $attr['value_norm'] ?? null;
+                $worst    = $attr['value_worst'] ?? null;
+                $rawNum   = is_numeric($attr['value_raw'] ?? null) ? (float) $attr['value_raw'] : 0;
+                $rawDisp  = $data->formatRawSpaced($attr['value_raw_string'] ?? $attr['value_raw'] ?? '');
+                $attrId   = (int) ($attr['attribute_id'] ?? 0);
+                $name     = str_replace('_', ' ', (string) ($attr['name'] ?? ''));
 
                 $flagLines = $data->attributeFlagLines($attr);
                 $flagsTip  = htmlspecialchars(implode("\n", $flagLines), ENT_QUOTES);
-                $flagsShort = htmlspecialchars($data->attributeFlagsShort($attr));
+                $flagsRaw  = $data->attributeFlagsPositional($attr);
+                $flagsStr  = htmlspecialchars($flagsRaw);
                 $flagsCell = $flagLines !== []
-                    ? '<span data-toggle="tooltip" data-placement="top" title="' . $flagsTip . '" style="cursor:default;border-bottom:1px dotted">' . $flagsShort . '</span>'
-                    : $flagsShort;
+                    ? '<span data-toggle="tooltip" data-placement="top" title="' . $flagsTip . '" style="cursor:default;border-bottom:1px dotted;font-family:monospace">' . $flagsStr . '</span>'
+                    : '<span style="font-family:monospace">' . $flagsStr . '</span>';
 
                 $valueTip = 'Normalized value (1–253, higher is better)';
                 if (is_numeric($thresh) && is_numeric($value)) {
@@ -762,20 +799,82 @@
                 $worstCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($worstTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars((string) ($worst ?? '')) . '</span>';
 
                 $threshCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars('Failure threshold - attribute fails when Value drops below this', ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars((string) ($thresh ?? '')) . '</span>';
-                $rawCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars('Raw hardware reading - vendor-specific meaning', ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars((string) $raw) . '</span>';
+                $rawCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars('Raw hardware reading - vendor-specific meaning', ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars($rawDisp) . '</span>';
 
-                echo '<tr' . $rowClass . '>'
-                    . '<td>' . htmlspecialchars((string) ($attr['attribute_id'] ?? '')) . '</td>'
-                    . '<td>' . htmlspecialchars(str_replace('_', ' ', (string) ($attr['name'] ?? ''))) . '</td>'
+                $statusBadge = match ($status) {
+                    1  => '<span class="label label-default">' . htmlspecialchars($statusLabel) . '</span>',
+                    2  => '<span class="label label-danger">' . htmlspecialchars($statusLabel) . '</span>',
+                    3  => '<span class="label" style="background-color:#e8857f">' . htmlspecialchars($statusLabel) . '</span>',
+                    default => '<span class="text-muted">' . htmlspecialchars($statusLabel) . '</span>',
+                };
+
+                // In-row mini graph: the same smart_v2_attributes graph, 60x15.
+                $mini = '';
+                if ($attrId > 0) {
+                    $miniSrc = 'graph.php?type=application_smart_v2_attributes'
+                        . '&id=' . rawurlencode((string) $attrAppId)
+                        . '&disk=' . rawurlencode((string) $idx)
+                        . '&attr_id=' . $attrId
+                        . '&has_raw=1&has_norm=1&legend=no'
+                        . '&from=' . rawurlencode((string) $attrFrom)
+                        . '&to=' . rawurlencode((string) $attrNow)
+                        . '&width=60&height=15';
+                    $mini = '<img loading="lazy" width="60" height="15" src="' . htmlspecialchars($miniSrc, ENT_QUOTES) . '" alt="trend" style="display:block">';
+                }
+
+                echo '<tr style="' . $rowStyle . '" data-fail="' . $isFail . '" data-flags="' . htmlspecialchars($flagsRaw, ENT_QUOTES) . '">'
+                    . '<td data-sort="' . $attrId . '">' . $attrId . '</td>'
+                    . '<td data-sort="' . htmlspecialchars($name, ENT_QUOTES) . '">' . htmlspecialchars($name) . '</td>'
+                    . '<td data-sort="' . $status . '">' . $statusBadge . '</td>'
+                    . '<td>' . $mini . '</td>'
                     . '<td>' . $flagsCell . '</td>'
-                    . '<td>' . $valueCell . '</td>'
-                    . '<td>' . $worstCell . '</td>'
-                    . '<td>' . $threshCell . '</td>'
-                    . '<td>' . $rawCell . '</td>'
-                    . '<td>' . htmlspecialchars($whenFailed) . '</td>'
+                    . '<td data-sort="' . htmlspecialchars((string) ($value ?? ''), ENT_QUOTES) . '">' . $valueCell . '</td>'
+                    . '<td data-sort="' . htmlspecialchars((string) ($worst ?? ''), ENT_QUOTES) . '">' . $worstCell . '</td>'
+                    . '<td data-sort="' . htmlspecialchars((string) ($thresh ?? ''), ENT_QUOTES) . '">' . $threshCell . '</td>'
+                    . '<td data-sort="' . $rawNum . '">' . $rawCell . '</td>'
                     . '</tr>';
             }
             echo '</tbody></table></div>';
+
+            echo <<<'JS'
+<script>
+function smartAttrFilter(tblId) {
+    var t = document.getElementById(tblId); if (!t) return;
+    var q = (document.getElementById(tblId + '-q').value || '').toLowerCase();
+    var failOnly = document.getElementById(tblId + '-fail').checked;
+    var flagBox = document.getElementById(tblId + '-flags');
+    var flags = flagBox ? Array.prototype.map.call(flagBox.querySelectorAll('input:checked'), function (c) { return c.value; }) : [];
+    Array.prototype.forEach.call(t.tBodies[0].rows, function (r) {
+        var hit = !q || r.textContent.toLowerCase().indexOf(q) !== -1;
+        var fail = !failOnly || r.getAttribute('data-fail') === '1';
+        var rf = r.getAttribute('data-flags') || '';
+        var flagOk = flags.every(function (f) { return rf.indexOf(f) !== -1; });
+        r.style.display = (hit && fail && flagOk) ? '' : 'none';
+    });
+}
+function smartAttrSort(th) {
+    var table = th.closest('table');
+    var head = th.parentNode;
+    var idx = Array.prototype.indexOf.call(head.children, th);
+    var type = th.getAttribute('data-type') || 'str';
+    var asc = !th.classList.contains('asc');
+    Array.prototype.forEach.call(head.children, function (h) { h.classList.remove('asc', 'desc'); });
+    th.classList.add(asc ? 'asc' : 'desc');
+    var tbody = table.tBodies[0];
+    var rows = Array.prototype.slice.call(tbody.rows);
+    var key = function (r) {
+        var c = r.cells[idx];
+        return c.getAttribute('data-sort') !== null ? c.getAttribute('data-sort') : c.textContent.trim();
+    };
+    rows.sort(function (a, b) {
+        var av = key(a), bv = key(b);
+        if (type === 'num') { return (asc ? 1 : -1) * ((parseFloat(av) || 0) - (parseFloat(bv) || 0)); }
+        return (asc ? 1 : -1) * String(av).localeCompare(String(bv));
+    });
+    rows.forEach(function (r) { tbody.appendChild(r); });
+}
+</script>
+JS;
             $panelEnd();
         @endphp
     @endif

@@ -446,27 +446,23 @@ class Common extends Application
     }
 
     /**
-     * Walk the four poll-relevant attribute columns and write the per-disk RRD.
+     * Walk the four poll-relevant attribute columns and write the per-disk RRD
+     * and DB row for every SATA device, every poll.
      *
-     * RRD is a time-series: it needs a data point every poll, so the SNMP walk
-     * and pollSataDeviceRrd() run unconditionally for every SATA device. The DB
-     * upsert is the slow-changing part and stays behind the per-device change
-     * guard.
+     * Both the RRD (a time-series) and the displayed raw/normalized values must
+     * refresh each interval, so neither is change-gated here — the
+     * smartSATAChange stamp is unreliable for the frequently-incrementing
+     * attribute values.
      */
     private function walkAndSyncSataAttrPoll(array $devices): void
     {
-        $this->sataChangeByDeviceTable();
-
         foreach ($this->walkSataAttrLimitedColumns() as $devIdx => $attrRows) {
             if (! isset($devices[$devIdx])) {
                 continue;
             }
             $dev = $devices[$devIdx];
             $this->pollSataDeviceRrd($dev, $attrRows);
-
-            if (Debug::isVerbose() || $this->sataTableChangedForDevice($devIdx, self::SATA_TID_ATTR)) {
-                $this->syncSataAttributeRowsPoll($dev, $attrRows);
-            }
+            $this->syncSataAttributeRowsPoll($dev, $attrRows);
         }
     }
 
@@ -930,8 +926,6 @@ class Common extends Application
                 'disk_key'         => $dev['disk_key'],
                 'attribute_id'     => (int) ($row['smartmonSataAttrId'] ?? $attrId),
                 'name'             => $row['smartmonSataAttrName']      ?? null,
-                'attr_type'        => $row['smartmonSataAttrType']      ?? null,
-                'updated_when'     => $row['smartmonSataAttrUpdated']   ?? null,
                 'value_norm'       => $row['smartmonSataAttrValue']     ?? null,
                 'value_worst'      => $row['smartmonSataAttrWorst']     ?? null,
                 'value_threshold'  => $row['smartmonSataAttrThreshold'] ?? null,
@@ -940,11 +934,12 @@ class Common extends Application
                     ? substr((string) $row['smartmonSataAttrRawString'], 0, 32)
                     : null,
                 'status'           => $row['smartmonSataAttrStatus']    ?? null,
+                'flags'            => $this->parseAttrFlags($row['smartmonSataAttrFlags'] ?? null),
                 'rrd_type'         => in_array($row['smartmonSataAttrName'] ?? null, self::ATA_COUNTER_ATTRS, true)
                     ? 'COUNTER' : 'GAUGE',
             ], ['app_id', 'disk_key', 'attribute_id'], [
-                'name', 'attr_type', 'updated_when', 'value_norm', 'value_worst',
-                'value_threshold', 'value_raw', 'value_raw_string', 'status', 'rrd_type',
+                'name', 'value_norm', 'value_worst',
+                'value_threshold', 'value_raw', 'value_raw_string', 'status', 'flags', 'rrd_type',
             ]);
         }
     }
@@ -1878,6 +1873,53 @@ class Common extends Application
         }
 
         return (int) hexdec($m[1]);
+    }
+
+    /**
+     * Parse smartmonSataAttrFlags (SNMP BITS) into a canonical bitmask where
+     * bit N = flag N: prefailure(0), onlineCollection(1), performance(2),
+     * errorRate(3), eventCount(4), autoKeep(5).
+     *
+     * Accepts the named form ("F0 prefailure(0) onlineCollection(1) ...") and
+     * the bare hex form ("F0"), where bit 0 is the MSB of the first byte.
+     */
+    private function parseAttrFlags(mixed $raw): ?int
+    {
+        if ($raw === null) {
+            return null;
+        }
+        if (is_int($raw)) {
+            return $raw;
+        }
+        $str = trim((string) $raw);
+        if ($str === '') {
+            return null;
+        }
+
+        // Named bits carry the bit number in parentheses — use them directly.
+        if (preg_match_all('/\((\d+)\)/', $str, $m)) {
+            $mask = 0;
+            foreach ($m[1] as $bit) {
+                $mask |= 1 << (int) $bit;
+            }
+
+            return $mask;
+        }
+
+        // Bare hex BITS: bit 0 is the most-significant bit of the first byte.
+        if (preg_match('/^(?:0x)?([0-9A-Fa-f]{2,})/', $str, $hm)) {
+            $byte = hexdec(substr($hm[1], 0, 2));
+            $mask = 0;
+            for ($n = 0; $n < 8; $n++) {
+                if ($byte & (0x80 >> $n)) {
+                    $mask |= 1 << $n;
+                }
+            }
+
+            return $mask;
+        }
+
+        return null;
     }
 
     /** Convert SNMPv2 TruthValue to 1/0/null. TruthValue enum: true(1), false(2). */
