@@ -12,7 +12,8 @@ IMPORTS
         FROM SNMPv2-CONF
     SmartmonHealthStatus, SmartmonNvmeSelfTestType,
     SmartmonPercentage, SmartmonNvmeSelfTestResult,
-    SmartmonLogicalBlockAddress, smartmonRoot
+    SmartmonLogicalBlockAddress, SmartmonNvmeSelfTestOperation,
+    smartmonRoot
         FROM SMARTMON-TC-MIB
     smartmonDeviceIndex, smartmonDevicePath,
     smartmonDeviceLastPollTime,
@@ -20,7 +21,7 @@ IMPORTS
         FROM SMARTMON-COMMON-MIB;
 
 smartmonNvmeMIB MODULE-IDENTITY
-    LAST-UPDATED "202605270000Z"
+    LAST-UPDATED "202606150000Z"
     ORGANIZATION "Unassigned"
     CONTACT-INFO
         "This is a draft MIB for smartmontools smartctl NVMe output.
@@ -43,6 +44,13 @@ smartmonNvmeMIB MODULE-IDENTITY
          available.
 
          This MIB requires SMARTMON-TC-MIB and SMARTMON-COMMON-MIB."
+    REVISION "202606150000Z"
+    DESCRIPTION
+        "Replace smartmonNvmeCurrentSelfTestOperationString with
+         smartmonNvmeCurrentSelfTestOperationProgress (SmartmonPercentage,
+         nvme_self_test_log.current_self_test_completion_percent).
+         Change smartmonNvmeCurrentSelfTestOperationValue SYNTAX from
+         Unsigned32 to SmartmonNvmeSelfTestOperation."
     REVISION "202605270000Z"
     DESCRIPTION
         "Remove smartmonNvmeModelNumber, smartmonNvmeSerialNumber,
@@ -622,9 +630,8 @@ SmartmonNvmeHealthEntry ::= SEQUENCE {
     smartmonNvmeErrorInformationLogEntries      CounterBasedGauge64,
     smartmonNvmeWarningTemperatureTimeMinutes   CounterBasedGauge64,
     smartmonNvmeCriticalTemperatureTimeMinutes  CounterBasedGauge64,
-    smartmonNvmeCurrentSelfTestOperationValue   Unsigned32,
-    smartmonNvmeCurrentSelfTestOperationProgress INTEGER,
-    smartmonNvmeCurrentSelfTestCompletionPercent Unsigned32
+    smartmonNvmeCurrentSelfTestOperationValue    SmartmonNvmeSelfTestOperation,
+    smartmonNvmeCurrentSelfTestOperationProgress SmartmonPercentage
 }
 
 smartmonNvmeHealthOverallStatus OBJECT-TYPE
@@ -795,41 +802,26 @@ smartmonNvmeHealthIndex OBJECT-TYPE
     ::= { smartmonNvmeHealthEntry 21 }
 
 smartmonNvmeCurrentSelfTestOperationValue OBJECT-TYPE
-    SYNTAX      Unsigned32
+    SYNTAX      SmartmonNvmeSelfTestOperation
     MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION
-        "Numeric value of the current self-test operation status
+        "Current self-test operation status
          (nvme_self_test_log.current_self_test_operation.value).
-         Zero indicates no self-test is in progress."
+         noOperationInProgress(0) indicates no self-test is in progress."
     ::= { smartmonNvmeHealthEntry 22 }
 
 smartmonNvmeCurrentSelfTestOperationProgress OBJECT-TYPE
-    SYNTAX      INTEGER {
-                    noOperationInProgress(0),
-                    shortDeviceSelfTest(1),
-                    extendedDeviceSelfTest(2),
-                    vendorSpecific(14)
-                }
-    MAX-ACCESS  read-only
-    STATUS      current
-    DESCRIPTION
-        "Self-test currently in progress, decoded from the NVMe Self-test
-         log current operation field: noOperationInProgress(0),
-         shortDeviceSelfTest(1), extendedDeviceSelfTest(2) or
-         vendorSpecific(14). Replaces the former human-readable string."
-    ::= { smartmonNvmeHealthEntry 23 }
-
-smartmonNvmeCurrentSelfTestCompletionPercent OBJECT-TYPE
-    SYNTAX      Unsigned32 (0..100)
+    SYNTAX      SmartmonPercentage
     UNITS       "percent"
     MAX-ACCESS  read-only
     STATUS      current
     DESCRIPTION
-        "Completion progress of the current self-test operation, as a
-         percentage 0..100 (nvme_self_test_log.current_self_test_completion_percent).
-         Not instantiated when no self-test is in progress."
-    ::= { smartmonNvmeHealthEntry 24 }
+        "Completion percentage of the currently running self-test
+         (nvme_self_test_log.current_self_test_completion_percent).
+         Only meaningful when smartmonNvmeCurrentSelfTestOperationValue
+         indicates a test is in progress."
+    ::= { smartmonNvmeHealthEntry 23 }
 
 smartmonNvmeSelfTestTableRowCount OBJECT-TYPE
     SYNTAX      Unsigned32
@@ -1432,8 +1424,7 @@ smartmonNvmeHealthGroup OBJECT-GROUP
         smartmonNvmeWarningTemperatureTimeMinutes,
         smartmonNvmeCriticalTemperatureTimeMinutes,
         smartmonNvmeCurrentSelfTestOperationValue,
-        smartmonNvmeCurrentSelfTestOperationProgress,
-        smartmonNvmeCurrentSelfTestCompletionPercent
+        smartmonNvmeCurrentSelfTestOperationProgress
     }
     STATUS current
     DESCRIPTION "NVMe SMART/Health objects."

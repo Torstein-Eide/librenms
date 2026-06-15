@@ -10,7 +10,7 @@ IMPORTS
 smartmonRoot OBJECT IDENTIFIER ::= { enterprises 65891 1 1 }
 
 smartmonTcMIB MODULE-IDENTITY
-    LAST-UPDATED "202605210000Z"
+    LAST-UPDATED "202606150000Z"
     ORGANIZATION "Unassigned"
     CONTACT-INFO
         "This is a draft MIB for smartmontools smartctl output.
@@ -18,6 +18,10 @@ smartmonTcMIB MODULE-IDENTITY
          TODO: Replace the placeholder enterprise OID before publication."
     DESCRIPTION
         "Textual conventions shared across all SMARTMON-*-MIB modules."
+    REVISION "202606150000Z"
+    DESCRIPTION
+        "Added SmartmonNvmeSelfTestOperation TC for the NVMe current
+         self-test operation field."
     REVISION "202605210000Z"
     DESCRIPTION
         "Added SmartmonAtaApmLevel. Added SmartmonLogicalBlockAddress.
@@ -1110,6 +1114,32 @@ SmartmonSensorStatus ::= TEXTUAL-CONVENTION
         ok(1),
         unavailable(2),
         nonoperational(3)
+    }
+
+SmartmonNvmeSelfTestOperation ::= TEXTUAL-CONVENTION
+    STATUS      current
+    DESCRIPTION
+        "Current self-test operation for an NVMe controller, derived from
+         the Current Device Self-test Operation field of the Device
+         Self-test log (nvme_self_test_log.current_self_test_operation.value).
+         Source: NVMe Base Specification, Device Self-test log page.
+
+         The enumeration 'noOperationInProgress(0)' indicates that no
+         self-test operation is in progress.
+
+         The enumeration 'shortDeviceSelfTest(1)' indicates that a Short
+         Device Self-test operation is in progress.
+
+         The enumeration 'extendedDeviceSelfTest(2)' indicates that an
+         Extended Device Self-test operation is in progress.
+
+         The enumeration 'vendorSpecific(14)' indicates a vendor-specific
+         operation."
+    SYNTAX INTEGER {
+        noOperationInProgress(0),
+        shortDeviceSelfTest(1),
+        extendedDeviceSelfTest(2),
+        vendorSpecific(14)
     }
 
 SmartmonLogicalBlockAddress ::= TEXTUAL-CONVENTION

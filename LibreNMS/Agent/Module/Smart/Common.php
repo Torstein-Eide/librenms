@@ -1486,12 +1486,9 @@ class Common extends Application
 
     private function syncNvmeHealthRow(array $dev, array $row): void
     {
-        // Current self-test: prefer the new typed Progress enum, fall back to the raw value.
-        $selftestOp = $this->intValue(
-            $row['smartmonNvmeCurrentSelfTestOperationProgress']
-            ?? $row['smartmonNvmeCurrentSelfTestOperationValue']
-            ?? null
-        );
+        // Current self-test: OperationValue is the operation enum (0=none, 1=short,
+        // 2=extended, 14=vendor); OperationProgress is the completion percentage.
+        $selftestOp = $this->intValue($row['smartmonNvmeCurrentSelfTestOperationValue'] ?? null);
 
         DB::table('smart_nvme_health')->upsert([
             'app_id'               => $this->appId,
@@ -1515,7 +1512,7 @@ class Common extends Application
             'critical_comp_time'   => $this->intValue($row['smartmonNvmeCriticalTemperatureTimeMinutes'] ?? null),
             'current_selftest_op'  => $selftestOp,
             'current_selftest_str' => $this->nvmeSelfTestOpLabel($selftestOp),
-            'current_selftest_pct' => $this->intValue($row['smartmonNvmeCurrentSelfTestCompletionPercent'] ?? null),
+            'current_selftest_pct' => $this->intValue($row['smartmonNvmeCurrentSelfTestOperationProgress'] ?? null),
         ], ['app_id', 'disk_key'], [
             'overall_status', 'critical_warning',
             'data_units_read', 'data_units_written', 'data_bytes_read', 'data_bytes_written',
