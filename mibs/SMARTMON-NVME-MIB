@@ -1432,7 +1432,8 @@ smartmonNvmeHealthGroup OBJECT-GROUP
         smartmonNvmeWarningTemperatureTimeMinutes,
         smartmonNvmeCriticalTemperatureTimeMinutes,
         smartmonNvmeCurrentSelfTestOperationValue,
-        smartmonNvmeCurrentSelfTestOperationString
+        smartmonNvmeCurrentSelfTestOperationProgress,
+        smartmonNvmeCurrentSelfTestCompletionPercent
     }
     STATUS current
     DESCRIPTION "NVMe SMART/Health objects."
