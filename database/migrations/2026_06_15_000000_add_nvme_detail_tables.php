@@ -12,10 +12,20 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('smart_nvme_selftest_log', function (Blueprint $table) {
-            $table->string('result_text', 96)->nullable()->after('result');
-            $table->dateTime('estimated_completion')->nullable()->after('nsid');
-        });
+        if (Schema::hasTable('smart_nvme_selftest_log')) {
+            Schema::table('smart_nvme_selftest_log', function (Blueprint $table) {
+                if (! Schema::hasColumn('smart_nvme_selftest_log', 'result_text')) {
+                    $table->string('result_text', 96)->nullable()->after('result');
+                }
+                if (! Schema::hasColumn('smart_nvme_selftest_log', 'estimated_completion')) {
+                    $table->dateTime('estimated_completion')->nullable()->after('nsid');
+                }
+            });
+        }
+
+        if (Schema::hasTable('smart_nvme_power_states')) {
+            return;
+        }
 
         Schema::create('smart_nvme_power_states', function (Blueprint $table) {
             $table->bigIncrements('id');
@@ -92,13 +102,19 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::drop('smart_nvme_capability');
-        Schema::drop('smart_nvme_error_log');
-        Schema::drop('smart_nvme_lba_formats');
-        Schema::drop('smart_nvme_power_states');
+        Schema::dropIfExists('smart_nvme_capability');
+        Schema::dropIfExists('smart_nvme_error_log');
+        Schema::dropIfExists('smart_nvme_lba_formats');
+        Schema::dropIfExists('smart_nvme_power_states');
 
-        Schema::table('smart_nvme_selftest_log', function (Blueprint $table) {
-            $table->dropColumn(['result_text', 'estimated_completion']);
-        });
+        if (Schema::hasTable('smart_nvme_selftest_log')) {
+            Schema::table('smart_nvme_selftest_log', function (Blueprint $table) {
+                foreach (['result_text', 'estimated_completion'] as $col) {
+                    if (Schema::hasColumn('smart_nvme_selftest_log', $col)) {
+                        $table->dropColumn($col);
+                    }
+                }
+            });
+        }
     }
 };

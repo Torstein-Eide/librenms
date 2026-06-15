@@ -15,6 +15,9 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (! Schema::hasTable('smart_sata_error_cmd')) {
+            return;
+        }
         Schema::table('smart_sata_error_cmd', function (Blueprint $table) {
             $table->unsignedSmallInteger('reg_count')->nullable()->change();
             $table->unsignedSmallInteger('reg_feature')->nullable()->change();
@@ -23,6 +26,9 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (! Schema::hasTable('smart_sata_error_cmd')) {
+            return;
+        }
         Schema::table('smart_sata_error_cmd', function (Blueprint $table) {
             $table->unsignedTinyInteger('reg_count')->nullable()->change();
             $table->unsignedTinyInteger('reg_feature')->nullable()->change();

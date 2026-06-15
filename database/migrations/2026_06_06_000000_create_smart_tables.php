@@ -370,28 +370,28 @@ return new class extends Migration {
 
     public function down(): void
     {
-        Schema::drop('smart_sata_change');
-        Schema::drop('smart_app_state');
-        Schema::drop('smart_sas_selftest_log');
-        Schema::drop('smart_sas_error_counters');
-        Schema::drop('smart_sas_health');
-        Schema::drop('smart_sas_info');
-        Schema::drop('smart_nvme_selftest_log');
-        Schema::drop('smart_nvme_namespaces');
-        Schema::drop('smart_nvme_health');
-        Schema::drop('smart_nvme_info');
-        Schema::drop('smart_sata_pending_defects');
-        Schema::drop('smart_sata_dev_stats');
-        Schema::drop('smart_sata_log_dir');
-        Schema::drop('smart_sata_selective_test');
-        Schema::drop('smart_sata_phy_events');
-        Schema::drop('smart_sata_erc');
-        Schema::drop('smart_sata_error_cmd');
-        Schema::drop('smart_sata_error_log');
-        Schema::drop('smart_sata_selftest_log');
-        Schema::drop('smart_sata_attributes');
-        Schema::drop('smart_sata_health');
-        Schema::drop('smart_sata_info');
-        Schema::drop('smart_devices');
+        Schema::dropIfExists('smart_sata_change');
+        Schema::dropIfExists('smart_app_state');
+        Schema::dropIfExists('smart_sas_selftest_log');
+        Schema::dropIfExists('smart_sas_error_counters');
+        Schema::dropIfExists('smart_sas_health');
+        Schema::dropIfExists('smart_sas_info');
+        Schema::dropIfExists('smart_nvme_selftest_log');
+        Schema::dropIfExists('smart_nvme_namespaces');
+        Schema::dropIfExists('smart_nvme_health');
+        Schema::dropIfExists('smart_nvme_info');
+        Schema::dropIfExists('smart_sata_pending_defects');
+        Schema::dropIfExists('smart_sata_dev_stats');
+        Schema::dropIfExists('smart_sata_log_dir');
+        Schema::dropIfExists('smart_sata_selective_test');
+        Schema::dropIfExists('smart_sata_phy_events');
+        Schema::dropIfExists('smart_sata_erc');
+        Schema::dropIfExists('smart_sata_error_cmd');
+        Schema::dropIfExists('smart_sata_error_log');
+        Schema::dropIfExists('smart_sata_selftest_log');
+        Schema::dropIfExists('smart_sata_attributes');
+        Schema::dropIfExists('smart_sata_health');
+        Schema::dropIfExists('smart_sata_info');
+        Schema::dropIfExists('smart_devices');
     }
 };
