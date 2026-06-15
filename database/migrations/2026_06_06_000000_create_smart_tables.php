@@ -151,10 +151,12 @@ return new class extends Migration
             $table->unsignedSmallInteger('error_entry_num');
             $table->unsignedTinyInteger('cmd_slot');
             $table->unsignedTinyInteger('reg_command')->nullable();
-            $table->unsignedTinyInteger('reg_count')->nullable();
+            // Count and Feature are 16-bit in 48-bit ATA commands (smartmontools
+            // reports the combined hi/lo register bytes), so they need smallint.
+            $table->unsignedSmallInteger('reg_count')->nullable();
             $table->unsignedTinyInteger('reg_device')->nullable();
             $table->unsignedTinyInteger('reg_error')->nullable();
-            $table->unsignedTinyInteger('reg_feature')->nullable();
+            $table->unsignedSmallInteger('reg_feature')->nullable();
             $table->unsignedBigInteger('reg_lba')->nullable();
             $table->unsignedInteger('powerup_ms')->nullable();
             $table->string('description', 128)->nullable();
