@@ -162,8 +162,8 @@
     </div>
     @endif
 
-    {{-- Namespaces & LBA Formats (combined, grouped by namespace) --}}
-    @if(! empty($disk['nvme_namespaces']))
+    {{-- Namespaces & LBA Formats (combined, grouped by namespace) — detailed view only --}}
+    @if($showDetailed && ! empty($disk['nvme_namespaces']))
     <div>
         @php
             $panelStart('Namespaces & LBA Formats');
