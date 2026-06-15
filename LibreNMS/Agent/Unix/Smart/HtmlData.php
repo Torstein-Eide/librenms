@@ -36,6 +36,12 @@ class HtmlData
     /** ATA SMART attribute IDs that carry SSD wear-remaining as the normalised value. */
     private const WEAR_ATTR_IDS = [173, 177, 202, 231, 233];
 
+    /** System PCI ID database candidates (pciutils / hwdata). */
+    private const PCI_IDS_PATHS = ['/usr/share/misc/pci.ids', '/usr/share/hwdata/pci.ids'];
+
+    /** System IEEE OUI database candidates (ieee-data). */
+    private const OUI_PATHS = ['/usr/share/ieee-data/oui.txt', '/usr/share/misc/oui.txt'];
+
     /**
      * @var array<string, array<string, mixed>> Per-disk data keyed by disk_key.
      */
@@ -43,6 +49,12 @@ class HtmlData
 
     /** @var EloquentCollection<int, Sensor> All app:smart_mib:* sensors, keyed by sensor_index. */
     public readonly EloquentCollection $allSensors;
+
+    /** @var array<int, string|null> Per-request cache of PCI vendor id => name lookups. */
+    private array $pciVendorCache = [];
+
+    /** @var array<int, string|null> Per-request cache of IEEE OUI => org name lookups. */
+    private array $ouiVendorCache = [];
 
     private function __construct(
         public readonly Application $app,
@@ -180,6 +192,7 @@ class HtmlData
                 'protocol'         => $dev->protocol_type !== null ? (int) $dev->protocol_type : null,
                 'device_name'      => $dev->device_name,
                 'device_path'      => $dev->device_path,
+                'uris'             => $dev->uris ?? null,
                 'model_name'       => $dev->model_name,
                 'model_family'     => $dev->model_family,
                 'serial_number'    => $dev->serial_number,
@@ -323,6 +336,125 @@ class HtmlData
     public function healthSensor(string $diskKey): ?Sensor
     {
         return $this->allSensors->get($this->diskIndex($diskKey) . '_health');
+    }
+
+    /**
+     * The sensor's own name with the redundant disk-label prefix stripped.
+     *
+     * Descriptions are built as "SMART {disk label} {name}" at discovery time
+     * (see Smart\Common::sensorLabel); in a per-disk table the label is just
+     * noise, so return e.g. "Composite" / "Sensor 1" instead of the full string.
+     */
+    public function shortSensorName(Sensor $sensor, array $disk): string
+    {
+        $descr = (string) $sensor->sensor_descr;
+        $label = $this->diskLabel($disk);
+        $prefix = rtrim('SMART ' . $label) . ' ';
+
+        if ($label !== '' && str_starts_with($descr, $prefix)) {
+            return substr($descr, strlen($prefix));
+        }
+
+        return (string) preg_replace('/^SMART\s+/', '', $descr);
+    }
+
+    /**
+     * Resolve a PCI vendor id to its name via the system pci.ids database
+     * (vendor lines are "<4-hex-id>  Vendor Name" at column 0). Results are
+     * cached per request. Returns null if the file is missing or id unknown.
+     */
+    public function pciVendorName(int $id): ?string
+    {
+        if (array_key_exists($id, $this->pciVendorCache)) {
+            return $this->pciVendorCache[$id];
+        }
+
+        $hex = sprintf('%04x', $id);
+        $name = null;
+        if (($path = $this->firstReadable(self::PCI_IDS_PATHS)) !== null && ($fh = fopen($path, 'r')) !== false) {
+            try {
+                while (($line = fgets($fh)) !== false) {
+                    // Skip device (tab-indented) and comment lines; match vendor id.
+                    if ($line[0] !== "\t" && $line[0] !== '#'
+                        && strncmp($line, $hex, 4) === 0 && ($line[4] ?? '') === ' ') {
+                        $name = trim(substr($line, 4));
+                        break;
+                    }
+                }
+            } finally {
+                fclose($fh);
+            }
+        }
+
+        return $this->pciVendorCache[$id] = $name;
+    }
+
+    /** Whether the PCI ID database is installed (for surfacing a missing-dependency hint). */
+    public function pciIdsAvailable(): bool
+    {
+        return $this->firstReadable(self::PCI_IDS_PATHS) !== null;
+    }
+
+    /** Whether the IEEE OUI database is installed (for surfacing a missing-dependency hint). */
+    public function ouiDbAvailable(): bool
+    {
+        return $this->firstReadable(self::OUI_PATHS) !== null;
+    }
+
+    /** First readable path from the list, or null if none exist. */
+    private function firstReadable(array $paths): ?string
+    {
+        foreach ($paths as $path) {
+            if (is_readable($path)) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve an IEEE OUI (24-bit) to its organisation name via the system
+     * oui.txt database. Lines are "<6-HEX-OUI>     (base 16)<tabs>Org Name".
+     * Cached per request; returns null when the file is missing or OUI unknown.
+     */
+    public function ouiVendorName(int $oui): ?string
+    {
+        if (array_key_exists($oui, $this->ouiVendorCache)) {
+            return $this->ouiVendorCache[$oui];
+        }
+
+        $hex = sprintf('%06X', $oui);
+        $name = null;
+        if (($path = $this->firstReadable(self::OUI_PATHS)) !== null && ($fh = fopen($path, 'r')) !== false) {
+            try {
+                while (($line = fgets($fh)) !== false) {
+                    if (strncmp($line, $hex, 6) === 0 && ($pos = strpos($line, '(base 16)')) !== false) {
+                        $name = trim(substr($line, $pos + strlen('(base 16)')));
+                        break;
+                    }
+                }
+            } finally {
+                fclose($fh);
+            }
+        }
+
+        return $this->ouiVendorCache[$oui] = $name;
+    }
+
+    /** Reconstruct the disk label used in sensor descriptions: "model serial (device)". */
+    private function diskLabel(array $disk): string
+    {
+        $model = trim((string) ($disk['model_name'] ?? ''));
+        $serial = trim((string) ($disk['serial_number'] ?? ''));
+        $name = trim((string) ($disk['device_name'] ?? ''));
+
+        $label = trim(implode(' ', array_filter([$model, $serial])));
+        if ($name !== '') {
+            $label = $label !== '' ? "{$label} ({$name})" : $name;
+        }
+
+        return $label;
     }
 
     public function selftestStatusSensor(string $diskKey): ?Sensor

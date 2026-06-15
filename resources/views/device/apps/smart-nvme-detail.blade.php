@@ -13,6 +13,10 @@
     $healthSensor = $data->healthSensor($selectedDisk);
     $diskSensors = $data->diskSensors($selectedDisk);
     $tempSensors = array_filter($diskSensors, static fn ($s) => $s->sensor_class === 'temperature');
+    // SMART/Health panel table: temperature + the percent sensors (Available Spare,
+    // Percentage Used). Temperatures first, then the rest, each in index order.
+    $panelSensors = array_filter($diskSensors, static fn ($s) => in_array($s->sensor_class, ['temperature', 'percent'], true));
+    usort($panelSensors, static fn ($a, $b) => ($a->sensor_class === 'temperature' ? 0 : 1) <=> ($b->sensor_class === 'temperature' ? 0 : 1));
     $overall = $health['overall_status'] ?? null;
     $healthBadge = match ((int) $overall) {
         1 => '<span class="label label-default">Passed</span>',
@@ -62,6 +66,8 @@
     .smart-panels { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; margin-bottom:15px }
     .smart-panels .panel { flex:0 0 auto; margin-bottom:0 }
     .smart-panels table { white-space:nowrap }
+    /* Full-width zero-height element forces following panels onto a new row. */
+    .smart-row-break { flex-basis:100%; height:0; margin:0; padding:0 }
 </style>
 <div class="smart-panels">
 
@@ -72,96 +78,225 @@
             echo '<table class="table table-condensed table-hover" style="width:auto">';
             $cap = $info['total_nvm_capacity_bytes'] ?? null;
             $unalloc = $info['unallocated_nvm_capacity_bytes'] ?? null;
+
+            // smartmonDeviceUris is a whitespace-separated list of file:// URIs; show the
+            // primary device path with the full list (scheme stripped) in a tooltip.
+            $paths = array_map(
+                static fn ($u) => preg_replace('#^file://#', '', $u),
+                preg_split('/\s+/', trim((string) ($disk['uris'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: []
+            );
+            $primaryPath = $disk['device_path'] ?? ($paths[0] ?? null);
+            $pathCell = $primaryPath;
+            if ($primaryPath !== null && count($paths) > 1) {
+                $pathCell = new \Illuminate\Support\HtmlString(
+                    '<abbr style="cursor:help;text-decoration:underline dotted" title="'
+                    . htmlspecialchars(implode("\n", $paths), ENT_QUOTES) . '">'
+                    . htmlspecialchars((string) $primaryPath) . ' (+' . (count($paths) - 1) . ')</abbr>'
+                );
+            }
+
             $rows = [
                 'Model'           => $disk['model_name'] ?? null,
                 'Serial'          => $disk['serial_number'] ?? null,
                 'Firmware'        => $disk['firmware_version'] ?? null,
                 'WWN'             => $disk['wwn'] ?? null,
                 'Device'          => $disk['device_name'] ?? null,
-                'Path'            => $disk['device_path'] ?? null,
+                'Path'            => $pathCell,
                 'NVMe Version'    => $info['nvme_version'] ?? null,
                 'Controller ID'   => $fmtInt($info['controller_id'] ?? null),
                 'PCI Vendor'      => isset($info['pci_vendor_id']) && is_numeric($info['pci_vendor_id'])
-                    ? sprintf('0x%04X', (int) $info['pci_vendor_id']) : null,
+                    ? (($pciName = $data->pciVendorName((int) $info['pci_vendor_id'])) !== null
+                        ? $pciName . sprintf(' (0x%04X)', (int) $info['pci_vendor_id'])
+                        : sprintf('0x%04X', (int) $info['pci_vendor_id']))
+                    : null,
                 'IEEE OUI'        => isset($info['ieee_oui']) && is_numeric($info['ieee_oui'])
-                    ? sprintf('0x%06X', (int) $info['ieee_oui']) : null,
+                    ? (($ouiName = $data->ouiVendorName((int) $info['ieee_oui'])) !== null
+                        ? new \Illuminate\Support\HtmlString(
+                            '<abbr style="cursor:help;text-decoration:underline dotted" title="'
+                            . htmlspecialchars($ouiName, ENT_QUOTES) . '">'
+                            . htmlspecialchars(\Illuminate\Support\Str::limit($ouiName, 28, '…', preserveWords: true))
+                            . '</abbr> ' . sprintf('(0x%06X)', (int) $info['ieee_oui']))
+                        : sprintf('0x%06X', (int) $info['ieee_oui']))
+                    : null,
                 'Capacity'        => $fmtBytes($cap),
                 'Unallocated'     => $fmtBytes($unalloc),
                 'Namespaces'      => $fmtInt($info['namespace_count'] ?? null),
                 'Max Transfer'    => isset($info['max_data_transfer_pages']) && is_numeric($info['max_data_transfer_pages'])
                     ? $fmtInt($info['max_data_transfer_pages']) . ' pages' : null,
-                'Power On Hours'  => $fmtInt($health['power_on_hours'] ?? null),
-                'Power Cycles'    => $fmtInt($health['power_cycles'] ?? null),
                 'Last Poll'       => $disk['last_poll_time'] ?? null,
                 'Last Poll Result' => $disk['last_poll_result'] !== null ? $data->decode('poll_result', $disk['last_poll_result']) : null,
             ];
             foreach ($rows as $label => $value) {
-                if ($value !== null && $value !== '') {
-                    echo $tableRow($label, htmlspecialchars((string) $value));
+                if ($value === null || $value === '') {
+                    continue;
                 }
+                // HtmlString values (e.g. tooltipped vendor names) are already safe HTML.
+                $cell = $value instanceof \Illuminate\Support\HtmlString
+                    ? (string) $value : htmlspecialchars((string) $value);
+                echo $tableRow($label, $cell);
             }
             echo '</table>';
+
+            // Small hint when a vendor-name lookup database is not installed.
+            $missingDbs = [];
+            if (isset($info['pci_vendor_id']) && is_numeric($info['pci_vendor_id']) && ! $data->pciIdsAvailable()) {
+                $missingDbs[] = 'pci.ids (pciutils)';
+            }
+            if (isset($info['ieee_oui']) && is_numeric($info['ieee_oui']) && ! $data->ouiDbAvailable()) {
+                $missingDbs[] = 'oui.txt (ieee-data)';
+            }
+            if ($missingDbs !== []) {
+                echo '<div class="small text-muted" style="margin-top:4px">'
+                    . '<i class="fa fa-exclamation-triangle"></i> Vendor names unavailable — install '
+                    . htmlspecialchars(implode(', ', $missingDbs)) . '</div>';
+            }
             $panelEnd();
         @endphp
     </div>
 
-    {{-- SMART / Health log --}}
+    {{-- Self-test log — row #1, immediately after the status/identity panel --}}
+    @if(! empty($disk['selftests']) || $curOp !== 0)
+    <div>
+        @php
+            $panelStart('Self-test Log', $selftestBadge);
+            $hasLba = false;
+            foreach ($disk['selftests'] as $e) {
+                if (is_numeric($e['failing_lba'] ?? null) && (int) $e['failing_lba'] > 0) {
+                    $hasLba = true;
+                    break;
+                }
+            }
+            $curPoh = $health['power_on_hours'] ?? null;
+            echo '<table class="table table-condensed table-hover"><thead><tr>'
+                . '<th>Hours</th><th>Type</th><th>Status</th><th>Remaining Percent</th>'
+                . ($hasLba ? '<th>First LBA Error</th>' : '') . '</tr></thead><tbody>';
+            foreach ($disk['selftests'] as $st) {
+                $type = match ((int) ($st['test_type'] ?? 0)) { 1 => 'Short', 2 => 'Extended', 255 => 'Vendor', default => '-' };
+                $result = trim((string) ($st['result_text'] ?? '')) !== '' ? $st['result_text'] : (string) ($st['result'] ?? '-');
+                $lba = $st['failing_lba'] ?? null;
+                $h = $st['power_on_hours'] ?? null;
+                $hoursCell = (string) ($h ?? '-');
+                if (is_numeric($curPoh) && is_numeric($h)) {
+                    $delta = (int) $curPoh - (int) $h;
+                    $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
+                }
+                echo '<tr><td>' . htmlspecialchars($hoursCell) . '</td>'
+                    . '<td>' . htmlspecialchars($type) . '</td>'
+                    . '<td>' . htmlspecialchars((string) $result) . '</td>'
+                    . '<td></td>'
+                    . ($hasLba ? '<td>' . (is_numeric($lba) && (int) $lba > 0 ? htmlspecialchars((string) $lba) : '') . '</td>' : '')
+                    . '</tr>';
+            }
+            echo '</tbody></table>';
+            $panelEnd();
+        @endphp
+    </div>
+    @endif
+
+    {{-- SMART / Health log — row #2 (own row) --}}
+    <div class="smart-row-break"></div>
     <div>
         @php
             $panelStart('SMART / Health', $healthBadge);
-            echo '<table class="table table-condensed table-hover" style="width:auto">';
-            $cw = $health['critical_warning'] ?? null;
             $du = 512000; // standard NVMe data-unit size in bytes
+            // Critical Warning is surfaced by the Health sensor/badge, so it is not repeated here.
+            // label => [display value, smart_v2_nvme single DS (one-line graph) or null for no graph]
             $rows = [
-                'Critical Warning' => $cw !== null ? ((int) $cw === 0 ? 'None' : 'Set (0x' . dechex((int) $cw) . ')') : null,
-                'Data Read'        => isset($health['data_units_read']) && is_numeric($health['data_units_read'])
-                    ? $fmtBytes((int) $health['data_units_read'] * $du) : null,
-                'Data Written'     => isset($health['data_units_written']) && is_numeric($health['data_units_written'])
-                    ? $fmtBytes((int) $health['data_units_written'] * $du) : null,
-                'Host Reads'       => $fmtInt($health['host_read_commands'] ?? null),
-                'Host Writes'      => $fmtInt($health['host_write_commands'] ?? null),
-                'Controller Busy'  => isset($health['controller_busy_time']) && is_numeric($health['controller_busy_time'])
-                    ? $fmtInt($health['controller_busy_time']) . ' min' : null,
-                'Media Errors'     => $fmtInt($health['media_errors'] ?? null),
-                'Error Log Entries' => $fmtInt($health['num_err_log_entries'] ?? null),
-                'Unsafe Shutdowns' => $fmtInt($health['unsafe_shutdowns'] ?? null),
+                'Controller Busy'  => [isset($health['controller_busy_time']) && is_numeric($health['controller_busy_time'])
+                    ? $fmtInt($health['controller_busy_time']) . ' min' : null, 'ctrl_busy'],
+                'Media Errors'     => [$fmtInt($health['media_errors'] ?? null), 'media_errors'],
+                'Error Log Entries' => [$fmtInt($health['num_err_log_entries'] ?? null), 'err_log_cnt'],
+                'Unsafe Shutdowns' => [$fmtInt($health['unsafe_shutdowns'] ?? null), 'unsafe_shut'],
+                'Power On Hours'   => [$fmtInt($health['power_on_hours'] ?? null), 'pwr_hours'],
+                'Power Cycles'     => [$fmtInt($health['power_cycles'] ?? null), 'pwr_cycles'],
+                // Data/Host throughput counters last.
+                'Data Read'        => [isset($health['data_units_read']) && is_numeric($health['data_units_read'])
+                    ? $fmtBytes((int) $health['data_units_read'] * $du) : null, 'du_rd'],
+                'Data Written'     => [isset($health['data_units_written']) && is_numeric($health['data_units_written'])
+                    ? $fmtBytes((int) $health['data_units_written'] * $du) : null, 'du_wr'],
+                'Host Reads'       => [$fmtInt($health['host_read_commands'] ?? null), 'host_rd'],
+                'Host Writes'      => [$fmtInt($health['host_write_commands'] ?? null), 'host_wr'],
             ];
-            foreach ($rows as $label => $value) {
-                if ($value !== null && $value !== '') {
-                    echo $tableRow($label, htmlspecialchars((string) $value));
+
+            // Mini graph (click → graphs page, hover → day/week/month/year popup) for a
+            // smart_v2_nvme metric group, reading the per-disk smart_nvme RRD.
+            $healthFrom = \App\Facades\LibrenmsConfig::get('time.day');
+            $nvMetricGraph = static function (string $metric, string $label) use ($now, $healthFrom, $data, $disk, $device) {
+                return \LibreNMS\Util\Url::graphPopup([
+                    'id'          => $data->app->app_id,
+                    'type'        => 'application_smart_v2_nvme',
+                    'disk'        => $disk['idx'],
+                    'metric'      => $metric,
+                    'from'        => $healthFrom,
+                    'to'          => $now,
+                    'width'       => 60,
+                    'height'      => 15,
+                    'legend'      => 'no',
+                    'popup_title' => htmlspecialchars($device['hostname'] . ' - ' . $label),
+                ]);
+            };
+
+            // Health stat rows (Data Read, Host Reads, …) and sensors share the one
+            // table below.
+            $hasStats = false;
+            foreach ($rows as [$rv]) {
+                if ($rv !== null && $rv !== '') {
+                    $hasStats = true;
+                    break;
                 }
             }
-            echo '</table>';
 
-            // Temperature sensors: current, mini graph, limits, and (Composite only)
-            // time spent over the warning / critical thresholds.
-            if (! empty($tempSensors)) {
-                $tdeg = static fn ($v) => is_numeric($v) ? rtrim(rtrim(sprintf('%.1f', (float) $v), '0'), '.') . '°C' : '-';
+            // Sensors: current, mini graph, limits, and (Composite temperature only)
+            // time spent over the warning / critical thresholds. The health stat
+            // rows are appended into the same table.
+            if (! empty($panelSensors) || $hasStats) {
+                $unit = static fn ($s) => $s->sensor_class === 'percent' ? '%' : '°C';
+                // Value with the sensor's unit; '-' when unset.
+                $fmtMeasure = static fn ($s, $v) => is_numeric($v)
+                    ? rtrim(rtrim(sprintf('%.1f', (float) $v), '0'), '.') . $unit($s) : '-';
+                // Warn/critical use the high limit when present, else the low limit
+                // (Available Spare alerts when it drops below its low thresholds).
+                $warnOf = static fn ($s) => $s->sensor_limit_warn ?? $s->sensor_limit_low_warn;
+                $critOf = static fn ($s) => $s->sensor_limit ?? $s->sensor_limit_low;
                 $tmin = static fn ($v) => is_numeric($v) ? $fmtInt($v) . ' min' : '';
                 $from = \App\Facades\LibrenmsConfig::get('time.day');
-                echo '<table class="table table-condensed table-hover" style="margin-top:8px"><thead><tr>'
+                echo '<table class="table table-condensed table-hover"><thead><tr>'
                     . '<th>Name</th><th>Current</th><th>Graph</th><th>Warn</th><th>Critical</th>'
                     . '<th>Warn Time Over</th><th>Critical Time Over</th></tr></thead><tbody>';
-                foreach ($tempSensors as $s) {
-                    // Strip the "SMART <label> " prefix to leave just the sensor name (e.g. Composite).
-                    $nm = preg_replace('/^SMART\s+/', '', (string) $s->sensor_descr);
-                    $isComposite = stripos($nm, 'Composite') !== false;
-                    $img = \LibreNMS\Util\Url::graphTag([
-                        'id'     => $s->sensor_id,
-                        'type'   => 'sensor_' . $s->sensor_class,
-                        'from'   => $from,
-                        'to'     => $now,
-                        'width'  => 100,
-                        'height' => 65,
-                        'legend' => 'no',
+                foreach ($panelSensors as $s) {
+                    // Strip the redundant "SMART <disk label> " prefix, leaving just
+                    // the sensor name (e.g. Composite, Sensor 1, Available Spare).
+                    $nm = $data->shortSensorName($s, $disk);
+                    $isComposite = $s->sensor_class === 'temperature' && stripos($nm, 'Composite') !== false;
+                    // Click → graphs page, hover → day/week/month/year popup (as on device overview).
+                    $img = \LibreNMS\Util\Url::graphPopup([
+                        'id'          => $s->sensor_id,
+                        'type'        => 'sensor_' . $s->sensor_class,
+                        'from'        => $from,
+                        'to'          => $now,
+                        'width'       => 60,
+                        'height'      => 15,
+                        'legend'      => 'no',
+                        'popup_title' => htmlspecialchars($device['hostname'] . ' - ' . $nm),
                     ]);
                     echo '<tr><td>' . htmlspecialchars($nm) . '</td>'
-                        . '<td>' . htmlspecialchars($tdeg($s->sensor_current)) . '</td>'
+                        . '<td>' . htmlspecialchars($fmtMeasure($s, $s->sensor_current)) . '</td>'
                         . '<td>' . $img . '</td>'
-                        . '<td>' . htmlspecialchars($tdeg($s->sensor_limit_warn)) . '</td>'
-                        . '<td>' . htmlspecialchars($tdeg($s->sensor_limit)) . '</td>'
+                        . '<td>' . htmlspecialchars($fmtMeasure($s, $warnOf($s))) . '</td>'
+                        . '<td>' . htmlspecialchars($fmtMeasure($s, $critOf($s))) . '</td>'
                         . '<td>' . htmlspecialchars($isComposite ? $tmin($health['warning_temp_time'] ?? null) : '') . '</td>'
                         . '<td>' . htmlspecialchars($isComposite ? $tmin($health['critical_comp_time'] ?? null) : '') . '</td></tr>';
+                }
+                // Health stat rows (moved in): Name, value, single-DS mini graph; no limit columns.
+                foreach ($rows as $label => [$value, $metric]) {
+                    if ($value === null || $value === '') {
+                        continue;
+                    }
+                    $graph = $metric !== null ? $nvMetricGraph($metric, $label) : '';
+                    echo '<tr><td>' . htmlspecialchars($label) . '</td>'
+                        . '<td>' . htmlspecialchars((string) $value) . '</td>'
+                        . '<td>' . $graph . '</td>'
+                        . '<td></td><td></td><td></td><td></td></tr>';
                 }
                 echo '</tbody></table>';
             }
@@ -169,8 +304,9 @@
         @endphp
     </div>
 
-    {{-- Namespaces & LBA Formats (combined, grouped by namespace) — detailed view only --}}
+    {{-- Namespaces & LBA Formats — row #3 (own row), detailed view only --}}
     @if($showDetailed && ! empty($disk['nvme_namespaces']))
+    <div class="smart-row-break"></div>
     <div>
         @php
             $panelStart('Namespaces & LBA Formats');
@@ -219,47 +355,9 @@
     </div>
     @endif
 
-    {{-- Self-test log --}}
-    @if(! empty($disk['selftests']) || $curOp !== 0)
-    <div>
-        @php
-            $panelStart('Self-test Log', $selftestBadge);
-            $hasLba = false;
-            foreach ($disk['selftests'] as $e) {
-                if (is_numeric($e['failing_lba'] ?? null) && (int) $e['failing_lba'] > 0) {
-                    $hasLba = true;
-                    break;
-                }
-            }
-            $curPoh = $health['power_on_hours'] ?? null;
-            echo '<table class="table table-condensed table-hover"><thead><tr>'
-                . '<th>Hours</th><th>Type</th><th>Status</th><th>Remaining Percent</th>'
-                . ($hasLba ? '<th>First LBA Error</th>' : '') . '</tr></thead><tbody>';
-            foreach ($disk['selftests'] as $st) {
-                $type = match ((int) ($st['test_type'] ?? 0)) { 1 => 'Short', 2 => 'Extended', 255 => 'Vendor', default => '-' };
-                $result = trim((string) ($st['result_text'] ?? '')) !== '' ? $st['result_text'] : (string) ($st['result'] ?? '-');
-                $lba = $st['failing_lba'] ?? null;
-                $h = $st['power_on_hours'] ?? null;
-                $hoursCell = (string) ($h ?? '-');
-                if (is_numeric($curPoh) && is_numeric($h)) {
-                    $delta = (int) $curPoh - (int) $h;
-                    $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
-                }
-                echo '<tr><td>' . htmlspecialchars($hoursCell) . '</td>'
-                    . '<td>' . htmlspecialchars($type) . '</td>'
-                    . '<td>' . htmlspecialchars((string) $result) . '</td>'
-                    . '<td></td>'
-                    . ($hasLba ? '<td>' . (is_numeric($lba) && (int) $lba > 0 ? htmlspecialchars((string) $lba) : '') . '</td>' : '')
-                    . '</tr>';
-            }
-            echo '</tbody></table>';
-            $panelEnd();
-        @endphp
-    </div>
-    @endif
-
-    {{-- Error log --}}
+    {{-- Error log — new row after Namespaces --}}
     @if(! empty($disk['nvme_errors']))
+    <div class="smart-row-break"></div>
     <div>
         @php
             $panelStart('Error Log', '<span class="label label-warning">' . count($disk['nvme_errors']) . '</span>');

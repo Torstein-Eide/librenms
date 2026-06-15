@@ -72,7 +72,8 @@ if (Rrd::checkRrdExists($rrd_filename)) {
         'temp_time' => ['warn_tmp_t', 'crit_cmp_t'],
     ];
 
-    $selectedDs = $groupDs[$metric] ?? array_keys($allDs);
+    // metric may be a group name, a single DS name (one-line graph), or 'all'.
+    $selectedDs = $groupDs[$metric] ?? (isset($allDs[$metric]) ? [$metric] : array_keys($allDs));
 
     foreach ($selectedDs as $ds) {
         $descr = $allDs[$ds] ?? null;

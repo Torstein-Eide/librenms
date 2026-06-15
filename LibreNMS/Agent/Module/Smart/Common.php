@@ -237,6 +237,10 @@ class Common extends Application
         // SENSOR-MIB sensors: register for every discovered device.
         $device = $this->device;
         $group = 'SMART';
+        // Source-defined limits per sensor_oid. LibreNMS guesses limits for some
+        // classes (e.g. temperature low = current - 10) when a column is null, so
+        // after sync we force these back to exactly what the source reported.
+        $intendedLimits = [];
         $this->vlog('discoverMib: registering SENSOR-MIB sensors for ' . count($this->commonDevices) . ' device(s)');
         foreach ($this->commonDevices as $devIdx => $dev) {
             $diskKey = $dev['disk_key'];
@@ -247,12 +251,15 @@ class Common extends Application
                 $type = $this->intValue($row['smartmonSensorType'] ?? null);
                 $value = $this->applySensorScaleCol($row, 'smartmonSensorValue');
                 if ($value === null) {
+                    $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has null value — skipped');
                     continue;
                 }
                 $meta = self::SENSOR_TYPE_MAP[$type] ?? null;
                 if ($meta === null) {
+                    $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has no SENSOR_TYPE_MAP entry — skipped');
                     continue;
                 }
+                $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type={$type} ({$meta[0]}) value={$value}");
                 [$sensorClass, $sensorType, $prefix] = $meta;
                 $name = trim((string) ($row['smartmonSensorName'] ?? ''));
                 $sIdx = "{$idx}_{$prefix}_{$sensorIdx}";
@@ -261,6 +268,14 @@ class Common extends Application
                 $highWarn = $this->applySensorScaleCol($row, 'smartmonSensorHighWarning');
                 $lowWarn = $this->applySensorScaleCol($row, 'smartmonSensorLowWarning');
                 $lowCrit = $this->applySensorScaleCol($row, 'smartmonSensorLowCritical');
+                // A warning threshold equal to critical gives no early notice; nudge it
+                // one notch less severe so "warning" fires before "critical".
+                if ($highCrit !== null && $highWarn !== null && $highWarn == $highCrit) {
+                    $highWarn = $highCrit - 5;
+                }
+                if ($lowCrit !== null && $lowWarn !== null && $lowWarn == $lowCrit) {
+                    $lowWarn = $lowCrit + 5;
+                }
                 $attrs = [
                     'device_id'         => $device['device_id'],
                     'poller_type'       => 'agent',
@@ -285,9 +300,21 @@ class Common extends Application
                 if ($lowCrit !== null) {
                     $attrs['sensor_limit_low'] = $lowCrit;
                 }
+                $intendedLimits["app:smart_mib:{$sIdx}"] = [
+                    'sensor_limit'          => $highCrit,
+                    'sensor_limit_warn'     => $highWarn,
+                    'sensor_limit_low_warn' => $lowWarn,
+                    'sensor_limit_low'      => $lowCrit,
+                ];
                 app('sensor-discovery')->discover(new Sensor($attrs));
             }
         }
+
+        // Persist the generic SENSOR-MIB sensors. This must run after the
+        // registration loop above: sync() only writes the sensors queued so far,
+        // so syncing these types earlier (e.g. in discoverSata) would drop them.
+        $this->syncMibSensorTypes();
+        $this->correctGuessedSensorLimits($intendedLimits);
 
         $this->cleanupStaleMibSensors();
     }
@@ -414,12 +441,46 @@ class Common extends Application
         }
     }
 
-    /** Sync all registered sensor types with the sensor-discovery system. */
+    /**
+     * Sync the SATA state sensor types (registered in discoverSataDeviceSensors,
+     * which runs before this call). The generic SENSOR-MIB types are synced
+     * separately in syncMibSensorTypes() after their registration loop.
+     */
     private function syncSensorTypes(): void
     {
-        $types = array_unique(array_column(self::SENSOR_TYPE_MAP, 1));
-        foreach (array_merge($types, ['smart_mib_health', 'smart_selftest_status']) as $type) {
+        foreach (['smart_mib_health', 'smart_selftest_status'] as $type) {
             app('sensor-discovery')->sync(sensor_type: $type);
+        }
+    }
+
+    /** Sync the generic SENSOR-MIB sensor types (temperature, percent, …). */
+    private function syncMibSensorTypes(): void
+    {
+        foreach (array_unique(array_column(self::SENSOR_TYPE_MAP, 1)) as $type) {
+            app('sensor-discovery')->sync(sensor_type: $type);
+        }
+    }
+
+    /**
+     * Reset each generic SENSOR-MIB sensor's limit columns to exactly the values
+     * the source reported (null where it defined none).
+     *
+     * The sensor "creating" observer runs guessLimits() when sensors.guess_limits
+     * is enabled (the default), which fabricates a low limit (current - 10 for
+     * temperature) whenever the source left one unset. We write the source values
+     * directly via the query builder so the observer does not re-guess; later
+     * polls keep the value (guessing only happens on create), so this is stable.
+     *
+     * @param array<string, array<string, float|null>> $intendedLimits  sensor_oid => limit columns
+     */
+    private function correctGuessedSensorLimits(array $intendedLimits): void
+    {
+        foreach ($intendedLimits as $oid => $limits) {
+            DB::table('sensors')
+                ->where('device_id', $this->device['device_id'])
+                ->where('sensor_oid', $oid)
+                ->where('sensor_custom', 'No') // never override user-customized limits
+                ->update($limits);
         }
     }
 
@@ -574,6 +635,10 @@ class Common extends Application
             ->walk('SMARTMON-SENSOR-MIB::smartmonSensorValue')
             ->table(2);
 
+        $this->vlog('pollSensorValues: walked smartmonSensorValue for device idx(es) ['
+            . implode(', ', array_keys($sensorValues)) . '] — '
+            . count($this->sataDeviceList) . ' SATA / ' . count($this->nvmeDeviceList) . ' NVMe device(s) to update');
+
         foreach ($this->sataDeviceList as $devIdx => $dev) {
             $diskKey = $dev['disk_key'];
             $idx = $this->mibDiskIndex($diskKey);
@@ -633,9 +698,26 @@ class Common extends Application
                 $bySuffix[$m[1]] = $sensor;
             }
         }
-        foreach ($sensorValues[$devIdx] ?? [] as $sensorIdx => $rawValue) {
+
+        $walked = $sensorValues[$devIdx] ?? [];
+        $this->vlog("matchSensorMibValues: idx={$idx} devIdx={$devIdx} — "
+            . count($sensors) . ' DB sensor(s), suffix key(s) [' . implode(', ', array_keys($bySuffix)) . '], '
+            . 'walked sub-index(es) [' . implode(', ', array_keys($walked)) . ']');
+        if ($walked === []) {
+            $this->vlog("matchSensorMibValues: no walked values for devIdx={$devIdx} (key mismatch?) — sensors left unchanged");
+        }
+
+        foreach ($walked as $sensorIdx => $rawValue) {
             if ($sensor = $bySuffix[(string) $sensorIdx] ?? null) {
-                $this->updateMibSensor($this->device, $sensor, (float) $rawValue);
+                // table(2) leaf is ['smartmonSensorValue' => value]; extract the
+                // scalar — casting the wrapper array to float would yield 1.
+                $value = $this->leafValue($rawValue, 'smartmonSensorValue');
+                $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} raw="
+                    . (is_array($rawValue) ? 'array(' . json_encode($rawValue) . ')' : var_export($rawValue, true))
+                    . ' value=' . var_export($value, true));
+                $this->updateMibSensor($this->device, $sensor, is_numeric($value) ? (float) $value : null);
+            } else {
+                $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} has no matching DB sensor — skipped");
             }
         }
 
@@ -686,6 +768,8 @@ class Common extends Application
 
     private function updateMibSensor(Device $device, Sensor $sensor, ?float $value): void
     {
+        $this->vlog("updateMibSensor: {$sensor->sensor_index} ({$sensor->sensor_class}) <- " . var_export($value, true));
+
         $sensor->sensor_current = $value;
         $sensor->save();
 
