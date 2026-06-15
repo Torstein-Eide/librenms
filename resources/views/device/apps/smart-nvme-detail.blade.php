@@ -23,6 +23,19 @@
     $fmtInt  = static fn ($v) => is_numeric($v) ? number_format((int) $v, 0, '.', ' ') : null;
     $fmtBytes = static fn ($v) => is_numeric($v) ? \LibreNMS\Util\Number::formatBi((int) $v) : null;
     $yesNo   = static fn ($v) => $v === null ? null : ((int) $v ? 'Yes' : 'No');
+
+    // Current self-test operation (in progress). 0 = none.
+    $curOp  = (int) ($health['current_selftest_op'] ?? 0);
+    $curStr = trim((string) ($health['current_selftest_str'] ?? ''));
+    $curPct = $health['current_selftest_pct'] ?? null;
+    $selftestBadge = '';
+    if ($curOp !== 0) {
+        $txt = $curStr !== '' ? $curStr : 'Self-test in progress';
+        if (is_numeric($curPct)) {
+            $txt .= ' ' . (int) $curPct . '%';
+        }
+        $selftestBadge = '<span class="label label-info">' . htmlspecialchars($txt) . '</span>';
+    }
 @endphp
 
 @if(! $showGraphs)
@@ -131,10 +144,10 @@
     @endif
 
     {{-- Self-test log --}}
-    @if(! empty($disk['selftests']))
+    @if(! empty($disk['selftests']) || $curOp !== 0)
     <div>
         @php
-            $panelStart('Self-test Log');
+            $panelStart('Self-test Log', $selftestBadge);
             $hasLba = false;
             foreach ($disk['selftests'] as $e) {
                 if (is_numeric($e['failing_lba'] ?? null) && (int) $e['failing_lba'] > 0) {

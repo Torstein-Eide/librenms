@@ -1494,12 +1494,17 @@ class Common extends Application
             'num_err_log_entries'  => $this->intValue($row['smartmonNvmeErrorInformationLogEntries'] ?? null),
             'warning_temp_time'    => $this->intValue($row['smartmonNvmeWarningTemperatureTimeMinutes'] ?? null),
             'critical_comp_time'   => $this->intValue($row['smartmonNvmeCriticalTemperatureTimeMinutes'] ?? null),
+            'current_selftest_op'  => $this->intValue($row['smartmonNvmeCurrentSelfTestOperationValue'] ?? null),
+            'current_selftest_str' => isset($row['smartmonNvmeCurrentSelfTestOperationString'])
+                ? substr((string) $row['smartmonNvmeCurrentSelfTestOperationString'], 0, 96) : null,
+            'current_selftest_pct' => $this->intValue($row['smartmonNvmeCurrentSelfTestCompletionPercent'] ?? null),
         ], ['app_id', 'disk_key'], [
             'overall_status', 'critical_warning',
             'data_units_read', 'data_units_written', 'data_bytes_read', 'data_bytes_written',
             'host_read_commands', 'host_write_commands', 'controller_busy_time',
             'power_cycles', 'power_on_hours', 'unsafe_shutdowns', 'media_errors',
             'num_err_log_entries', 'warning_temp_time', 'critical_comp_time',
+            'current_selftest_op', 'current_selftest_str', 'current_selftest_pct',
         ]);
     }
 

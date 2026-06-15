@@ -623,7 +623,8 @@ SmartmonNvmeHealthEntry ::= SEQUENCE {
     smartmonNvmeWarningTemperatureTimeMinutes   CounterBasedGauge64,
     smartmonNvmeCriticalTemperatureTimeMinutes  CounterBasedGauge64,
     smartmonNvmeCurrentSelfTestOperationValue   Unsigned32,
-    smartmonNvmeCurrentSelfTestOperationString  DisplayString
+    smartmonNvmeCurrentSelfTestOperationString  DisplayString,
+    smartmonNvmeCurrentSelfTestCompletionPercent Unsigned32
 }
 
 smartmonNvmeHealthOverallStatus OBJECT-TYPE
@@ -813,6 +814,17 @@ smartmonNvmeCurrentSelfTestOperationString OBJECT-TYPE
          for example No self-test in progress or Short device self-test
          in progress."
     ::= { smartmonNvmeHealthEntry 23 }
+
+smartmonNvmeCurrentSelfTestCompletionPercent OBJECT-TYPE
+    SYNTAX      Unsigned32 (0..100)
+    UNITS       "percent"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Completion progress of the current self-test operation, as a
+         percentage 0..100 (nvme_self_test_log.current_self_test_completion_percent).
+         Not instantiated when no self-test is in progress."
+    ::= { smartmonNvmeHealthEntry 24 }
 
 smartmonNvmeSelfTestTableRowCount OBJECT-TYPE
     SYNTAX      Unsigned32
