@@ -11,6 +11,8 @@
     $showDetailed = $viewMode === 'detailed';
 
     $healthSensor = $data->healthSensor($selectedDisk);
+    $diskSensors = $data->diskSensors($selectedDisk);
+    $tempSensors = array_filter($diskSensors, static fn ($s) => $s->sensor_class === 'temperature');
     $overall = $health['overall_status'] ?? null;
     $healthBadge = match ((int) $overall) {
         1 => '<span class="label label-default">Passed</span>',
@@ -120,6 +122,28 @@
             $panelEnd();
         @endphp
     </div>
+
+    {{-- Temperatures --}}
+    @if(! empty($tempSensors))
+    <div>
+        @php
+            $panelStart('Temperatures');
+            echo '<table class="table table-condensed table-hover"><thead><tr>'
+                . '<th>Sensor</th><th>Current</th><th>Warn</th><th>Crit</th></tr></thead><tbody>';
+            $tdeg = static fn ($v) => is_numeric($v) ? rtrim(rtrim(sprintf('%.1f', (float) $v), '0'), '.') . '°C' : '-';
+            foreach ($tempSensors as $s) {
+                // Strip the "SMART <label> " prefix to leave just the sensor name (e.g. Composite).
+                $nm = preg_replace('/^SMART\s+/', '', (string) $s->sensor_descr);
+                echo '<tr><td>' . htmlspecialchars($nm) . '</td>'
+                    . '<td>' . htmlspecialchars($tdeg($s->sensor_current)) . '</td>'
+                    . '<td>' . htmlspecialchars($tdeg($s->sensor_limit_warn)) . '</td>'
+                    . '<td>' . htmlspecialchars($tdeg($s->sensor_limit)) . '</td></tr>';
+            }
+            echo '</tbody></table>';
+            $panelEnd();
+        @endphp
+    </div>
+    @endif
 
     {{-- Namespaces --}}
     @if(! empty($disk['nvme_namespaces']))
@@ -281,9 +305,6 @@
 
 @if($showGraphs)
 @php
-    $tempSensor = $data->temperatureSensor($selectedDisk);
-    $diskSensors = $data->diskSensors($selectedDisk);
-
     $nvSensorGraph = static function ($sensor, string $title) use ($now, $panelStart, $panelEnd, $device) {
         if (! $sensor) { return; }
         $graph_array = [
@@ -310,15 +331,21 @@
         $panelEnd();
     };
 
-    $nvSensorGraph($tempSensor, 'Temperature');
-    $nvSensorGraph($healthSensor, 'Health');
-    foreach ($diskSensors as $sIdx => $sensor) {
-        if ($sensor->sensor_class === 'percent') {
-            $nvSensorGraph($sensor, (string) $sensor->sensor_descr);
-        }
-    }
-    $nvAppGraph('smart_v2_nvme', 'NVMe SMART/Health');
+    // Combined temperature (overlaid sensors + warn/crit limit lines).
+    $nvAppGraph('smart_v2_temp', 'Temperature');
+    // Wear / available spare.
+    $nvAppGraph('smart_v2_nvme_wear', 'Wear / Spare');
+    // SMART/Health log metric breakdowns (from the smart_nvme RRD).
     $nvAppGraph('smart_v2_nvme', 'Data Units', ['metric' => 'data_units']);
     $nvAppGraph('smart_v2_nvme', 'Host I/O', ['metric' => 'host_io']);
+    $nvAppGraph('smart_v2_nvme', 'Errors', ['metric' => 'errors']);
+    $nvAppGraph('smart_v2_nvme', 'Power', ['metric' => 'power']);
+    $nvAppGraph('smart_v2_nvme', 'Controller Busy', ['metric' => 'controller_busy']);
+    $nvAppGraph('smart_v2_nvme', 'Temp Threshold Time', ['metric' => 'temp_time']);
+    // Health state and per-sensor temperatures (each with its own limit lines).
+    $nvSensorGraph($healthSensor, 'Health');
+    foreach ($tempSensors as $sensor) {
+        $nvSensorGraph($sensor, (string) $sensor->sensor_descr);
+    }
 @endphp
 @endif

@@ -67,6 +67,9 @@ if (Rrd::checkRrdExists($rrd_filename)) {
         'data_units' => ['du_rd', 'du_wr'],
         'host_io' => ['host_rd', 'host_wr'],
         'controller_busy' => ['ctrl_busy'],
+        'errors' => ['media_errors', 'err_log_cnt'],
+        'power' => ['pwr_cycles', 'pwr_hours', 'unsafe_shut'],
+        'temp_time' => ['warn_tmp_t', 'crit_cmp_t'],
     ];
 
     $selectedDs = $groupDs[$metric] ?? array_keys($allDs);
