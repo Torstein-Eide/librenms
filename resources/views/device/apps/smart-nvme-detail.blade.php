@@ -145,21 +145,49 @@
     </div>
     @endif
 
-    {{-- Namespaces --}}
+    {{-- Namespaces & LBA Formats (combined, grouped by namespace) --}}
     @if(! empty($disk['nvme_namespaces']))
     <div>
         @php
-            $panelStart('Namespaces');
+            $panelStart('Namespaces & LBA Formats');
             echo '<table class="table table-condensed table-hover"><thead><tr>'
-                . '<th>NS</th><th>Size</th><th>Capacity</th><th>Used</th><th>LBA Size</th></tr></thead><tbody>';
+                . '<th>NS</th><th>Size</th><th>Capacity</th><th>Used</th>'
+                . '<th>Fmt</th><th>Cur</th><th>Data</th><th>Meta</th><th>Rel Perf</th></tr></thead><tbody>';
+
+            // Group LBA formats by namespace id.
+            $fmtByNs = [];
+            foreach ($disk['nvme_lba_formats'] ?? [] as $lf) {
+                $fmtByNs[(int) ($lf['ns_id'] ?? 0)][] = $lf;
+            }
+
+            $emptyNsCells = '<td></td><td></td><td></td><td></td>';
+            $fmtCells = static function (array $lf): string {
+                return '<td>' . htmlspecialchars((string) ($lf['format_id'] ?? '-')) . '</td>'
+                    . '<td>' . ($lf['current'] !== null ? ((int) $lf['current'] ? '✓' : '') : '') . '</td>'
+                    . '<td>' . htmlspecialchars(is_numeric($lf['data_size_bytes'] ?? null) ? $lf['data_size_bytes'] . ' B' : '-') . '</td>'
+                    . '<td>' . htmlspecialchars(is_numeric($lf['metadata_size_bytes'] ?? null) ? $lf['metadata_size_bytes'] . ' B' : '-') . '</td>'
+                    . '<td>' . htmlspecialchars((string) ($lf['relative_performance'] ?? '-')) . '</td>';
+            };
+
             foreach ($disk['nvme_namespaces'] as $ns) {
+                $nsId = (int) ($ns['ns_id'] ?? 0);
                 $lba = is_numeric($ns['lba_data_size'] ?? null) ? (int) $ns['lba_data_size'] : null;
                 $toBytes = static fn ($blocks) => ($lba && is_numeric($blocks)) ? \LibreNMS\Util\Number::formatBi((int) $blocks * $lba) : '-';
-                echo '<tr><td>' . htmlspecialchars((string) ($ns['ns_id'] ?? '-')) . '</td>'
+                $nsCells = '<td>' . $nsId . '</td>'
                     . '<td>' . htmlspecialchars($toBytes($ns['nsze'] ?? null)) . '</td>'
                     . '<td>' . htmlspecialchars($toBytes($ns['ncap'] ?? null)) . '</td>'
-                    . '<td>' . htmlspecialchars($toBytes($ns['nuse'] ?? null)) . '</td>'
-                    . '<td>' . ($lba !== null ? $lba . ' B' : '-') . '</td></tr>';
+                    . '<td>' . htmlspecialchars($toBytes($ns['nuse'] ?? null)) . '</td>';
+
+                $formats = $fmtByNs[$nsId] ?? [];
+                if ($formats === []) {
+                    echo '<tr>' . $nsCells . '<td>-</td><td></td><td>-</td><td>-</td><td>-</td></tr>';
+                    continue;
+                }
+                $first = true;
+                foreach ($formats as $lf) {
+                    echo '<tr>' . ($first ? $nsCells : $emptyNsCells) . $fmtCells($lf) . '</tr>';
+                    $first = false;
+                }
             }
             echo '</tbody></table>';
             $panelEnd();
@@ -246,27 +274,6 @@
                     . '<td>' . htmlspecialchars($mw($ps['idle_power_mw'] ?? null)) . '</td>'
                     . '<td>' . htmlspecialchars($us($ps['entry_latency_us'] ?? null)) . '</td>'
                     . '<td>' . htmlspecialchars($us($ps['exit_latency_us'] ?? null)) . '</td></tr>';
-            }
-            echo '</tbody></table>';
-            $panelEnd();
-        @endphp
-    </div>
-    @endif
-
-    {{-- LBA formats --}}
-    @if(! empty($disk['nvme_lba_formats']))
-    <div>
-        @php
-            $panelStart('LBA Formats');
-            echo '<table class="table table-condensed table-hover"><thead><tr>'
-                . '<th>NS</th><th>Fmt</th><th>Current</th><th>Data</th><th>Meta</th><th>Rel Perf</th></tr></thead><tbody>';
-            foreach ($disk['nvme_lba_formats'] as $lf) {
-                echo '<tr><td>' . htmlspecialchars((string) ($lf['ns_id'] ?? '-')) . '</td>'
-                    . '<td>' . htmlspecialchars((string) ($lf['format_id'] ?? '-')) . '</td>'
-                    . '<td>' . ($lf['current'] !== null ? ((int) $lf['current'] ? '✓' : '') : '') . '</td>'
-                    . '<td>' . htmlspecialchars(is_numeric($lf['data_size_bytes'] ?? null) ? $lf['data_size_bytes'] . ' B' : '-') . '</td>'
-                    . '<td>' . htmlspecialchars(is_numeric($lf['metadata_size_bytes'] ?? null) ? $lf['metadata_size_bytes'] . ' B' : '-') . '</td>'
-                    . '<td>' . htmlspecialchars((string) ($lf['relative_performance'] ?? '-')) . '</td></tr>';
             }
             echo '</tbody></table>';
             $panelEnd();
