@@ -147,20 +147,20 @@
             }
             if ($missingDbs !== []) {
                 echo '<div class="small text-muted" style="margin-top:4px">'
-                    . '<i class="fa fa-exclamation-triangle"></i> Vendor names unavailable — install '
+                    . '<i class="fa fa-exclamation-triangle"></i> Vendor names unavailable. install: '
                     . htmlspecialchars(implode(', ', $missingDbs)) . '</div>';
             }
             $panelEnd();
         @endphp
     </div>
 
-    {{-- Self-test log — row #1, immediately after the status/identity panel --}}
+    {{-- Self-test log - row #1, immediately after the status/identity panel --}}
     <div>
         @php
             $panelStart('Self-test Log', $selftestBadge);
             if (empty($disk['selftests']) && $curOp === 0) {
                 echo '<div class="small text-muted" style="padding:4px 2px">'
-                    . '<i class="fa fa-info-circle"></i> No self-test data reported — this drive may not support self-tests.</div>';
+                    . '<i class="fa fa-info-circle"></i> No self-test data reported - this drive may not support self-tests.</div>';
             } else {
                 $hasLba = false;
                 foreach ($disk['selftests'] as $e) {
@@ -196,7 +196,7 @@
         @endphp
     </div>
 
-    {{-- SMART / Health log — same row as the self-test panel --}}
+    {{-- SMART / Health log - same row as the self-test panel --}}
     <div>
         @php
             $panelStart('SMART / Health', $healthBadge);
@@ -277,9 +277,9 @@
                 // Tooltips for the Name column (definitions adapted from the openSeaChest
                 // "Drive Health and SMART" wiki). Keyed by the displayed row/sensor name.
                 $nvTips = [
-                    'Composite'         => 'NVMe composite temperature — an overall temperature computed by the controller. Reported by the drive in Kelvin and shown here in °C.',
+                    'Composite'         => 'An overall temperature computed by the controller. ',
                     'Available Spare'   => 'Remaining spare capacity as a percentage of the manufacturer total. The drive warns when it drops below its spare threshold.',
-                    'Percentage Used'   => 'Estimated percentage of the drive\'s rated endurance consumed. 100% means the manufacturer-expected life is reached — not necessarily failure, and it may exceed 100%.',
+                    'Percentage Used'   => 'Estimated percentage of the drive\'s rated endurance consumed. 100% means the manufacturer-expected life is reached, not necessarily failure, and it may exceed 100%.',
                     'Controller Busy'   => 'Minutes the controller was busy servicing I/O (NVMe SMART/Health log).',
                     'Media Errors'      => 'Media and data-integrity errors detected by the controller. Also counts CRC/ECC/checksum errors, so it is close to but not exactly uncorrectable read errors (NVMe SMART/Health log).',
                     'Error Log Entries' => 'Number of entries in the NVMe error information log over the life of the drive.',
@@ -360,7 +360,7 @@
         @endphp
     </div>
 
-    {{-- Namespaces & LBA Formats — row #3 (own row), detailed view only --}}
+    {{-- Namespaces & LBA Formats - row #3 (own row), detailed view only --}}
     @if($showDetailed && ! empty($disk['nvme_namespaces']))
     <div class="smart-row-break"></div>
     <div>
@@ -411,7 +411,7 @@
     </div>
     @endif
 
-    {{-- Error log — new row after Namespaces --}}
+    {{-- Error log - new row after Namespaces --}}
     @if(! empty($disk['nvme_errors']))
     <div class="smart-row-break"></div>
     <div>
@@ -613,7 +613,7 @@
         ? number_format((float) $compositeTemp->sensor_current, 1) . '°C' : '';
     $nvAppGraph('smart_v2_temp', 'Temperature', [], $tempBadge);
 
-    // Available Spare — sensor graph (includes limit/threshold lines).
+    // Available Spare - sensor graph (includes limit/threshold lines).
     if ($spareSensor) {
         $spareBadge = is_numeric($spareSensor->sensor_current)
             ? number_format((float) $spareSensor->sensor_current, 0) . '%' : '';
@@ -623,7 +623,7 @@
         }
         $nvSensorGraph($spareSensor, 'Available Spare', $spareBadge);
     }
-    // Percentage Used — sensor graph.
+    // Percentage Used - sensor graph.
     if ($pctUsedSensor) {
         $pctBadge = is_numeric($pctUsedSensor->sensor_current)
             ? number_format((float) $pctUsedSensor->sensor_current, 0) . '%' : '';

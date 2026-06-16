@@ -58,7 +58,7 @@
     </style>
     @if(! empty($devStatUnknownPages))
     <div class="alert alert-warning" style="padding:5px 10px;margin-bottom:10px;font-size:12px">
-        <strong>Unrecognized device statistics page(s) — no panel defined:</strong>
+        <strong>Unrecognized device statistics page(s). no panel defined:</strong>
         {{ implode(', ', $devStatUnknownPages) }}
     </div>
     @endif
@@ -70,6 +70,23 @@
                 echo '<table class="table table-condensed table-hover" style="width:auto">';
                 $cap = $info['user_capacity_bytes'] ?? null;
                 $rot = $info['rotation_rate'] ?? null;
+
+                // smartmonDeviceUris is a whitespace-separated list of file:// URIs; show the
+                // primary device path with the full list (scheme stripped) in a tooltip.
+                $paths = array_map(
+                    static fn ($u) => preg_replace('#^file://#', '', $u),
+                    preg_split('/\s+/', trim((string) ($disk['uris'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: []
+                );
+                $primaryPath = $disk['device_path'] ?? ($paths[0] ?? null);
+                $pathCell = $primaryPath;
+                if ($primaryPath !== null && count($paths) > 1) {
+                    $pathCell = new \Illuminate\Support\HtmlString(
+                        '<abbr style="cursor:help;text-decoration:underline dotted" title="'
+                        . htmlspecialchars(implode("\n", $paths), ENT_QUOTES) . '">'
+                        . htmlspecialchars((string) $primaryPath) . ' (+' . (count($paths) - 1) . ')</abbr>'
+                    );
+                }
+
                 $rows = [
                     'Model Family'    => $disk['model_family']   ?? null,
                     'Model'           => $disk['model_name']     ?? null,
@@ -77,7 +94,7 @@
                     'Firmware'        => $disk['firmware_version'] ?? null,
                     'WWN'             => $disk['wwn']            ?? null,
                     'Device'          => $disk['device_name']   ?? null,
-                    'Path'            => $disk['device_path']   ?? null,
+                    'Path'            => $pathCell,
                     'Capacity'        => is_numeric($cap) ? \LibreNMS\Util\Number::formatBi((int) $cap) : null,
                     'Power On Hours'  => $powerOnHours !== null ? number_format($powerOnHours, 0, '.', ' ') : null,
                     'Power Cycles'    => isset($health['power_cycles']) && is_numeric($health['power_cycles']) ? number_format((int) $health['power_cycles'], 0, '.', ' ') : null,
@@ -88,21 +105,18 @@
                     'SATA Version'    => isset($info['sata_version']) ? $data->decode('sata_version', $info['sata_version']) : null,
                     'Logical Block'   => isset($info['logical_block_size']) && is_numeric($info['logical_block_size']) ? \LibreNMS\Util\Number::formatSi((int) $info['logical_block_size'], 0, 0, 'B') : null,
                     'Physical Block'  => isset($info['physical_block_size']) && is_numeric($info['physical_block_size']) ? \LibreNMS\Util\Number::formatSi((int) $info['physical_block_size'], 0, 0, 'B') : null,
-                    'SMART'           => ($info['smart_available'] ?? null) !== null ? (((int) $info['smart_available']) ? 'Available' : 'Not available') : null,
-                    'SMART Enabled'   => ($info['smart_enabled'] ?? null) !== null ? (((int) $info['smart_enabled']) ? 'Yes' : 'No') : null,
-                    'Write Cache'     => ($info['write_cache_enabled'] ?? null) !== null ? (((int) $info['write_cache_enabled']) ? 'Enabled' : 'Disabled') : null,
-                    'Read Look-ahead' => ($info['read_lookahead_enabled'] ?? null) !== null ? (((int) $info['read_lookahead_enabled']) ? 'Enabled' : 'Disabled') : null,
-                    'TRIM'            => ($info['trim_supported'] ?? null) !== null ? (((int) $info['trim_supported']) ? 'Supported' : 'Not supported') : null,
-                    'APM'             => $data->apmLabel($info) !== '-' ? $data->apmLabel($info) : null,
-                    'Security'        => $data->securityLabel($info) !== '-' ? $data->securityLabel($info) : null,
                     'In smartctl DB'  => ($info['in_smartctl_database'] ?? null) !== null ? (((int) $info['in_smartctl_database']) ? 'Yes' : 'No') : null,
                     'Last Poll'       => $disk['last_poll_time'] ?? null,
                     'Last Poll Result' => $disk['last_poll_result'] !== null ? $data->decode('poll_result', $disk['last_poll_result']) : null,
                 ];
                 foreach ($rows as $label => $value) {
-                    if ($value !== null && $value !== '') {
-                        echo $tableRow($label, htmlspecialchars((string) $value), $tooltipForLabel($label));
+                    if ($value === null || $value === '') {
+                        continue;
                     }
+                    // HtmlString values (e.g. the tooltipped Path) are already safe HTML.
+                    $cell = $value instanceof \Illuminate\Support\HtmlString
+                        ? (string) $value : htmlspecialchars((string) $value);
+                    echo $tableRow($label, $cell, $tooltipForLabel($label));
                 }
                 echo '</table>';
                 $panelEnd();
@@ -110,7 +124,7 @@
         </div>
 
         {{-- Self-test Log (Selective Self-test Spans embedded) --}}
-        @if(! empty($disk['selftests']) || isset($info['selftest_polling_short_minutes']) || isset($info['offline_collection_completion_secs']) || ! empty($disk['selective_test']))
+        @if(! empty($disk['selftests']) || isset($info['selftest_polling_short_minutes']) || ! empty($disk['selective_test']))
         <div>
             @php
                 $panelStart('Self-test Log', $selftestPanelBadge);
@@ -126,11 +140,6 @@
                 }
                 if ($pollingRows !== []) {
                     echo '<p style="margin-bottom:6px"><strong>Est. polling minutes:</strong> ' . htmlspecialchars(implode(' / ', $pollingRows)) . '</p>';
-                }
-                $offlineSecs = $info['offline_collection_completion_secs'] ?? null;
-                $offlineStatus = $health['offline_collection_status'] ?? null;
-                if ($offlineSecs !== null && is_numeric($offlineSecs)) {
-                    echo '<p style="margin-bottom:6px"><strong>Offline collection:</strong> ' . htmlspecialchars((int) $offlineSecs . ' s') . ($offlineStatus !== null ? ' — ' . htmlspecialchars($data->decode('offline_status', $offlineStatus)) : '') . '</p>';
                 }
                 if (! empty($disk['selftests'])) {
                     $hasLba = false;
@@ -177,6 +186,35 @@
                     }
                     echo '</tbody></table></div>';
                 }
+                $panelEnd();
+            @endphp
+        </div>
+        @endif
+
+        {{-- Offline Data Collection --}}
+        @php
+            $offlineSecs = $info['offline_collection_completion_secs'] ?? null;
+            $offlineStatus = $health['offline_collection_status'] ?? null;
+        @endphp
+        @if($offlineSecs !== null || $offlineStatus !== null)
+        <div>
+            @php
+                $panelStart('Offline Data Collection');
+                echo '<table class="table table-condensed table-hover" style="width:auto">';
+                if ($offlineStatus !== null && is_numeric($offlineStatus)) {
+                    $autoEnabled = ((int) $offlineStatus & 0x80) !== 0;
+                    $statusText = $data->decode('offline_status', (int) $offlineStatus & 0x7f);
+                    echo $tableRow('Status', htmlspecialchars($statusText), $tooltipForLabel('Status'));
+                    echo $tableRow(
+                        'Auto Offline Data Collection',
+                        $autoEnabled ? '<span class="text-success">Enabled</span>' : '<span class="text-muted">Disabled</span>',
+                        $tooltipForLabel('Auto Offline Data Collection')
+                    );
+                }
+                if ($offlineSecs !== null && is_numeric($offlineSecs)) {
+                    echo $tableRow('Total Time to Complete', htmlspecialchars((int) $offlineSecs . ' s'), $tooltipForLabel('Total Time to Complete'));
+                }
+                echo '</table>';
                 $panelEnd();
             @endphp
         </div>
@@ -678,7 +716,7 @@ JS;
                         echo '<tr><td><strong>' . $labelWithTooltip($rowLabel, $tooltip) . '</strong></td>';
                         foreach ($cols as $col => $_) {
                             $v = $data[$rowKey][$col] ?? null;
-                            echo '<td>' . ($v !== null ? $fmtStatVal($v) : '<span class="text-muted">—</span>') . '</td>';
+                            echo '<td>' . ($v !== null ? $fmtStatVal($v) : '<span class="text-muted">-</span>') . '</td>';
                         }
                         echo '</tr>';
                     }
@@ -936,23 +974,55 @@ JS;
         @if($showDetailed)
         {{-- Last row: SATA PHY Event Counters, Error Recovery Control, Capabilities, Log Directory --}}
         @php
-            $capFields = [
-                'capability_selftests_supported'     => 'Self-tests supported',
-                'capability_conveyance_supported'    => 'Conveyance self-test',
-                'capability_selective_supported'     => 'Selective self-test',
-                'capability_error_logging_supported' => 'Error logging',
-                'capability_gp_logging_supported'    => 'GP logging',
-                'capability_exec_offline_immediate'  => 'Exec offline immediate',
-                'capability_offline_aborted_on_cmd'  => 'Offline aborted on command',
-                'capability_offline_surface_scan'    => 'Offline surface scan',
-                'capability_attr_autosave'           => 'Attribute autosave',
-                'sct_error_recovery_supported'       => 'SCT error recovery control',
-                'sct_feature_control_supported'      => 'SCT feature control',
-                'sct_data_table_supported'           => 'SCT data table',
+            $capGroups = [
+                'Self-test' => [
+                    'capability_selftests_supported'  => 'Self-tests supported',
+                    'capability_conveyance_supported' => 'Conveyance self-test',
+                    'capability_selective_supported'  => 'Selective self-test',
+                ],
+                'Offline Data Collection' => [
+                    'capability_exec_offline_immediate' => 'Exec offline immediate',
+                    'capability_offline_aborted_on_cmd' => 'Offline aborted on command',
+                    'capability_offline_surface_scan'   => 'Offline surface scan',
+                ],
+                'Logging' => [
+                    'capability_error_logging_supported' => 'Error logging',
+                    'capability_gp_logging_supported'    => 'GP logging',
+                    'capability_attr_autosave'           => 'Attribute autosave',
+                ],
+                'SCT' => [
+                    'sct_error_recovery_supported'  => 'SCT error recovery control',
+                    'sct_feature_control_supported' => 'SCT feature control',
+                    'sct_data_table_supported'      => 'SCT data table',
+                ],
             ];
+            $capFields = array_merge(...array_values($capGroups));
             $capRows = array_filter($capFields, fn ($col) => isset($info[$col]), ARRAY_FILTER_USE_KEY);
+
+            $featureRows = [
+                'SMART'           => ($info['smart_available'] ?? null) !== null ? (((int) $info['smart_available']) ? 'Available' : 'Not available') : null,
+                'SMART Enabled'   => ($info['smart_enabled'] ?? null) !== null ? (((int) $info['smart_enabled']) ? 'Yes' : 'No') : null,
+                'Write Cache'     => ($info['write_cache_enabled'] ?? null) !== null ? (((int) $info['write_cache_enabled']) ? 'Enabled' : 'Disabled') : null,
+                'Read Look-ahead' => ($info['read_lookahead_enabled'] ?? null) !== null ? (((int) $info['read_lookahead_enabled']) ? 'Enabled' : 'Disabled') : null,
+                'TRIM'            => ($info['trim_supported'] ?? null) !== null ? (((int) $info['trim_supported']) ? 'Supported' : 'Not supported') : null,
+                'APM'             => $data->apmLabel($info) !== '-' ? $data->apmLabel($info) : null,
+                'Security'        => $data->securityLabel($info) !== '-' ? $data->securityLabel($info) : null,
+            ];
+            $featureRows = array_filter($featureRows, fn ($v) => $v !== null && $v !== '');
+
+            // One sub-table per group; kept whole (not split) within the CSS column layout below.
+            $capSection = static function (string $heading, string $rows): string {
+                if ($rows === '') {
+                    return '';
+                }
+
+                return '<div style="break-inside:avoid-column;-webkit-column-break-inside:avoid;margin-bottom:14px">'
+                    . '<div style="font-weight:bold;border-bottom:1px solid #ddd;margin-bottom:4px;padding-bottom:2px">' . htmlspecialchars($heading) . '</div>'
+                    . '<table class="table table-condensed table-hover" style="width:auto;margin-bottom:0">' . $rows . '</table>'
+                    . '</div>';
+            };
         @endphp
-        @if(! empty($disk['phy_events']) || ! empty($disk['erc']) || $capRows !== [] || ! empty($disk['log_dir']))
+        @if(! empty($disk['phy_events']) || ! empty($disk['erc']) || $capRows !== [] || $featureRows !== [] || ! empty($disk['log_dir']))
         <div class="smart-panels">
             @if(! empty($disk['erc']))
             <div>
@@ -973,17 +1043,31 @@ JS;
             </div>
             @endif
 
-            @if($capRows !== [])
+            @if($capRows !== [] || $featureRows !== [])
             <div>
                 @php
                     $panelStart('Capabilities');
-                    echo '<table class="table table-condensed table-hover" style="width:auto">';
-                    foreach ($capRows as $col => $label) {
-                        $val = (int) $info[$col];
-                        $icon = $val ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>';
-                        echo $tableRow($label, $icon, $tooltipForLabel($label));
+                    $sectionsHtml = '';
+                    if ($featureRows !== []) {
+                        $rows = '';
+                        foreach ($featureRows as $label => $value) {
+                            $rows .= $tableRow($label, htmlspecialchars((string) $value), $tooltipForLabel($label));
+                        }
+                        $sectionsHtml .= $capSection('Drive Features', $rows);
                     }
-                    echo '</table>';
+                    foreach ($capGroups as $heading => $cols) {
+                        $rows = '';
+                        foreach ($cols as $col => $label) {
+                            if (! isset($info[$col])) {
+                                continue;
+                            }
+                            $val = (int) $info[$col];
+                            $icon = $val ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>';
+                            $rows .= $tableRow($label, $icon, $tooltipForLabel($label));
+                        }
+                        $sectionsHtml .= $capSection($heading, $rows);
+                    }
+                    echo '<div style="column-width:220px;column-count:4;column-gap:18px">' . $sectionsHtml . '</div>';
                     $panelEnd();
                 @endphp
             </div>
