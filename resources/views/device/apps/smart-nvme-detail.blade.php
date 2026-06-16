@@ -218,15 +218,26 @@
                 'Host Writes'      => [$fmtInt($health['host_write_commands'] ?? null), 'host_wr'],
             ];
 
-            // Mini graph (click → graphs page, hover → day/week/month/year popup) for a
-            // smart_v2_nvme metric group, reading the per-disk smart_nvme RRD.
+            // Mini graph (click → graphs page, hover → day/week/month/year popup).
+            // Each DS maps to a dedicated graph type file.
             $healthFrom = \App\Facades\LibrenmsConfig::get('time.day');
-            $nvMetricGraph = static function (string $metric, string $label) use ($now, $healthFrom, $data, $disk, $device) {
+            $nvMetricGraph = static function (string $ds, string $label) use ($now, $healthFrom, $data, $disk, $device) {
+                static $dsToType = [
+                    'ctrl_busy'    => 'smart_v2_nvme_ctrl_busy',
+                    'media_errors' => 'smart_v2_nvme_errors',
+                    'err_log_cnt'  => 'smart_v2_nvme_errors',
+                    'unsafe_shut'  => 'smart_v2_nvme_unsafe_shut',
+                    'pwr_hours'    => 'smart_v2_nvme_pwr_hours',
+                    'pwr_cycles'   => 'smart_v2_nvme_pwr_cycles',
+                    'du_rd'        => 'smart_v2_nvme_data_units',
+                    'du_wr'        => 'smart_v2_nvme_data_units',
+                    'host_rd'      => 'smart_v2_nvme_host_io',
+                    'host_wr'      => 'smart_v2_nvme_host_io',
+                ];
                 return \LibreNMS\Util\Url::graphPopup([
                     'id'          => $data->app->app_id,
-                    'type'        => 'application_smart_v2_nvme',
+                    'type'        => 'application_' . ($dsToType[$ds] ?? 'smart_v2_nvme'),
                     'disk'        => $disk['idx'],
-                    'metric'      => $metric,
                     'from'        => $healthFrom,
                     'to'          => $now,
                     'width'       => 60,
@@ -477,47 +488,122 @@
 
 @if($showGraphs)
 @php
-    $nvSensorGraph = static function ($sensor, string $title) use ($now, $panelStart, $panelEnd, $device) {
+    $nvSensorGraph = static function ($sensor, string $title, string $badge = '') use ($now, $panelStart, $panelEnd, $device) {
         if (! $sensor) { return; }
         $graph_array = [
             'height' => '100', 'width' => '215', 'to' => $now,
             'id' => $sensor->sensor_id, 'type' => 'sensor_' . $sensor->sensor_class, 'legend' => 'no',
         ];
-        $panelStart(htmlspecialchars($title));
+        $badgeHtml = $badge !== '' ? '<span class="text-muted">' . htmlspecialchars($badge) . '</span>' : '';
+        $panelStart(htmlspecialchars($title), $badgeHtml);
         echo '<div class="row">';
         include 'includes/html/print-graphrow.inc.php';
         echo '</div>';
         $panelEnd();
     };
 
-    $nvAppGraph = static function (string $type, string $title, array $extra = []) use ($now, $data, $disk, $panelStart, $panelEnd, $device) {
+    $nvAppGraph = static function (string $type, string $title, array $extra = [], string $badge = '') use ($now, $data, $disk, $panelStart, $panelEnd) {
         $graph_array = array_merge([
             'height' => '100', 'width' => '215', 'to' => $now,
             'id' => $data->app->app_id, 'type' => 'application_' . $type,
             'disk' => $disk['idx'], 'scale_min' => '0',
         ], $extra);
-        $panelStart(htmlspecialchars($title));
+        $badgeHtml = $badge !== '' ? '<span class="text-muted">' . htmlspecialchars($badge) . '</span>' : '';
+        $panelStart(htmlspecialchars($title), $badgeHtml);
         echo '<div class="row">';
         include 'includes/html/print-graphrow.inc.php';
         echo '</div>';
         $panelEnd();
     };
 
+    $fmtI = static fn ($v) => is_numeric($v) ? number_format((int) $v, 0, '.', ' ') : '-';
+    $du = 512000; // NVMe data-unit size in bytes
+
+    // Find Available Spare and Percentage Used sensors.
+    $spareSensor   = null;
+    $pctUsedSensor = null;
+    foreach ($diskSensors as $s) {
+        if ($s->sensor_class !== 'percent') { continue; }
+        $nm = $data->shortSensorName($s, $disk);
+        if ($spareSensor === null && stripos($nm, 'Spare') !== false) {
+            $spareSensor = $s;
+        } elseif ($pctUsedSensor === null && (stripos($nm, 'Percentage Used') !== false || stripos($nm, '% Used') !== false)) {
+            $pctUsedSensor = $s;
+        }
+    }
+
     // Combined temperature (overlaid sensors + warn/crit limit lines).
-    $nvAppGraph('smart_v2_temp', 'Temperature');
-    // Wear / available spare.
-    $nvAppGraph('smart_v2_nvme_wear', 'Wear / Spare');
+    $compositeTemp = null;
+    foreach ($tempSensors as $ts) {
+        if (stripos($data->shortSensorName($ts, $disk), 'Composite') !== false) { $compositeTemp = $ts; break; }
+    }
+    $tempBadge = ($compositeTemp && is_numeric($compositeTemp->sensor_current))
+        ? number_format((float) $compositeTemp->sensor_current, 1) . '°C' : '';
+    $nvAppGraph('smart_v2_temp', 'Temperature', [], $tempBadge);
+
+    // Available Spare — sensor graph (includes limit/threshold lines).
+    if ($spareSensor) {
+        $spareBadge = is_numeric($spareSensor->sensor_current)
+            ? number_format((float) $spareSensor->sensor_current, 0) . '%' : '';
+        $spareThresh = $health['available_spare_threshold'] ?? null;
+        if (is_numeric($spareThresh)) {
+            $spareBadge .= ($spareBadge !== '' ? ' / ' : '') . 'thresh ' . (int) $spareThresh . '%';
+        }
+        $nvSensorGraph($spareSensor, 'Available Spare', $spareBadge);
+    }
+    // Percentage Used — sensor graph.
+    if ($pctUsedSensor) {
+        $pctBadge = is_numeric($pctUsedSensor->sensor_current)
+            ? number_format((float) $pctUsedSensor->sensor_current, 0) . '%' : '';
+        $nvSensorGraph($pctUsedSensor, 'Percentage Used', $pctBadge);
+    }
+
     // SMART/Health log metric breakdowns (from the smart_nvme RRD).
-    $nvAppGraph('smart_v2_nvme', 'Data Units', ['metric' => 'data_units']);
-    $nvAppGraph('smart_v2_nvme', 'Host I/O', ['metric' => 'host_io']);
-    $nvAppGraph('smart_v2_nvme', 'Errors', ['metric' => 'errors']);
-    $nvAppGraph('smart_v2_nvme', 'Power', ['metric' => 'power']);
-    $nvAppGraph('smart_v2_nvme', 'Controller Busy', ['metric' => 'controller_busy']);
-    $nvAppGraph('smart_v2_nvme', 'Temp Threshold Time', ['metric' => 'temp_time']);
-    // Health state and per-sensor temperatures (each with its own limit lines).
+    $duRd = isset($health['data_units_read']) && is_numeric($health['data_units_read'])
+        ? \LibreNMS\Util\Number::formatBi((int) $health['data_units_read'] * $du) : null;
+    $duWr = isset($health['data_units_written']) && is_numeric($health['data_units_written'])
+        ? \LibreNMS\Util\Number::formatBi((int) $health['data_units_written'] * $du) : null;
+    $duParts = array_filter([$duRd !== null ? 'R: ' . $duRd : null, $duWr !== null ? 'W: ' . $duWr : null]);
+    $nvAppGraph('smart_v2_nvme_data_units', 'Data Units', [], implode(' / ', $duParts));
+
+    $hrRd = is_numeric($health['host_read_commands'] ?? null) ? $fmtI($health['host_read_commands']) : null;
+    $hrWr = is_numeric($health['host_write_commands'] ?? null) ? $fmtI($health['host_write_commands']) : null;
+    $ioParts = array_filter([$hrRd !== null ? 'R: ' . $hrRd : null, $hrWr !== null ? 'W: ' . $hrWr : null]);
+    $nvAppGraph('smart_v2_nvme_host_io', 'Host I/O', [], implode(' / ', $ioParts));
+
+    $medErr = is_numeric($health['media_errors'] ?? null) ? $fmtI($health['media_errors']) : null;
+    $logErr = is_numeric($health['num_err_log_entries'] ?? null) ? $fmtI($health['num_err_log_entries']) : null;
+    $errParts = array_filter([$medErr !== null ? 'Media: ' . $medErr : null, $logErr !== null ? 'Log: ' . $logErr : null]);
+    $nvAppGraph('smart_v2_nvme_errors', 'Errors', [], implode(' | ', $errParts));
+
+    $ctrlBusy = is_numeric($health['controller_busy_time'] ?? null) ? $fmtI($health['controller_busy_time']) . ' min total' : '';
+    $nvAppGraph('smart_v2_nvme_ctrl_busy', 'Controller Busy', [], $ctrlBusy);
+
+    $warnTime = is_numeric($health['warning_temp_time'] ?? null) ? $fmtI($health['warning_temp_time']) . ' min' : null;
+    $critTime = is_numeric($health['critical_comp_time'] ?? null) ? $fmtI($health['critical_comp_time']) . ' min' : null;
+    $tmpParts = array_filter([$warnTime !== null ? 'Warn: ' . $warnTime : null, $critTime !== null ? 'Crit: ' . $critTime : null]);
+    $nvAppGraph('smart_v2_nvme_temp_time', 'Temp Threshold Time', [], implode(' / ', $tmpParts) . ($tmpParts !== [] ? ' total' : ''));
+
+    $pohBadge = is_numeric($health['power_on_hours'] ?? null) ? $fmtI($health['power_on_hours']) . ' h' : '';
+    $nvAppGraph('smart_v2_nvme_pwr_hours', 'Power On Hours', [], $pohBadge);
+
+    $pcBadge = is_numeric($health['power_cycles'] ?? null) ? $fmtI($health['power_cycles']) : '';
+    $nvAppGraph('smart_v2_nvme_pwr_cycles', 'Power Cycles', [], $pcBadge);
+
+    $usBadge = is_numeric($health['unsafe_shutdowns'] ?? null) ? $fmtI($health['unsafe_shutdowns']) : '';
+    $nvAppGraph('smart_v2_nvme_unsafe_shut', 'Unsafe Shutdowns', [], $usBadge);
+
+    // Health state, self-test status, and per-sensor temperatures (each with its own limit lines).
     $nvSensorGraph($healthSensor, 'Health');
+    $statusSensor = $data->selftestStatusSensor($selectedDisk);
+    if ($statusSensor) {
+        $nvSensorGraph($statusSensor, 'Self-test Status');
+    }
     foreach ($tempSensors as $sensor) {
-        $nvSensorGraph($sensor, (string) $sensor->sensor_descr);
+        $nm = $data->shortSensorName($sensor, $disk);
+        $tBadge = is_numeric($sensor->sensor_current)
+            ? number_format((float) $sensor->sensor_current, 1) . '°C' : '';
+        $nvSensorGraph($sensor, $nm, $tBadge);
     }
 @endphp
 @endif

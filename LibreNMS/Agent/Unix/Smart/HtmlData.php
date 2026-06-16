@@ -338,6 +338,30 @@ class HtmlData
         return $this->allSensors->get($this->diskIndex($diskKey) . '_health');
     }
 
+    /** NVMe "Available Spare" SENSOR-MIB percent sensor for a disk, or null. */
+    public function availableSpareSensor(string $diskKey): ?Sensor
+    {
+        foreach ($this->diskSensors($diskKey) as $sensor) {
+            if ($sensor->sensor_class === 'percent' && stripos((string) $sensor->sensor_descr, 'spare') !== false) {
+                return $sensor;
+            }
+        }
+
+        return null;
+    }
+
+    /** NVMe "Percentage Used" SENSOR-MIB percent sensor for a disk, or null. */
+    public function percentageUsedSensor(string $diskKey): ?Sensor
+    {
+        foreach ($this->diskSensors($diskKey) as $sensor) {
+            if ($sensor->sensor_class === 'percent' && stripos((string) $sensor->sensor_descr, 'used') !== false) {
+                return $sensor;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * The sensor's own name with the redundant disk-label prefix stripped.
      *
@@ -569,8 +593,9 @@ class HtmlData
     }
 
     /**
-     * SSD wear-remaining percentage. SATA reads the normalised value of a wear
-     * attribute; NVMe derives it from the "Percentage Used" sensor (100 − used).
+     * SSD wear-remaining percentage. SATA reads the normalised value of the
+     * first attribute matching one of self::WEAR_ATTR_IDS; NVMe derives it
+     * from the "Percentage Used" sensor.
      */
     public function wearRemaining(array $disk): ?float
     {
@@ -579,7 +604,7 @@ class HtmlData
         }
 
         foreach ($disk['attributes'] as $attr) {
-            if (in_array((int) ($attr['attribute_id'] ?? -1), self::WEAR_ATTR_IDS, true)
+            if (in_array((int) ($attr['attribute_id'] ?? null), self::WEAR_ATTR_IDS, true)
                 && is_numeric($attr['value_norm'] ?? null)) {
                 return (float) $attr['value_norm'];
             }
@@ -588,18 +613,14 @@ class HtmlData
         return null;
     }
 
-    /** NVMe wear-remaining from the "Percentage Used" SENSOR-MIB sensor (100 − used), or null. */
+    /** NVMe wear-remaining from the "Percentage Used" SENSOR-MIB sensor, or null. */
     private function nvmeWearRemaining(string $diskKey): ?float
     {
-        foreach ($this->diskSensors($diskKey) as $sensor) {
-            if ($sensor->sensor_class === 'percent'
-                && stripos((string) $sensor->sensor_descr, 'used') !== false
-                && is_numeric($sensor->sensor_current)) {
-                return max(0.0, min(100.0, 100.0 - (float) $sensor->sensor_current));
-            }
-        }
+        $sensor = $this->percentageUsedSensor($diskKey);
 
-        return null;
+        return $sensor && is_numeric($sensor->sensor_current)
+            ? max(0.0, min(100.0, (float) $sensor->sensor_current))
+            : null;
     }
 
     public function powerOnHours(array $disk): ?int
@@ -948,7 +969,7 @@ class HtmlData
             $mbps = (int) $mbps;
             $gb = rtrim(rtrim(number_format($mbps / 1000, 1, '.', ''), '0'), '.');
 
-            return "{$mbps} Mb/s ({$gb} Gb/s)";
+            return "{$gb} Gb/s";
         };
 
         if (is_numeric($current) && is_numeric($max) && (int) $current === (int) $max) {

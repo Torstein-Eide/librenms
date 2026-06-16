@@ -27,10 +27,15 @@ function smart_debug_rrd_entries(HtmlData $data): array
 
     foreach ($data->diskKeys() as $diskKey) {
         $idx = $data->diskIndex($diskKey);
-        $label = $data->deviceLabel($data->disk($diskKey));
+        $disk = $data->disk($diskKey);
+        $label = $data->deviceLabel($disk);
+        $isNvme = $data->isNvme($disk);
 
+        // The poller only ever writes ['app','smart',...] for ATA/SATA disks and
+        // ['app','smart_nvme',...] for NVMe disks — never both — so pick the kind
+        // that actually matches this disk.
         foreach ([
-            'attributes' => ['app', 'smart', $appId, $idx],
+            ($isNvme ? 'nvme_health' : 'attributes') => ['app', $isNvme ? 'smart_nvme' : 'smart', $appId, $idx],
         ] as $kind => $name) {
             $rrdFile = Rrd::name($hostname, $name);
             $entry = [
@@ -75,36 +80,53 @@ function smart_debug_db_panels(HtmlData $data, ?string $selectedDisk): array
 
     $panels = [];
 
+    // Each panel is wrapped with its disk-kind ('common'|'sata'|'nvme') so the
+    // "only show relevant tables" toggle in smart_debug_render() can hide the
+    // ones that don't apply to the currently selected disk.
+    $wrap = static fn (string $kind, string $html): string => '<div data-table-kind="' . $kind . '">' . $html . '</div>';
+
     // ── App-level tables ────────────────────────────────────────────────────
 
     $appState = DB::table('smart_app_state')->where('app_id', $appId)->get()->map(fn ($r) => (array) $r)->all();
-    $panels[] = debug_db_table_panel('smart_app_state', $appState, "smart_app_state-{$appId}.csv");
+    $panels[] = $wrap('common', debug_db_table_panel('smart_app_state', $appState, "smart_app_state-{$appId}.csv"));
 
-    // smart_sata_change uses device_idx (not disk_key), so always show all rows for the app.
-    $changes = DB::table('smart_sata_change')->where('app_id', $appId)
-        ->orderBy('device_idx')->orderBy('table_id')
-        ->get()->map(fn ($r) => (array) $r)->all();
-    $panels[] = debug_db_table_panel('smart_sata_change', $changes, "smart_sata_change-{$appId}.csv");
+    // smart_sata_change is keyed by device_idx (the smartmonDeviceTable SNMP index),
+    // not disk_key — resolve it via smart_devices.snmp_index for the selected disk.
+    $changeQuery = DB::table('smart_sata_change')->where('app_id', $appId);
+    if ($diskKey !== null) {
+        $snmpIndex = DB::table('smart_devices')->where('app_id', $appId)->where('disk_key', $diskKey)->value('snmp_index');
+        $changeQuery->where('device_idx', $snmpIndex !== null ? (int) $snmpIndex : -1);
+    }
+    $changes = $changeQuery->orderBy('device_idx')->orderBy('table_id')->get()->map(fn ($r) => (array) $r)->all();
+    $panels[] = $wrap('sata', debug_db_table_panel('smart_sata_change', $changes, "smart_sata_change-{$appId}.csv"));
 
     // ── Per-disk tables (shared query builder) ──────────────────────────────
 
     $diskTables = [
-        'smart_devices'              => null,
-        'smart_sata_info'            => null,
-        'smart_sata_health'          => null,
-        'smart_sata_attributes'      => 'attribute_id',
-        'smart_sata_selftest_log'    => 'entry_num',
-        'smart_sata_error_log'       => 'entry_num',
-        'smart_sata_error_cmd'       => ['error_entry_num', 'cmd_slot'],
-        'smart_sata_dev_stats'       => ['page_num', 'stat_offset'],
-        'smart_sata_phy_events'      => 'event_id',
-        'smart_sata_erc'             => 'direction',
-        'smart_sata_pending_defects' => 'entry_num',
-        'smart_sata_log_dir'         => 'log_address',
-        'smart_sata_selective_test'  => 'slot',
+        'smart_devices'              => ['common', null],
+        'smart_sata_info'            => ['sata', null],
+        'smart_sata_health'          => ['sata', null],
+        'smart_sata_attributes'      => ['sata', 'attribute_id'],
+        'smart_sata_selftest_log'    => ['sata', 'entry_num'],
+        'smart_sata_error_log'       => ['sata', 'entry_num'],
+        'smart_sata_error_cmd'       => ['sata', ['error_entry_num', 'cmd_slot']],
+        'smart_sata_dev_stats'       => ['sata', ['page_num', 'stat_offset']],
+        'smart_sata_phy_events'      => ['sata', 'event_id'],
+        'smart_sata_erc'             => ['sata', 'direction'],
+        'smart_sata_pending_defects' => ['sata', 'entry_num'],
+        'smart_sata_log_dir'         => ['sata', 'log_address'],
+        'smart_sata_selective_test'  => ['sata', 'slot'],
+        'smart_nvme_info'            => ['nvme', null],
+        'smart_nvme_health'          => ['nvme', null],
+        'smart_nvme_namespaces'      => ['nvme', 'ns_id'],
+        'smart_nvme_power_states'    => ['nvme', 'state_id'],
+        'smart_nvme_lba_formats'     => ['nvme', ['ns_id', 'format_id']],
+        'smart_nvme_selftest_log'    => ['nvme', 'entry_num'],
+        'smart_nvme_error_log'       => ['nvme', 'entry_num'],
+        'smart_nvme_capability'      => ['nvme', null],
     ];
 
-    foreach ($diskTables as $table => $orderBy) {
+    foreach ($diskTables as $table => [$tableKind, $orderBy]) {
         $query = DB::table($table)->where('app_id', $appId);
         if ($diskKey !== null) {
             $query->where('disk_key', $diskKey);
@@ -119,7 +141,7 @@ function smart_debug_db_panels(HtmlData $data, ?string $selectedDisk): array
             ? "{$table}-{$appId}-" . substr($diskKey, 0, 40) . '.csv'
             : "{$table}-{$appId}.csv";
 
-        $panels[] = debug_db_table_panel($title, $rows, $csvFile);
+        $panels[] = $wrap($tableKind, debug_db_table_panel($title, $rows, $csvFile));
     }
 
     return $panels;
@@ -211,10 +233,30 @@ function smartDebugSensorFilter(cb) {
         $sensorBody
     );
 
-    // 4. DB tables.
+    // 4. DB tables, with a toggle to hide tables that don't apply to the
+    // selected disk's kind (e.g. hide smart_sata_* when viewing an NVMe drive).
     $dbPanels = smart_debug_db_panels($data, $selectedDisk);
 
-    debug_render('smart-debug-panels', $dataPanel, $rrdPanel, $sensorPanel, ...$dbPanels);
+    $diskKind = $diskKey !== null ? ($data->disk($diskKey)['kind'] ?? null) : null;
+    $tableFilterHtml = '';
+    if ($diskKind !== null) {
+        $kindEsc = htmlspecialchars($diskKind, ENT_QUOTES);
+        $tableFilterHtml = '<label style="font-weight:normal;font-size:12px">'
+            . '<input type="checkbox" id="smart-debug-table-filter" data-kind="' . $kindEsc . '" checked '
+            . 'onchange="smartDebugTableFilter(this)"> only show ' . $kindEsc . ' + common tables</label>'
+            . '<script>
+function smartDebugTableFilter(cb) {
+    var kind = cb.dataset.kind;
+    document.querySelectorAll("#smart-debug-panels [data-table-kind]").forEach(function (el) {
+        var k = el.dataset.tableKind;
+        el.style.display = (!cb.checked || k === kind || k === "common") ? "" : "none";
+    });
+}
+(function () { var cb = document.getElementById("smart-debug-table-filter"); if (cb) smartDebugTableFilter(cb); })();
+</script>';
+    }
+
+    debug_render('smart-debug-panels', $dataPanel, $rrdPanel, $sensorPanel, $tableFilterHtml, ...$dbPanels);
 }
 
 // =============================================================================

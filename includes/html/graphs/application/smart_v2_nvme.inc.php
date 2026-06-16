@@ -1,22 +1,10 @@
 <?php
 
-// V2 NVMe health log graph — reads from smart_nvme RRD.
-// DS translation table (RRDtool names are max 19 chars):
-//   avail_spare   ← available_spare       (GAUGE 0-100 %)
-//   pct_used      ← percentage_used       (GAUGE 0-100 %)
-//   crit_warn     ← critical_warning      (GAUGE, bitmask)
-//   ctrl_busy     ← controller_busy_time  (DERIVE, minutes)
-//   crit_cmp_t    ← critical_comp_time    (DERIVE, minutes)
-//   du_rd         ← data_units_read       (DERIVE, ×1000 × 512 B)
-//   du_wr         ← data_units_written    (DERIVE, ×1000 × 512 B)
-//   host_rd       ← host_reads            (DERIVE, commands)
-//   host_wr       ← host_writes           (DERIVE, commands)
-//   media_errors  ← media_errors          (GAUGE)
-//   err_log_cnt   ← num_err_log_entries   (GAUGE)
-//   pwr_cycles    ← power_cycles          (GAUGE)
-//   pwr_hours     ← power_on_hours        (GAUGE)
-//   unsafe_shut   ← unsafe_shutdowns      (GAUGE)
-//   warn_tmp_t    ← warning_temp_time     (DERIVE, minutes)
+// V2 NVMe health log graph — generic multi-metric fallback / "all" dashboard.
+// Dedicated single-metric files exist for each named metric group:
+//   smart_v2_nvme_ctrl_busy, smart_v2_nvme_temp_time, smart_v2_nvme_data_units,
+//   smart_v2_nvme_host_io, smart_v2_nvme_errors, smart_v2_nvme_pwr_hours,
+//   smart_v2_nvme_pwr_cycles, smart_v2_nvme_unsafe_shut.
 //
 // $vars['disk'] is the pre-computed diskIndex (safe chars only, max 80).
 
@@ -53,26 +41,24 @@ if (Rrd::checkRrdExists($rrd_filename)) {
         'pwr_cycles'   => 'Power Cycles',
         'pwr_hours'    => 'Power-on Hours',
         'unsafe_shut'  => 'Unsafe Shutdowns',
-        'ctrl_busy'    => 'Ctrl Busy Time (min/s)',
+        'ctrl_busy'    => 'Controller Busy (min/s)',
         'crit_cmp_t'   => 'Crit Temp Time (min/s)',
         'warn_tmp_t'   => 'Warn Temp Time (min/s)',
-        'du_rd'        => 'Data Units Read/s',
-        'du_wr'        => 'Data Units Written/s',
+        'du_rd'        => 'Data Read/s',
+        'du_wr'        => 'Data Written/s',
         'host_rd'      => 'Host Reads/s',
         'host_wr'      => 'Host Writes/s',
     ];
 
     $groupDs = [
-        'media_errors' => ['media_errors'],
-        'data_units' => ['du_rd', 'du_wr'],
-        'host_io' => ['host_rd', 'host_wr'],
+        'data_units'      => ['du_rd', 'du_wr'],
+        'host_io'         => ['host_rd', 'host_wr'],
         'controller_busy' => ['ctrl_busy'],
-        'errors' => ['media_errors', 'err_log_cnt'],
-        'power' => ['pwr_cycles', 'pwr_hours', 'unsafe_shut'],
-        'temp_time' => ['warn_tmp_t', 'crit_cmp_t'],
+        'errors'          => ['media_errors', 'err_log_cnt'],
+        'power'           => ['pwr_cycles', 'pwr_hours', 'unsafe_shut'],
+        'temp_time'       => ['warn_tmp_t', 'crit_cmp_t'],
     ];
 
-    // metric may be a group name, a single DS name (one-line graph), or 'all'.
     $selectedDs = $groupDs[$metric] ?? (isset($allDs[$metric]) ? [$metric] : array_keys($allDs));
 
     foreach ($selectedDs as $ds) {

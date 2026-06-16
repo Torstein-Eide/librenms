@@ -674,6 +674,22 @@ class Common extends Application
                 $value = $row === null ? null : $this->nvmeHealthLevel($row->overall_status, $row->critical_warning);
                 $this->updateMibSensor($this->device, $sensor, $value !== null ? (float) $value : null);
             }
+
+            // Self-test status from DB (current op, else most recent log result).
+            if ($sensor = $sensors->get("{$idx}_selftest_status")) {
+                $currentOp = (int) (DB::table('smart_nvme_health')
+                    ->where('app_id', $this->appId)
+                    ->where('disk_key', $diskKey)
+                    ->value('current_selftest_op') ?? 0);
+                $entries = DB::table('smart_nvme_selftest_log')
+                    ->where('app_id', $this->appId)
+                    ->where('disk_key', $diskKey)
+                    ->get(['result', 'power_on_hours'])
+                    ->map(static fn ($r) => (array) $r)
+                    ->all();
+                $value = $this->nvmeSelftestStatusValue($currentOp, $entries);
+                $this->updateMibSensor($this->device, $sensor, $value !== null ? (float) $value : null);
+            }
         }
     }
 
@@ -826,6 +842,7 @@ class Common extends Application
             if ($healthRow = $this->firstSubRow($health[$key] ?? null)) {
                 $this->syncNvmeHealthRow($dev, $healthRow);
                 $this->discoverNvmeDeviceSensors($dev, $healthRow);
+                $this->discoverNvmeSelftestStatusSensor($dev, $healthRow, $this->subRows($selftests[$key] ?? null));
             }
         }
 
@@ -870,6 +887,78 @@ class Common extends Application
             ]);
     }
 
+    /** Register the NVMe self-test status sensor (current op, else most recent log result) for one device. */
+    private function discoverNvmeSelftestStatusSensor(array $dev, array $health, array $selftestRows): void
+    {
+        $currentOp = $this->intValue($health['smartmonNvmeCurrentSelfTestOperationValue'] ?? null) ?? 0;
+        $entries = array_map(static fn ($row) => [
+            'result'         => $row['smartmonNvmeSelfTestResult'] ?? null,
+            'power_on_hours' => $row['smartmonNvmeSelfTestPowerOnHours'] ?? null,
+        ], $selftestRows);
+
+        $value = $this->nvmeSelftestStatusValue($currentOp, $entries);
+        if ($value === null) {
+            return;
+        }
+
+        $device = $this->device;
+        $idx = $this->mibDiskIndex($dev['disk_key']);
+        $devName = $this->sensorLabel($dev, $dev['snmp_index']);
+        $group = 'SMART';
+
+        app('sensor-discovery')
+            ->discover(new Sensor([
+                'device_id'         => $device['device_id'],
+                'poller_type'       => 'agent',
+                'sensor_class'      => 'state',
+                'sensor_type'       => 'smart_nvme_selftest_status',
+                'sensor_index'      => "{$idx}_selftest_status",
+                'sensor_oid'        => "app:smart_mib:{$idx}_selftest_status",
+                'group'             => $group,
+
+                'sensor_descr'      => "{$group} {$devName} Self-test Status",
+                'sensor_current'    => $value,
+            ]))
+            ->withStateTranslations('smart_nvme_selftest_status', [
+                StateTranslation::define('Completed without error', 0, Severity::Ok),
+                StateTranslation::define('Aborted by self-test command', 1, Severity::Ok),
+                StateTranslation::define('Aborted by controller level reset', 2, Severity::Ok),
+                StateTranslation::define('Aborted due to removal of a namespace', 3, Severity::Ok),
+                StateTranslation::define('Aborted due to processing of a Format NVM command', 4, Severity::Ok),
+                StateTranslation::define('Completed: segment failed', 5, Severity::Warning),
+                StateTranslation::define('Failed for unknown reason', 6, Severity::Warning),
+                StateTranslation::define('Completed: failed segment unknown', 7, Severity::Warning),
+                StateTranslation::define('Completed: one or more segments failed', 8, Severity::Warning),
+                StateTranslation::define('Self-test in progress', 15, Severity::Ok),
+            ]);
+    }
+
+    /**
+     * NVMe self-test status code, mirroring SATA's exec-status convention: the most
+     * recent completed self-test's NVMe-spec result code (0-8), or 15 while a
+     * self-test operation is currently running. Null when there's no data at all.
+     *
+     * @param  array<int, array{result: mixed, power_on_hours: mixed}>  $entries
+     */
+    private function nvmeSelftestStatusValue(int $currentOp, array $entries): ?int
+    {
+        if ($currentOp !== 0) {
+            return 15;
+        }
+        if ($entries === []) {
+            return null;
+        }
+        $latest = null;
+        foreach ($entries as $e) {
+            if ($latest === null || (int) ($e['power_on_hours'] ?? 0) >= (int) ($latest['power_on_hours'] ?? 0)) {
+                $latest = $e;
+            }
+        }
+        $result = $latest['result'] ?? null;
+
+        return is_numeric($result) ? (int) $result : null;
+    }
+
     /**
      * Merge SmartmonHealthStatus and the Critical Warning bitmask into a single
      * 1–5 health level. A set critical-warning bit always escalates to Critical(4),
@@ -894,6 +983,7 @@ class Common extends Application
     private function syncNvmeSensorTypes(): void
     {
         app('sensor-discovery')->sync(sensor_type: 'smart_nvme_health');
+        app('sensor-discovery')->sync(sensor_type: 'smart_nvme_selftest_status');
     }
 
     /**
