@@ -155,46 +155,48 @@
     </div>
 
     {{-- Self-test log — row #1, immediately after the status/identity panel --}}
-    @if(! empty($disk['selftests']) || $curOp !== 0)
     <div>
         @php
             $panelStart('Self-test Log', $selftestBadge);
-            $hasLba = false;
-            foreach ($disk['selftests'] as $e) {
-                if (is_numeric($e['failing_lba'] ?? null) && (int) $e['failing_lba'] > 0) {
-                    $hasLba = true;
-                    break;
+            if (empty($disk['selftests']) && $curOp === 0) {
+                echo '<div class="small text-muted" style="padding:4px 2px">'
+                    . '<i class="fa fa-info-circle"></i> No self-test data reported — this drive may not support self-tests.</div>';
+            } else {
+                $hasLba = false;
+                foreach ($disk['selftests'] as $e) {
+                    if (is_numeric($e['failing_lba'] ?? null) && (int) $e['failing_lba'] > 0) {
+                        $hasLba = true;
+                        break;
+                    }
                 }
-            }
-            $curPoh = $health['power_on_hours'] ?? null;
-            echo '<table class="table table-condensed table-hover"><thead><tr>'
-                . '<th>Hours</th><th>Type</th><th>Status</th><th>Remaining Percent</th>'
-                . ($hasLba ? '<th>First LBA Error</th>' : '') . '</tr></thead><tbody>';
-            foreach ($disk['selftests'] as $st) {
-                $type = match ((int) ($st['test_type'] ?? 0)) { 1 => 'Short', 2 => 'Extended', 255 => 'Vendor', default => '-' };
-                $result = trim((string) ($st['result_text'] ?? '')) !== '' ? $st['result_text'] : (string) ($st['result'] ?? '-');
-                $lba = $st['failing_lba'] ?? null;
-                $h = $st['power_on_hours'] ?? null;
-                $hoursCell = (string) ($h ?? '-');
-                if (is_numeric($curPoh) && is_numeric($h)) {
-                    $delta = (int) $curPoh - (int) $h;
-                    $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
+                $curPoh = $health['power_on_hours'] ?? null;
+                echo '<table class="table table-condensed table-hover"><thead><tr>'
+                    . '<th>Hours</th><th>Type</th><th>Status</th><th>Remaining Percent</th>'
+                    . ($hasLba ? '<th>First LBA Error</th>' : '') . '</tr></thead><tbody>';
+                foreach ($disk['selftests'] as $st) {
+                    $type = match ((int) ($st['test_type'] ?? 0)) { 1 => 'Short', 2 => 'Extended', 255 => 'Vendor', default => '-' };
+                    $result = trim((string) ($st['result_text'] ?? '')) !== '' ? $st['result_text'] : (string) ($st['result'] ?? '-');
+                    $lba = $st['failing_lba'] ?? null;
+                    $h = $st['power_on_hours'] ?? null;
+                    $hoursCell = (string) ($h ?? '-');
+                    if (is_numeric($curPoh) && is_numeric($h)) {
+                        $delta = (int) $curPoh - (int) $h;
+                        $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
+                    }
+                    echo '<tr><td>' . htmlspecialchars($hoursCell) . '</td>'
+                        . '<td>' . htmlspecialchars($type) . '</td>'
+                        . '<td>' . htmlspecialchars((string) $result) . '</td>'
+                        . '<td></td>'
+                        . ($hasLba ? '<td>' . (is_numeric($lba) && (int) $lba > 0 ? htmlspecialchars((string) $lba) : '') . '</td>' : '')
+                        . '</tr>';
                 }
-                echo '<tr><td>' . htmlspecialchars($hoursCell) . '</td>'
-                    . '<td>' . htmlspecialchars($type) . '</td>'
-                    . '<td>' . htmlspecialchars((string) $result) . '</td>'
-                    . '<td></td>'
-                    . ($hasLba ? '<td>' . (is_numeric($lba) && (int) $lba > 0 ? htmlspecialchars((string) $lba) : '') . '</td>' : '')
-                    . '</tr>';
+                echo '</tbody></table>';
             }
-            echo '</tbody></table>';
             $panelEnd();
         @endphp
     </div>
-    @endif
 
-    {{-- SMART / Health log — row #2 (own row) --}}
-    <div class="smart-row-break"></div>
+    {{-- SMART / Health log — same row as the self-test panel --}}
     <div>
         @php
             $panelStart('SMART / Health', $healthBadge);
@@ -462,21 +464,91 @@
     <div>
         @php
             $cap = $disk['nvme_capability'];
-            $panelStart('Capabilities');
-            echo '<table class="table table-condensed table-hover" style="width:auto">';
-            $rows = [
-                'Firmware Slots'   => $fmtInt($cap['firmware_slot_count'] ?? null),
-                'FW Reset Req.'    => $yesNo($cap['firmware_reset_required'] ?? null),
-                'Optional Admin'   => $cap['optional_admin_cmd_text'] ?? null,
-                'Optional NVM'     => $cap['optional_nvm_cmd_text'] ?? null,
-                'Log Page Attrs'   => $cap['log_page_attrs_text'] ?? null,
+
+            // Bit labels from the SmartmonNvmeOptionalAdminCommands, SmartmonNvmeOptionalNvmCommands
+            // and SmartmonNvmeLogPageAttributes TEXTUAL-CONVENTIONs in SMARTMON-TC-MIB.
+            $nvmeCapFlags = [
+                'optional_admin_cmd_raw' => [
+                    0  => 'Security Send/Receive',
+                    1  => 'Format NVM',
+                    2  => 'Firmware Commit/Download',
+                    3  => 'Namespace Management',
+                    4  => 'Device Self-test',
+                    5  => 'Directives',
+                    6  => 'MI Send/Receive',
+                    7  => 'Virtualization Management',
+                    8  => 'Doorbell Buffer Config',
+                    9  => 'Get LBA Status',
+                    10 => 'Command and Feature Lockdown',
+                ],
+                'optional_nvm_cmd_raw' => [
+                    0 => 'Compare',
+                    1 => 'Write Uncorrectable',
+                    2 => 'Dataset Management',
+                    3 => 'Write Zeroes',
+                    4 => 'Save/Select Feature Non-zero',
+                    5 => 'Reservations',
+                    6 => 'Timestamp',
+                    7 => 'Verify',
+                    8 => 'Copy',
+                ],
+                'log_page_attrs_raw' => [
+                    0 => 'SMART/Health Per Namespace',
+                    1 => 'Commands & Effects Log',
+                    2 => 'Extended Get Log Page',
+                    3 => 'Telemetry Log',
+                    4 => 'Persistent Event Log',
+                    5 => 'Supported Log Pages Log',
+                    6 => 'Telemetry Data Area 4',
+                ],
             ];
-            foreach ($rows as $label => $value) {
-                if ($value !== null && $value !== '') {
-                    echo $tableRow($label, htmlspecialchars((string) $value));
+
+            $nvmeCapSectionLabels = [
+                'optional_admin_cmd_raw' => 'Optional Admin Commands',
+                'optional_nvm_cmd_raw'   => 'Optional NVM Commands',
+                'log_page_attrs_raw'     => 'Log Page Attributes',
+            ];
+
+            // One sub-table per section; kept whole (not split) within the CSS column layout below.
+            $capSection = static function (string $heading, string $rows) use ($tableRow): string {
+                if ($rows === '') {
+                    return '';
                 }
+
+                return '<div style="break-inside:avoid-column;-webkit-column-break-inside:avoid;margin-bottom:14px">'
+                    . '<div style="font-weight:bold;border-bottom:1px solid #ddd;margin-bottom:4px;padding-bottom:2px">' . htmlspecialchars($heading) . '</div>'
+                    . '<table class="table table-condensed table-hover" style="width:auto;margin-bottom:0">' . $rows . '</table>'
+                    . '</div>';
+            };
+
+            $panelStart('Capabilities');
+
+            $sectionsHtml = '';
+
+            $fwRows = '';
+            if (($slots = $fmtInt($cap['firmware_slot_count'] ?? null)) !== null) {
+                $fwRows .= $tableRow('Firmware Slots', htmlspecialchars($slots), $tooltipForLabel('Firmware Slots'));
             }
-            echo '</table>';
+            if (($fwReset = $yesNo($cap['firmware_reset_required'] ?? null)) !== null) {
+                $fwRows .= $tableRow('FW Reset Req.', $fwReset === 'Yes' ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>', $tooltipForLabel('FW Reset Req.'));
+            }
+            $sectionsHtml .= $capSection('Firmware', $fwRows);
+
+            foreach ($nvmeCapFlags as $col => $bits) {
+                if (! isset($cap[$col])) {
+                    continue;
+                }
+                $raw = (int) $cap[$col];
+                $rows = '';
+                foreach ($bits as $bit => $label) {
+                    $val = ($raw >> $bit) & 1;
+                    $icon = $val ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>';
+                    $rows .= $tableRow($label, $icon, $tooltipForLabel($label));
+                }
+                $sectionsHtml .= $capSection($nvmeCapSectionLabels[$col], $rows);
+            }
+
+            echo '<div style="column-width:260px;column-count:3;column-gap:18px">' . $sectionsHtml . '</div>';
             $panelEnd();
         @endphp
     </div>

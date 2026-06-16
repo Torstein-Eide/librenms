@@ -13,6 +13,8 @@ IMPORTS
     SmartmonHealthStatus, SmartmonNvmeSelfTestType,
     SmartmonPercentage, SmartmonNvmeSelfTestResult,
     SmartmonLogicalBlockAddress, SmartmonNvmeSelfTestOperation,
+    SmartmonNvmeOptionalAdminCommands, SmartmonNvmeOptionalNvmCommands,
+    SmartmonNvmeLogPageAttributes,
     smartmonRoot
         FROM SMARTMON-TC-MIB
     smartmonDeviceIndex, smartmonDevicePath,
@@ -1189,12 +1191,9 @@ SmartmonNvmeCapabilityEntry ::= SEQUENCE {
     smartmonNvmeFirmwareUpdateRaw        Unsigned32,
     smartmonNvmeFirmwareSlotCount        Unsigned32,
     smartmonNvmeFirmwareResetRequired    TruthValue,
-    smartmonNvmeOptionalAdminCommandRaw  Unsigned32,
-    smartmonNvmeOptionalNvmCommandRaw    Unsigned32,
-    smartmonNvmeLogPageAttributesRaw     Unsigned32,
-    smartmonNvmeOptionalAdminCommandText DisplayString,
-    smartmonNvmeOptionalNvmCommandText   DisplayString,
-    smartmonNvmeLogPageAttributesText    DisplayString
+    smartmonNvmeOptionalAdminCommandRaw  SmartmonNvmeOptionalAdminCommands,
+    smartmonNvmeOptionalNvmCommandRaw    SmartmonNvmeOptionalNvmCommands,
+    smartmonNvmeLogPageAttributesRaw     SmartmonNvmeLogPageAttributes
 }
 
 smartmonNvmeFirmwareUpdateRaw OBJECT-TYPE
@@ -1219,46 +1218,25 @@ smartmonNvmeFirmwareResetRequired OBJECT-TYPE
     ::= { smartmonNvmeCapabilityEntry 3 }
 
 smartmonNvmeOptionalAdminCommandRaw OBJECT-TYPE
-    SYNTAX      Unsigned32
+    SYNTAX      SmartmonNvmeOptionalAdminCommands
     MAX-ACCESS  read-only
     STATUS      current
-    DESCRIPTION "Raw Optional Admin Commands bit mask."
+    DESCRIPTION "Optional Admin Commands (OACS) bitmap from smartctl."
     ::= { smartmonNvmeCapabilityEntry 4 }
 
 smartmonNvmeOptionalNvmCommandRaw OBJECT-TYPE
-    SYNTAX      Unsigned32
+    SYNTAX      SmartmonNvmeOptionalNvmCommands
     MAX-ACCESS  read-only
     STATUS      current
-    DESCRIPTION "Raw Optional NVM Commands bit mask."
+    DESCRIPTION "Optional NVM Commands (ONCS) bitmap from smartctl."
     ::= { smartmonNvmeCapabilityEntry 5 }
 
 smartmonNvmeLogPageAttributesRaw OBJECT-TYPE
-    SYNTAX      Unsigned32
+    SYNTAX      SmartmonNvmeLogPageAttributes
     MAX-ACCESS  read-only
     STATUS      current
-    DESCRIPTION "Raw Log Page Attributes bit mask."
+    DESCRIPTION "Log Page Attributes (LPA) bitmap from smartctl."
     ::= { smartmonNvmeCapabilityEntry 6 }
-
-smartmonNvmeOptionalAdminCommandText OBJECT-TYPE
-    SYNTAX      DisplayString
-    MAX-ACCESS  read-only
-    STATUS      current
-    DESCRIPTION "Decoded Optional Admin Commands text from smartctl."
-    ::= { smartmonNvmeCapabilityEntry 7 }
-
-smartmonNvmeOptionalNvmCommandText OBJECT-TYPE
-    SYNTAX      DisplayString
-    MAX-ACCESS  read-only
-    STATUS      current
-    DESCRIPTION "Decoded Optional NVM Commands text from smartctl."
-    ::= { smartmonNvmeCapabilityEntry 8 }
-
-smartmonNvmeLogPageAttributesText OBJECT-TYPE
-    SYNTAX      DisplayString
-    MAX-ACCESS  read-only
-    STATUS      current
-    DESCRIPTION "Decoded Log Page Attributes text from smartctl."
-    ::= { smartmonNvmeCapabilityEntry 9 }
 
 smartmonNvmeCapabilityIndex OBJECT-TYPE
     SYNTAX      Unsigned32 (1..4294967295)
@@ -1476,10 +1454,7 @@ smartmonNvmeCapabilityGroup OBJECT-GROUP
         smartmonNvmeFirmwareResetRequired,
         smartmonNvmeOptionalAdminCommandRaw,
         smartmonNvmeOptionalNvmCommandRaw,
-        smartmonNvmeLogPageAttributesRaw,
-        smartmonNvmeOptionalAdminCommandText,
-        smartmonNvmeOptionalNvmCommandText,
-        smartmonNvmeLogPageAttributesText
+        smartmonNvmeLogPageAttributesRaw
     }
     STATUS current
     DESCRIPTION "NVMe capability objects."

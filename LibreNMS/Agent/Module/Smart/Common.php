@@ -508,6 +508,7 @@ class Common extends Application
                 $expected[] = "app:smart_mib:{$idx}_selftest_status";
             } elseif (in_array($deviceType, self::NVME_TYPES, true)) {
                 $expected[] = "app:smart_mib:{$idx}_health";
+                $expected[] = "app:smart_mib:{$idx}_selftest_status";
             }
         }
 
