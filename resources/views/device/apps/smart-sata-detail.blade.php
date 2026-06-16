@@ -990,7 +990,7 @@ JS;
                     'capability_gp_logging_supported'    => 'GP logging',
                     'capability_attr_autosave'           => 'Attribute autosave',
                 ],
-                'SCT' => [
+                'SMART Command Transport' => [
                     'sct_error_recovery_supported'  => 'SCT error recovery control',
                     'sct_feature_control_supported' => 'SCT feature control',
                     'sct_data_table_supported'      => 'SCT data table',
@@ -1067,7 +1067,7 @@ JS;
                         }
                         $sectionsHtml .= $capSection($heading, $rows);
                     }
-                    echo '<div style="column-width:220px;column-count:4;column-gap:18px">' . $sectionsHtml . '</div>';
+                    echo '<div style="column-width:auto;column-count:3;column-gap:18px">' . $sectionsHtml . '</div>';
                     $panelEnd();
                 @endphp
             </div>
