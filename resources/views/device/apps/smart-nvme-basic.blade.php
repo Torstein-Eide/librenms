@@ -1,6 +1,6 @@
-{{-- NVMe per-disk "Overview" view: identity, health sensors and stats, self-test log. --}}
+{{-- NVMe per-disk "Basic" view: identity, health sensors and stats, NVMe data units graph. --}}
 {{-- Inherits closures ($panelStart, $panelEnd, $tableRow, $tooltipForLabel, --}}
-{{-- $labelWithTooltip, $formatHoursAgo, $stateBadge, $tempBadge, $percentBadge, --}}
+{{-- $labelWithTooltip, $stateBadge, $tempBadge, $percentBadge, --}}
 {{-- $selftestBadge) and $data, $device, $selectedDisk, $linkArray --}}
 {{-- from the parent smart.blade.php. --}}
 @php
@@ -37,76 +37,91 @@
             }
 
             $capBytes   = $info['total_nvm_capacity_bytes'] ?? null;
-            $unalloc    = $info['unallocated_nvm_capacity_bytes'] ?? null;
+            $capCell    = is_numeric($capBytes)
+                ? $fmtBytes($capBytes) . ' (' . \LibreNMS\Util\Number::formatSi((int) $capBytes, 0, 0, 'B') . ')'
+                : null;
 
             $rows = [
                 'Model'         => $disk['model_name']       ?? null,
                 'Serial'        => $disk['serial_number']    ?? null,
                 'Firmware'      => $disk['firmware_version'] ?? null,
                 'WWN'           => $disk['wwn']              ?? null,
-                'Device'        => $disk['device_name']      ?? null,
                 'Path'          => $pathCell,
-                'NVMe Version'  => $info['nvme_version']     ?? null,
-                'Controller ID' => isset($info['controller_id']) && is_numeric($info['controller_id'])
-                    ? number_format((int) $info['controller_id'], 0, '.', ' ') : null,
-                'PCI Vendor'    => isset($info['pci_vendor_id']) && is_numeric($info['pci_vendor_id'])
-                    ? (($pciName = $data->pciVendorName((int) $info['pci_vendor_id'])) !== null
-                        ? $pciName . sprintf(' (0x%04X)', (int) $info['pci_vendor_id'])
-                        : sprintf('0x%04X', (int) $info['pci_vendor_id']))
-                    : null,
-                'IEEE OUI'      => isset($info['ieee_oui']) && is_numeric($info['ieee_oui'])
-                    ? (($ouiName = $data->ouiVendorName((int) $info['ieee_oui'])) !== null
-                        ? new \Illuminate\Support\HtmlString(
-                            '<abbr style="cursor:help;text-decoration:underline dotted" title="'
-                            . htmlspecialchars($ouiName, ENT_QUOTES) . '">'
-                            . htmlspecialchars(\Illuminate\Support\Str::limit($ouiName, 28, '…', preserveWords: true))
-                            . '</abbr> ' . sprintf('(0x%06X)', (int) $info['ieee_oui']))
-                        : sprintf('0x%06X', (int) $info['ieee_oui']))
-                    : null,
-                'Capacity'      => $fmtBytes($capBytes),
-                'Unallocated'   => $fmtBytes($unalloc),
-                'Namespaces'    => isset($info['namespace_count']) && is_numeric($info['namespace_count'])
-                    ? number_format((int) $info['namespace_count'], 0, '.', ' ') : null,
-                'Max Transfer'  => isset($info['max_data_transfer_pages']) && is_numeric($info['max_data_transfer_pages'])
-                    ? number_format((int) $info['max_data_transfer_pages'], 0, '.', ' ') . ' pages' : null,
-                'Last Poll'     => $disk['last_poll_time'] ?? null,
-                'Last Poll Result' => $disk['last_poll_result'] !== null ? $data->decode('poll_result', $disk['last_poll_result']) : null,
+                'Capacity'      => $capCell,
             ];
 
             $identityTitle = '<i class="fa fa-microchip" style="margin-right:6px"></i>'
                 . htmlspecialchars(trim((string) ($disk['model_name'] ?? '')) . ' ' . (string) ($disk['serial_number'] ?? ''))
                 . ' (' . htmlspecialchars($data->deviceLabel($disk)) . ')';
 
-            $panelStart($identityTitle, $healthBadge);
-            echo '<table class="table table-condensed table-hover" style="width:100%">';
+            $identityRows = [];
             foreach ($rows as $label => $value) {
                 if ($value === null || $value === '') { continue; }
                 $cell = $value instanceof \Illuminate\Support\HtmlString
                     ? (string) $value : htmlspecialchars((string) $value);
-                echo $tableRow($label, $cell, $tooltipForLabel($label));
-            }
-            echo '</table>';
-
-            // Hint when vendor-name databases are not installed.
-            $missingDbs = [];
-            if (isset($info['pci_vendor_id']) && is_numeric($info['pci_vendor_id']) && ! $data->pciIdsAvailable()) {
-                $missingDbs[] = 'pci.ids (pciutils)';
-            }
-            if (isset($info['ieee_oui']) && is_numeric($info['ieee_oui']) && ! $data->ouiDbAvailable()) {
-                $missingDbs[] = 'oui.txt (ieee-data)';
-            }
-            if ($missingDbs !== []) {
-                echo '<div class="small text-muted" style="margin-top:4px">'
-                    . '<i class="fa fa-exclamation-triangle"></i> Vendor names unavailable. install: '
-                    . htmlspecialchars(implode(', ', $missingDbs)) . '</div>';
+                $tooltip = $label === 'Capacity' ? '' : $tooltipForLabel($label);
+                $identityRows[] = $tableRow($label, $cell, $tooltip);
             }
 
+            $panelStart($identityTitle, $healthBadge);
+            $half = (int) ceil(count($identityRows) / 2);
+            $colA = array_slice($identityRows, 0, $half);
+            $colB = array_slice($identityRows, $half);
+            echo '<div class="tw:flex tw:flex-wrap tw:gap-4">';
+            echo '<table class="table table-condensed table-hover" style="flex:1 1 0;width:100%;min-width:0">' . implode('', $colA) . '</table>';
+            if ($colB !== []) {
+                echo '<table class="table table-condensed table-hover" style="flex:1 1 0;width:100%;min-width:0">' . implode('', $colB) . '</table>';
+            }
+            echo '</div>';
+            $panelEnd();
+        @endphp
+
+        {{-- NVMe Data Units --}}
+        @php
+            $duNow  = \App\Facades\LibrenmsConfig::get('time.now');
+            $duFrom = \App\Facades\LibrenmsConfig::get('time.day');
+            $duGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
+                'id'     => $data->app->app_id,
+                'type'   => 'application_smart_v2_nvme_data_units',
+                'disk'   => $disk['idx'],
+                'from'   => $duFrom,
+                'to'     => $duNow,
+                'legend' => 'no',
+            ]);
+            $duGraph = \LibreNMS\Util\Url::lazyGraphTag($duGraphArray, 'tw:w-full tw:h-auto');
+
+            $duLinkArray = $duGraphArray;
+            $duLinkArray['page'] = 'graphs';
+            unset($duLinkArray['height'], $duLinkArray['width']);
+            $duLink = \LibreNMS\Util\Url::generate($duLinkArray);
+
+            $duOverlibArray = $duGraphArray;
+            $duOverlibArray['width'] = 210;
+            $duOverlib = generate_overlib_content($duOverlibArray, $device['hostname'] . ' - NVMe Data Units');
+
+            $du = 512000; // standard NVMe data-unit size in bytes
+            $duRd = isset($health['data_units_read']) && is_numeric($health['data_units_read'])
+                ? \LibreNMS\Util\Number::formatBi((int) $health['data_units_read'] * $du) : null;
+            $duWr = isset($health['data_units_written']) && is_numeric($health['data_units_written'])
+                ? \LibreNMS\Util\Number::formatBi((int) $health['data_units_written'] * $du) : null;
+            $duParts = array_filter([$duRd !== null ? 'R: ' . $duRd : null, $duWr !== null ? 'W: ' . $duWr : null]);
+            $duBadge = $duParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $duParts)) . '</span>' : '';
+
+            $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>NVMe Data Units', $duBadge);
+            echo \LibreNMS\Util\Url::overlibLink($duLink, $duGraph, $duOverlib);
             $panelEnd();
         @endphp
     </div>
 
     {{-- ============================= Right column ============================= --}}
     <div class="tw:min-w-0">
+        {{-- Disk Load (reserved for a future disk load / utilisation graph) --}}
+        @php
+            $panelStart('<i class="fa fa-tachometer" style="margin-right:6px"></i>Disk Load');
+            echo '<p class="text-muted" style="margin:0">Reserved for disk load graph.</p>';
+            $panelEnd();
+        @endphp
+
         {{-- Health (all disk sensors + NVMe health stats) --}}
         @php
             $sensorIcon = static fn (string $class): string => match ($class) {
@@ -128,13 +143,23 @@
 
             $hNow  = \App\Facades\LibrenmsConfig::get('time.now');
             $hFrom = \App\Facades\LibrenmsConfig::get('time.day');
-            $sensorMini = static function ($s) use ($hNow, $hFrom, $device): string {
+            $sensorLink = static function ($s) use ($hNow, $hFrom): string {
+                return \LibreNMS\Util\Url::generate([
+                    'id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class,
+                    'from' => $hFrom, 'to' => $hNow, 'page' => 'graphs',
+                ]);
+            };
+            $sensorMini = static function ($s) use ($hNow, $hFrom, $device, $sensorLink): string {
                 $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 210, 'height' => 100];
                 $overlib = generate_overlib_content($g, $device['hostname'] . ' - ' . $s->sensor_descr);
-                $linkArr = $g; $linkArr['page'] = 'graphs'; unset($linkArr['width'], $linkArr['height'], $linkArr['legend']);
-                $link = \LibreNMS\Util\Url::generate($linkArr);
+                $link = $sensorLink($s);
                 $g['width'] = 100; $g['height'] = 20; $g['bg'] = 'ffffff00';
                 return \LibreNMS\Util\Url::overlibLink($link, \LibreNMS\Util\Url::lazyGraphTag($g), $overlib);
+            };
+            $rowOpenTag = static function (string $link): string {
+                return $link !== ''
+                    ? '<tr style="cursor:pointer" onclick="window.location=\'' . htmlspecialchars($link, ENT_QUOTES) . '\'">'
+                    : '<tr>';
             };
 
             // Sensors: state first, then temperature, then percent.
@@ -151,7 +176,20 @@
                 'pwr_hours'    => 'smart_v2_nvme_pwr_hours',
                 'pwr_cycles'   => 'smart_v2_nvme_pwr_cycles',
             ];
-            $nvMetricGraph = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $device, $dsToType): string {
+            $statLink = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $dsToType): string {
+                $type = $dsToType[$ds] ?? null;
+                if ($type === null) { return ''; }
+
+                return \LibreNMS\Util\Url::generate([
+                    'id'   => $data->app->app_id,
+                    'type' => 'application_' . $type,
+                    'disk' => $disk['idx'],
+                    'from' => $hFrom,
+                    'to'   => $hNow,
+                    'page' => 'graphs',
+                ]);
+            };
+            $nvMetricGraph = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $device, $dsToType, $statLink): string {
                 $type = $dsToType[$ds] ?? null;
                 if ($type === null) { return ''; }
                 $g = [
@@ -165,8 +203,7 @@
                     'height' => 100,
                 ];
                 $overlib = generate_overlib_content($g, $device['hostname'] . ' - ' . $ds);
-                $linkArr = $g; $linkArr['page'] = 'graphs'; unset($linkArr['width'], $linkArr['height'], $linkArr['legend']);
-                $link = \LibreNMS\Util\Url::generate($linkArr);
+                $link = $statLink($ds);
                 $g['width'] = 100; $g['height'] = 20; $g['bg'] = 'ffffff00';
                 return \LibreNMS\Util\Url::overlibLink($link, \LibreNMS\Util\Url::lazyGraphTag($g), $overlib);
             };
@@ -190,7 +227,7 @@
             echo '<table class="table table-condensed table-hover" style="width:100%">';
             foreach ($healthSensors as $s) {
                 $nm = $data->shortSensorName($s, $disk);
-                echo '<tr>'
+                echo $rowOpenTag($sensorLink($s))
                     . '<td style="white-space:nowrap"><i class="fa ' . $sensorIcon($s->sensor_class) . ' text-muted" style="margin-right:6px"></i>' . htmlspecialchars($nm) . '</td>'
                     . '<td style="width:110px">' . $sensorMini($s) . '</td>'
                     . '<td style="text-align:right">' . $sensorBadge($s) . '</td>'
@@ -203,7 +240,7 @@
                     ? '<abbr style="cursor:help;text-decoration:underline dotted" title="' . htmlspecialchars($tip, ENT_QUOTES) . '">' . htmlspecialchars($label) . '</abbr>'
                     : htmlspecialchars($label);
                 $graphCell = $ds !== null ? $nvMetricGraph($ds) : '';
-                echo '<tr>'
+                echo $rowOpenTag($ds !== null ? $statLink($ds) : '')
                     . '<td style="white-space:nowrap"><i class="fa fa-line-chart text-muted" style="margin-right:6px"></i>' . $nameCell . '</td>'
                     . '<td style="width:110px">' . $graphCell . '</td>'
                     . '<td style="text-align:right"><span class="label label-default">' . htmlspecialchars($value) . '</span></td>'
@@ -215,71 +252,10 @@
     </div>
 </div>
 
-{{-- ====================== Full-width: Self-test Log ====================== --}}
-@php
-    $curOp  = (int) ($health['current_selftest_op'] ?? 0);
-    $curStr = trim((string) ($health['current_selftest_str'] ?? ''));
-    $curPct = $health['current_selftest_pct'] ?? null;
-
-    $stBadge = '';
-    if ($curOp !== 0) {
-        $txt = $curStr !== '' ? $curStr : 'Self-test in progress';
-        if (is_numeric($curPct)) { $txt .= ' ' . (int) $curPct . '%'; }
-        $stBadge = '<span class="label label-info">' . htmlspecialchars($txt) . '</span>';
-    } elseif (! empty($disk['selftests'])) {
-        $latest = null;
-        foreach ($disk['selftests'] as $st) {
-            if ($latest === null || (int) ($st['power_on_hours'] ?? 0) >= (int) ($latest['power_on_hours'] ?? 0)) {
-                $latest = $st;
-            }
-        }
-        $rt = trim((string) ($latest['result_text'] ?? '')) ?: (string) ($latest['result'] ?? '');
-        if ($rt !== '') {
-            $ok = stripos($rt, 'without error') !== false || stripos($rt, 'success') !== false || stripos($rt, 'completed') !== false;
-            $stBadge = '<span class="label label-' . ($ok ? 'default' : 'warning') . '">' . htmlspecialchars($rt) . '</span>';
-        }
-    }
-
-    $panelStart('Self-test Log', $stBadge);
-    if (empty($disk['selftests']) && $curOp === 0) {
-        echo '<div class="small text-muted" style="padding:4px 2px">'
-            . '<i class="fa fa-info-circle"></i> No self-test data reported — this drive may not support self-tests.</div>';
-    } else {
-        $curPoh = $health['power_on_hours'] ?? null;
-        $hasLba = false;
-        foreach ($disk['selftests'] as $e) {
-            if (is_numeric($e['failing_lba'] ?? null) && (int) $e['failing_lba'] > 0) { $hasLba = true; break; }
-        }
-        echo '<div class="table-responsive"><table class="table table-condensed table-hover">';
-        echo '<thead><tr><th>Hours</th><th>Type</th><th>Status</th><th>Remaining %</th>'
-            . ($hasLba ? '<th>First LBA Error</th>' : '') . '</tr></thead><tbody>';
-        foreach ($disk['selftests'] as $st) {
-            $type   = match ((int) ($st['test_type'] ?? 0)) { 1 => 'Short', 2 => 'Extended', 255 => 'Vendor', default => '-' };
-            $result = trim((string) ($st['result_text'] ?? '')) !== '' ? $st['result_text'] : (string) ($st['result'] ?? '-');
-            $h      = $st['power_on_hours'] ?? null;
-            $hoursCell = (string) ($h ?? '-');
-            if (is_numeric($curPoh) && is_numeric($h)) {
-                $delta = (int) $curPoh - (int) $h;
-                $hoursCell = $delta > 0 ? $formatHoursAgo($delta) . " ({$h})" : "<0 hour ({$h})";
-            }
-            $lba = $st['failing_lba'] ?? null;
-            echo '<tr>'
-                . '<td>' . htmlspecialchars($hoursCell) . '</td>'
-                . '<td>' . htmlspecialchars($type) . '</td>'
-                . '<td>' . htmlspecialchars((string) $result) . '</td>'
-                . '<td></td>'
-                . ($hasLba ? '<td>' . (is_numeric($lba) && (int) $lba > 0 ? htmlspecialchars((string) $lba) : '') . '</td>' : '')
-                . '</tr>';
-        }
-        echo '</tbody></table></div>';
-    }
-    $panelEnd();
-@endphp
-
 {{-- ====================== Full-width: Error Log ====================== --}}
 @if(! empty($disk['nvme_errors']))
 @php
-    $panelStart('Error Log', '<span class="label label-warning">' . count($disk['nvme_errors']) . '</span>');
+    $panelStart('Error Log',  count($disk['nvme_errors']) );
     echo '<div class="table-responsive"><table class="table table-condensed table-hover">';
     echo '<thead><tr><th>#</th><th>Count</th><th>Status</th><th>LBA</th><th>NSID</th><th>Time</th></tr></thead><tbody>';
     foreach ($disk['nvme_errors'] as $e) {

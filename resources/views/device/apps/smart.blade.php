@@ -647,10 +647,17 @@ SCRIPT;
     {{-- Per-disk detail                                                     --}}
     {{-- ================================================================== --}}
     @php $detailDisk = $data->disk($selectedDisk); @endphp
-    @if($detailDisk !== null && $data->isNvme($detailDisk) && $viewMode === 'overview')
-        @include('device.apps.smart-nvme-overview', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @if($detailDisk !== null && $data->isNvme($detailDisk) && $viewMode === 'basic')
+        @include('device.apps.smart-nvme-basic', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @elseif($detailDisk !== null && $data->isNvme($detailDisk) && $viewMode === 'metadata')
+        {{-- Static identity/capability metadata, namespaces, and power states (NVMe only). --}}
+        @include('device.apps.smart-nvme-metadata', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @elseif($detailDisk !== null && $data->isNvme($detailDisk) && $viewMode === 'selftest')
+        {{-- Self-test log (NVMe only). --}}
+        @include('device.apps.smart-nvme-selftest', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($detailDisk !== null && $data->isNvme($detailDisk))
-        @include('device.apps.smart-nvme-detail', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        {{-- Graphs (NVMe only; this is the only remaining viewMode that reaches here). --}}
+        @include('device.apps.smart-nvme-graphs', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($viewMode === 'overview')
         {{-- Alternative drive view, laid out like the device Overview tab (SATA/SAS only). --}}
         @include('device.apps.smart-sata-overview', ['disk' => $detailDisk, 'viewMode' => $viewMode])

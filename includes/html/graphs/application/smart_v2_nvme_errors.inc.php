@@ -1,6 +1,6 @@
 <?php
 
-// NVMe media errors and error log entry count — GAUGE counters.
+// NVMe media error count — GAUGE counter.
 
 use App\Facades\Rrd;
 
@@ -21,7 +21,7 @@ $rrd_list = [];
 if (Rrd::checkRrdExists($rrd_filename)) {
     $point = Rrd::lastUpdate($rrd_filename);
     $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
-    foreach (['media_errors' => 'Media Errors', 'err_log_cnt' => 'Error Log Entries'] as $ds => $descr) {
+    foreach (['media_errors' => 'Media Errors'] as $ds => $descr) {
         if ($avail !== [] && ! in_array($ds, $avail, true)) {
             continue;
         }

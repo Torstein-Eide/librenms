@@ -541,8 +541,8 @@ class HtmlData
         if ($this->isNvme($disk)) {
             return [
                 'basic'    => 'Basic',
-                'detailed' => 'Detailed',
-                'overview' => 'Overview',
+                'metadata' => 'Metadata',
+                'selftest' => 'Self-test',
                 'graphs'   => 'Graphs',
             ];
         }
