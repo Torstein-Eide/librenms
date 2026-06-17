@@ -251,9 +251,20 @@
                             $consumed[$stat] = true;
                         }
                     }
+                    $radTimeCoverage = null;
+                    foreach ($rows as $r) {
+                        $stat = $r['stat_name'] ?? '';
+                        if (isset($consumed[$stat])) { continue; }
+                        $norm = strtolower(str_replace('_', ' ', $stat));
+                        if (str_contains($norm, 'time') && str_contains($norm, 'command') && str_contains($norm, 'cover')) {
+                            $radTimeCoverage = $r['value'];
+                            $consumed[$stat] = true;
+                            break;
+                        }
+                    }
                     if ($radRows) {
                         $groups[] = ['title' => 'Commands by disk radius', 'type' => 'by_radius',
-                            'data' => $radRows];
+                            'data' => $radRows, 'time_coverage' => $radTimeCoverage];
                     }
 
                     // Command count breakdown table: Total / Random / Sequential (derived)
@@ -464,14 +475,59 @@
                     echo '</tbody></table>';
 
                 } elseif ($type === 'by_radius') {
-                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
-                    echo '<thead><tr><th>Radius</th><th>Read</th><th>Write</th></tr></thead><tbody>';
-                    foreach ($data as $range => $vals) {
-                        echo '<tr><td>' . $labelWithTooltip((string) $range, 'Read and write command counts grouped by their approximate disk-radius location.') . '</td>'
-                            . '<td>' . $fmtStatVal($vals['read'] ?? null) . '</td>'
-                            . '<td>' . $fmtStatVal($vals['write'] ?? null) . '</td></tr>';
+                    $fmtSiR  = static fn ($v): string => $v !== null
+                        ? htmlspecialchars(\LibreNMS\Util\Number::formatSi((float) $v, 2, 0, ''))
+                        : '<span class="text-muted">-</span>';
+                    $fmtRawR = static fn ($v): string => $v !== null ? number_format((int) $v) : '';
+                    // Per-type (column) max for gradient scaling
+                    $typeMax = ['read' => 0, 'write' => 0];
+                    $typeTot = ['read' => 0, 'write' => 0];
+                    foreach ($data as $vals) {
+                        foreach (['read', 'write'] as $t) {
+                            $v = $vals[$t] ?? null;
+                            if ($v !== null) {
+                                if ($v > $typeMax[$t]) { $typeMax[$t] = $v; }
+                                $typeTot[$t] += $v;
+                            }
+                        }
                     }
+                    $bgR = static function ($v, string $type) use ($typeMax): string {
+                        if ($v !== null && $typeMax[$type] > 0) {
+                            $pct = round($v / $typeMax[$type] * 100);
+                            if ($pct > 0) {
+                                return ' style="text-align:right;background:linear-gradient(to top,rgba(70,130,180,0.22) ' . $pct . '%,transparent ' . $pct . '%)"';
+                            }
+                        }
+                        return ' style="text-align:right"';
+                    };
+                    echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
+                    echo '<thead><tr><th>Radius</th><th style="text-align:right">Read</th><th style="text-align:right">Write</th></tr></thead><tbody>';
+                    foreach ($data as $range => $vals) {
+                        $r = $vals['read']  ?? null;
+                        $w = $vals['write'] ?? null;
+                        $radTip = 'Count of read and write commands within ' . $range . ' of user LBA space. This counter is for the time reported in Time that Commands Cover (Hours) field below.';
+                        echo '<tr>'
+                            . '<td>' . $labelWithTooltip((string) $range, $radTip) . '</td>'
+                            . '<td' . $bgR($r, 'read')  . '><span title="' . htmlspecialchars($fmtRawR($r)) . '">' . $fmtSiR($r) . '</span></td>'
+                            . '<td' . $bgR($w, 'write') . '><span title="' . htmlspecialchars($fmtRawR($w)) . '">' . $fmtSiR($w) . '</span></td>'
+                            . '</tr>';
+                    }
+                    // Total row
+                    $tr = $typeTot['read']  > 0 ? $typeTot['read']  : null;
+                    $tw = $typeTot['write'] > 0 ? $typeTot['write'] : null;
+                    echo '<tr style="font-weight:600;border-top:2px solid #ddd">'
+                        . '<td>Total</td>'
+                        . '<td style="text-align:right"><span title="' . htmlspecialchars($fmtRawR($tr)) . '">' . $fmtSiR($tr) . '</span></td>'
+                        . '<td style="text-align:right"><span title="' . htmlspecialchars($fmtRawR($tw)) . '">' . $fmtSiR($tw) . '</span></td>'
+                        . '</tr>';
                     echo '</tbody></table>';
+                    $tc = $group['time_coverage'] ?? null;
+                    if ($tc !== null) {
+                        echo '<p class="text-muted" style="font-size:11px;margin:4px 0 0">'
+                            . '<span title="Number of hours covered by the related read/write command statistics.">'
+                            . 'Time that Commands Cover: <strong>' . htmlspecialchars(number_format((float) $tc, 1)) . ' h</strong>'
+                            . '</span></p>';
+                    }
 
                 } elseif ($type === 'commands') {
                     $fmtSi  = static fn ($v): string => $v !== null
