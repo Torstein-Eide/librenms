@@ -94,7 +94,7 @@
             $panelEnd();
         @endphp
 
-        {{-- Total LBAs Written/Read (ATA attributes 241/242) — not all drives report these. --}}
+        {{-- LBAs Written/Read (ATA attributes 241/242) — not all drives report these. --}}
         @php
             $attrById = [];
             foreach ($disk['attributes'] as $a) {
@@ -127,7 +127,7 @@
 
             $luOverlibArray = $luGraphArray;
             $luOverlibArray['width'] = 210;
-            $luOverlib = generate_overlib_content($luOverlibArray, $device['hostname'] . ' - Total LBAs Written/Read');
+            $luOverlib = generate_overlib_content($luOverlibArray, $device['hostname'] . ' - LBAs Written/Read');
 
             // Current rate (LBA/s + B/s) from the last RRD interval, not the lifetime total.
             $luRrdFile = \App\Facades\Rrd::name($device['hostname'], ['app', 'smart', $data->app->app_id, $idx]);
@@ -141,7 +141,7 @@
             $luParts = array_filter([$luRd !== null ? 'R: ' . $luRd : null, $luWr !== null ? 'W: ' . $luWr : null]);
             $luBadge = $luParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $luParts)) . '</span>' : '';
 
-            $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>Total LBAs Written/Read', $luBadge);
+            $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>LBAs Written/Read', $luBadge);
             echo \LibreNMS\Util\Url::overlibLink($luLink, $luGraph, $luOverlib);
             $panelEnd();
         @endphp

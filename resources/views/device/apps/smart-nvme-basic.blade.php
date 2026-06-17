@@ -97,17 +97,22 @@
 
             $duOverlibArray = $duGraphArray;
             $duOverlibArray['width'] = 210;
-            $duOverlib = generate_overlib_content($duOverlibArray, $device['hostname'] . ' - NVMe Data Units');
+            $duOverlib = generate_overlib_content($duOverlibArray, $device['hostname'] . ' - LBAs Written/Read');
 
-            $du = 512000; // standard NVMe data-unit size in bytes
-            $duRd = isset($health['data_units_read']) && is_numeric($health['data_units_read'])
-                ? \LibreNMS\Util\Number::formatBi((int) $health['data_units_read'] * $du) : null;
-            $duWr = isset($health['data_units_written']) && is_numeric($health['data_units_written'])
-                ? \LibreNMS\Util\Number::formatBi((int) $health['data_units_written'] * $du) : null;
+            // Current rate (LBA/s + B/s) from the last RRD interval — 1 NVMe data unit = 512 000 B.
+            $du = 512000;
+            $duRrdFile = \App\Facades\Rrd::name($device['hostname'], ['app', 'smart_nvme', $data->app->app_id, $disk['idx']]);
+            $duRates   = \App\Facades\Rrd::getLastRates($duRrdFile, ['du_rd', 'du_wr']);
+            $fmtLbaRate = static fn (float $r): string => \LibreNMS\Util\Number::formatSi($r, 2, 0, 'LBA') . '/s ('
+                . \LibreNMS\Util\Number::formatSi($r * $du, 2, 0, 'B') . '/s)';
+            $duRdRate = $duRates?->get('du_rd');
+            $duWrRate = $duRates?->get('du_wr');
+            $duRd = is_numeric($duRdRate) ? $fmtLbaRate((float) $duRdRate) : null;
+            $duWr = is_numeric($duWrRate) ? $fmtLbaRate((float) $duWrRate) : null;
             $duParts = array_filter([$duRd !== null ? 'R: ' . $duRd : null, $duWr !== null ? 'W: ' . $duWr : null]);
             $duBadge = $duParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $duParts)) . '</span>' : '';
 
-            $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>NVMe Data Units', $duBadge);
+            $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>LBAs Written/Read', $duBadge);
             echo \LibreNMS\Util\Url::overlibLink($duLink, $duGraph, $duOverlib);
             $panelEnd();
         @endphp
