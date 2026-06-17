@@ -43,6 +43,12 @@
             . "{$labelHtml}</strong></td><td>{$value}</td></tr>\n";
     };
     $smartTooltips = [
+        'offline data collection' => 'An old ATA SMART background routine that may collect or refresh some drive health data when the drive is idle. '
+            . 'Disabled or Never started does not mean SMART is disabled, broken, or not updating — power-on hours, temperature, error counters, '
+            . 'reallocated/pending sectors, and self-test logs may still update normally. It only means this specific automatic routine is disabled or has not run.',
+        'auto offline data collection' => 'An old ATA SMART background routine that may collect or refresh some drive health data when the drive is idle. '
+            . 'Disabled or Never started does not mean SMART is disabled, broken, or not updating — power-on hours, temperature, error counters, '
+            . 'reallocated/pending sectors, and self-test logs may still update normally. It only means this specific automatic routine is disabled or has not run.',
         'power cycles' => 'Counts power-on resets or unique device startups during system boot.',
         'lifetime power on resets' => 'Counts power-on resets or unique device startups during system boot.',
         'power on hours' => 'Tracks the number of hours the device has been powered on; HDD spindle and head-load time may differ.',

@@ -60,7 +60,6 @@
                 'Serial'          => $disk['serial_number']    ?? null,
                 'Firmware'        => $disk['firmware_version'] ?? null,
                 'WWN'             => $disk['wwn']              ?? null,
-                'Device'          => $disk['device_name']     ?? null,
                 'Path'            => $pathCell,
                 'Capacity'        => $capCell,
             ];
@@ -78,7 +77,8 @@
                 if ($value === null || $value === '') { continue; }
                 $cell = $value instanceof \Illuminate\Support\HtmlString
                     ? (string) $value : htmlspecialchars((string) $value);
-                $identityRows[] = $tableRow($label, $cell, $tooltipForLabel($label));
+                $tooltip = $label === 'Capacity' ? '' : $tooltipForLabel($label);
+                $identityRows[] = $tableRow($label, $cell, $tooltip);
             }
 
             $panelStart($identityTitle, $healthBadge);
@@ -93,6 +93,54 @@
             echo '</div>';
             $panelEnd();
         @endphp
+
+        {{-- Total LBAs Written/Read (ATA attributes 241/242) — not all drives report these. --}}
+        @php
+            $attrById = [];
+            foreach ($disk['attributes'] as $a) {
+                $attrById[(int) ($a['attribute_id'] ?? 0)] = $a;
+            }
+            $lbaWriteAttr = $attrById[241] ?? null;
+            $lbaReadAttr  = $attrById[242] ?? null;
+        @endphp
+        @if($lbaWriteAttr !== null || $lbaReadAttr !== null)
+        @php
+            $blockSize = is_numeric($info['logical_block_size'] ?? null) ? (int) $info['logical_block_size'] : 512;
+
+            $luNow  = \App\Facades\LibrenmsConfig::get('time.now');
+            $luFrom = \App\Facades\LibrenmsConfig::get('time.day');
+            $luGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
+                'id'         => $data->app->app_id,
+                'type'       => 'application_smart_v2_lba_units',
+                'disk'       => $idx,
+                'block_size' => $blockSize,
+                'from'       => $luFrom,
+                'to'         => $luNow,
+                'legend'     => 'no',
+            ]);
+            $luGraph = \LibreNMS\Util\Url::lazyGraphTag($luGraphArray, 'tw:w-full tw:h-auto');
+
+            $luLinkArray = $luGraphArray;
+            $luLinkArray['page'] = 'graphs';
+            unset($luLinkArray['height'], $luLinkArray['width']);
+            $luLink = \LibreNMS\Util\Url::generate($luLinkArray);
+
+            $luOverlibArray = $luGraphArray;
+            $luOverlibArray['width'] = 210;
+            $luOverlib = generate_overlib_content($luOverlibArray, $device['hostname'] . ' - Total LBAs Written/Read');
+
+            $luRd = is_numeric($lbaReadAttr['value_raw'] ?? null)
+                ? \LibreNMS\Util\Number::formatBi((float) $lbaReadAttr['value_raw'] * $blockSize) : null;
+            $luWr = is_numeric($lbaWriteAttr['value_raw'] ?? null)
+                ? \LibreNMS\Util\Number::formatBi((float) $lbaWriteAttr['value_raw'] * $blockSize) : null;
+            $luParts = array_filter([$luRd !== null ? 'R: ' . $luRd : null, $luWr !== null ? 'W: ' . $luWr : null]);
+            $luBadge = $luParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $luParts)) . '</span>' : '';
+
+            $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>Total LBAs Written/Read', $luBadge);
+            echo \LibreNMS\Util\Url::overlibLink($luLink, $luGraph, $luOverlib);
+            $panelEnd();
+        @endphp
+        @endif
 
     </div>
 
@@ -182,7 +230,7 @@
                     : '<span class="label" style="background-color:#e8857f">Disabled</span>';
                 $odcVal    = $odcBadge . ', ' . htmlspecialchars($data->decode('offline_status', (int) $odcStatus & 0x7f));
                 echo $gotoRowOpen('selftest') . '<td style="white-space:nowrap"><i class="fa fa-clock-o text-muted" style="margin-right:6px"></i>'
-                    . $labelWithTooltip('Offline Data Collection', $tooltipForLabel('Auto Offline Data Collection')) . '</td>'
+                    . $labelWithTooltip('Offline Data Collection', $tooltipForLabel('Offline Data Collection')) . '</td>'
                     . '<td colspan="2" style="text-align:right">' . $odcVal . '</td></tr>';
             }
 
@@ -235,7 +283,27 @@
     $attrAnchorId = 'smart-attributes-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $idx);
     echo '<a id="' . $attrAnchorId . '" style="position:relative;top:-70px;display:block;visibility:hidden"></a>';
 
-    $panelStart('SMART Attributes');
+    // Header: link through to the Attributes section of the Graphs view, plus a
+    // total/failed/failing summary (NA-status attributes counted separately).
+    $attrTotalAll = count($disk['attributes']);
+    $attrCount    = 0;
+    $attrFailing  = 0;
+    $attrFailed   = 0;
+    foreach ($disk['attributes'] as $a) {
+        $st = (int) ($a['status'] ?? 0);
+        if ($st === -1) { continue; }
+        $attrCount++;
+        if ($st === 2) { $attrFailing++; }
+        elseif ($st === 3) { $attrFailed++; }
+    }
+    $attrSummaryBadge = '<span class="text-muted">Total: <span class="label label-default">' . $attrCount . ' / ' . $attrTotalAll . '</span>'
+        . ' &nbsp; Failed: <span class="label label-' . ($attrFailed > 0 ? 'warning' : 'default') . '">' . $attrFailed . '</span>'
+        . ' &nbsp; Failing: <span class="label label-' . ($attrFailing > 0 ? 'danger' : 'default') . '">' . $attrFailing . '</span></span>';
+
+    $attrGraphHref   = htmlspecialchars($currentUrl, ENT_QUOTES) . '#smart-device-' . $idx . '-graph-attributes';
+    $attrHeaderLink  = '<a href="' . $attrGraphHref . '" onclick="' . $gotoModeAttr('graphs') . '" style="color:inherit">SMART Attributes</a>';
+
+    $panelStart($attrHeaderLink, $attrSummaryBadge);
 
     $attrAppId = $data->app->app_id;
     $attrNow   = \App\Facades\LibrenmsConfig::get('time.now');

@@ -132,6 +132,7 @@ function smartAttrScaleToggle(cb, wrapperId) {
     });
 }
 </script>';
+        echo '<a id="' . $anchorPrefix . 'attributes" style="position:relative;top:-70px;display:block;visibility:hidden"></a>';
         echo '<h4 style="margin:20px 0 8px;border-bottom:1px solid #ddd;padding-bottom:6px">Attributes'
             . '<label style="float:right;font-size:13px;font-weight:normal;margin-bottom:0;cursor:pointer">'
             . '<input type="checkbox" id="' . $toggleId . '" checked onchange="smartAttrScaleToggle(this,\'' . $wrapperId . '\')"> Scale from zero</label></h4>';
