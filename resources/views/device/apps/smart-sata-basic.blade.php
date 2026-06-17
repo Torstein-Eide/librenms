@@ -134,7 +134,7 @@
             $luRates   = \App\Facades\Rrd::getLastRates($luRrdFile, ['id241', 'id242']);
             $luRdRate  = $lbaReadAttr !== null ? $luRates?->get('id242') : null;
             $luWrRate  = $lbaWriteAttr !== null ? $luRates?->get('id241') : null;
-            $fmtLbaRate = static fn (float $r): string => number_format($r, 0, '.', ' ') . ' LBA/s ('
+            $fmtLbaRate = static fn (float $r): string => \LibreNMS\Util\Number::formatSi($r, 2, 0, 'LBA') . '/s ('
                 . \LibreNMS\Util\Number::formatSi($r * $blockSize, 2, 0, 'B') . '/s)';
             $luRd = is_numeric($luRdRate) ? $fmtLbaRate((float) $luRdRate) : null;
             $luWr = is_numeric($luWrRate) ? $fmtLbaRate((float) $luWrRate) : null;
