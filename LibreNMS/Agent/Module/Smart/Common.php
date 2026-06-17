@@ -2079,9 +2079,9 @@ class Common extends Application
             'firmware_update_raw'     => $this->intValue($row['smartmonNvmeFirmwareUpdateRaw'] ?? null),
             'firmware_slot_count'     => $this->intValue($row['smartmonNvmeFirmwareSlotCount'] ?? null),
             'firmware_reset_required' => $this->snmpTruthValue($row['smartmonNvmeFirmwareResetRequired'] ?? null),
-            'optional_admin_cmd_raw'  => $this->intValue($row['smartmonNvmeOptionalAdminCommandRaw'] ?? null),
-            'optional_nvm_cmd_raw'    => $this->intValue($row['smartmonNvmeOptionalNvmCommandRaw'] ?? null),
-            'log_page_attrs_raw'      => $this->intValue($row['smartmonNvmeLogPageAttributesRaw'] ?? null),
+            'optional_admin_cmd_raw'  => $this->bitsValue($row['smartmonNvmeOptionalAdminCommandRaw'] ?? null),
+            'optional_nvm_cmd_raw'    => $this->bitsValue($row['smartmonNvmeOptionalNvmCommandRaw'] ?? null),
+            'log_page_attrs_raw'      => $this->bitsValue($row['smartmonNvmeLogPageAttributesRaw'] ?? null),
             'optional_admin_cmd_text' => isset($row['smartmonNvmeOptionalAdminCommandText'])
                 ? substr((string) $row['smartmonNvmeOptionalAdminCommandText'], 0, 255) : null,
             'optional_nvm_cmd_text'   => isset($row['smartmonNvmeOptionalNvmCommandText'])
@@ -2788,6 +2788,62 @@ class Common extends Application
         }
 
         return $int === 1 ? 1 : 0;
+    }
+
+    /**
+     * Parse an SNMP BITS value (e.g. the OACS/ONCS/LPA bitmaps in SMARTMON-TC-MIB) into a
+     * plain integer where bit N is set iff the MIB's bit(N) is set — i.e. directly usable
+     * with `($raw >> $bit) & 1` against the same bit indexes the TEXTUAL-CONVENTION defines.
+     *
+     * net-snmp renders BITS values as e.g. "E8 00 securitySendReceive(0) formatNvm(1) ..."
+     * — hex octets (MSB-first per RFC 2578, not directly usable as an integer) followed by
+     * the named set bits. The "(n)" suffixes are the authoritative bit indexes, so prefer
+     * those; fall back to decoding the hex octets if a build's snmp options hide them.
+     */
+    private function bitsValue(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+
+        if (preg_match_all('/\((\d+)\)/', $value, $matches) > 0) {
+            $raw = 0;
+            foreach ($matches[1] as $bit) {
+                $raw |= 1 << (int) $bit;
+            }
+
+            return $raw;
+        }
+
+        $hex = preg_replace('/^(?:BITS|Hex-STRING|STRING):\s*/i', '', $value);
+        if (! preg_match('/^(?:[0-9A-Fa-f]{2}[\s:]*)+$/', $hex)) {
+            return null;
+        }
+        $hex = preg_replace('/[\s:]+/', '', $hex);
+        if ($hex === '' || strlen($hex) % 2 !== 0) {
+            return null;
+        }
+
+        $raw = 0;
+        foreach (str_split($hex, 2) as $byteIdx => $byteHex) {
+            $byte = hexdec($byteHex);
+            for ($bitInByte = 0; $bitInByte < 8; $bitInByte++) {
+                if (($byte >> (7 - $bitInByte)) & 1) {
+                    $raw |= 1 << ($byteIdx * 8 + $bitInByte);
+                }
+            }
+        }
+
+        return $raw;
     }
 
     private function intValue(mixed $value): ?int

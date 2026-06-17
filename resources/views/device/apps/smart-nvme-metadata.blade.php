@@ -122,14 +122,24 @@
                 'log_page_attrs_raw'     => 'Log Page Attributes',
             ];
 
+            // Short MIB acronym (smartmonNvme*Raw OBJECT-TYPEs in SMARTMON-NVME-MIB), shown
+            // next to the section heading.
+            $nvmeCapSectionAcronyms = [
+                'optional_admin_cmd_raw' => 'OACS',
+                'optional_nvm_cmd_raw'   => 'ONCS',
+                'log_page_attrs_raw'     => 'LPA',
+            ];
+
             // One sub-table per section; kept whole (not split) within the CSS column layout below.
-            $capSection = static function (string $heading, string $rows) use ($tableRow): string {
+            $capSection = static function (string $heading, string $rows): string {
                 if ($rows === '') {
                     return '';
                 }
 
+                $headingHtml = htmlspecialchars($heading);
+
                 return '<div style="break-inside:avoid-column;-webkit-column-break-inside:avoid;margin-bottom:14px">'
-                    . '<div style="font-weight:bold;border-bottom:1px solid #ddd;margin-bottom:4px;padding-bottom:2px">' . htmlspecialchars($heading) . '</div>'
+                    . '<div style="font-weight:bold;border-bottom:1px solid #ddd;margin-bottom:4px;padding-bottom:2px">' . $headingHtml . '</div>'
                     . '<table class="table table-condensed table-hover" style="width:auto;margin-bottom:0">' . $rows . '</table>'
                     . '</div>';
             };
@@ -158,7 +168,9 @@
                     $icon = $val ? '<span class="text-success">Yes</span>' : '<span class="text-muted">No</span>';
                     $rows .= $tableRow($label, $icon, $tooltipForLabel($label));
                 }
-                $sectionsHtml .= $capSection($nvmeCapSectionLabels[$col], $rows);
+                $acronym = $nvmeCapSectionAcronyms[$col] ?? '';
+                $heading = $nvmeCapSectionLabels[$col] . ($acronym !== '' ? ' (' . $acronym . ')' : '');
+                $sectionsHtml .= $capSection($heading, $rows);
             }
 
             echo '<div style="column-width:260px;column-count:2;column-gap:18px">' . $sectionsHtml . '</div>';

@@ -223,7 +223,11 @@
                 ['Power Cycles',      $fmtInt($health['power_cycles'] ?? null),            'pwr_cycles'],
             ];
 
-            $panelStart('<i class="fa fa-heartbeat" style="margin-right:6px"></i>Health', $healthBadge);
+            $healthGraphsLink = \LibreNMS\Util\Url::generate($linkArray + ['disk' => (string) $selectedDisk]);
+            $healthHeader = '<a href="' . htmlspecialchars($healthGraphsLink, ENT_QUOTES) . '" '
+                . 'onclick="document.cookie=\'' . htmlspecialchars($viewCookie, ENT_QUOTES) . '=graphs; path=/; max-age=31536000; samesite=lax\';" '
+                . 'style="color:inherit"><i class="fa fa-heartbeat" style="margin-right:6px"></i>Health</a>';
+            $panelStart($healthHeader);
             echo '<table class="table table-condensed table-hover" style="width:100%">';
             foreach ($healthSensors as $s) {
                 $nm = $data->shortSensorName($s, $disk);
@@ -257,11 +261,11 @@
 @php
     $panelStart('Error Log',  count($disk['nvme_errors']) );
     echo '<div class="table-responsive"><table class="table table-condensed table-hover">';
-    echo '<thead><tr><th>#</th><th>Count</th><th>Status</th><th>LBA</th><th>NSID</th><th>Time</th></tr></thead><tbody>';
+    echo '<thead><tr><th>' . $labelWithTooltip('#', '64-bit incrementing error count: a unique ID for this error, starting at 1 and retained across power-off. 0 means an invalid/lost entry.') . '</th>'
+        . '<th>Status</th><th>LBA</th><th>NSID</th><th>Time</th></tr></thead><tbody>';
     foreach ($disk['nvme_errors'] as $e) {
         $status = trim((string) ($e['status_string'] ?? '')) !== '' ? $e['status_string'] : (string) ($e['status_field'] ?? '-');
         echo '<tr>'
-            . '<td>' . htmlspecialchars((string) ($e['entry_num'] ?? '-')) . '</td>'
             . '<td>' . htmlspecialchars($fmtInt($e['error_count'] ?? null) ?? '-') . '</td>'
             . '<td>' . htmlspecialchars((string) $status) . '</td>'
             . '<td>' . htmlspecialchars((string) ($e['lba'] ?? '-')) . '</td>'
