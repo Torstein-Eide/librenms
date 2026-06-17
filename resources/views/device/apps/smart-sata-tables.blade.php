@@ -147,16 +147,16 @@
                         $groups[] = ['title' => 'Voltage', 'type' => 'voltage', 'data' => $voltData];
                     }
 
-                    // Power table: Current column holds current voltage for 12V/5V rails (already
-                    // consumed above), and current motor power for Motor.
+                    // Power table: FARM has no instantaneous power reading for the 12V/5V rails,
+                    // so Current reuses the average_*_power stat (Motor below has a real current).
                     $powerRails = [
-                        '12V' => ['vcurrent' => 'current_12v_in_mv', 'Average' => 'average_12v_power', 'Minimum' => 'minimum_12v_power', 'Maximum' => 'maximum_12v_power'],
-                        '5V'  => ['vcurrent' => 'current_5v_in_mv',  'Average' => 'average_5v_power',  'Minimum' => 'minimum_5v_power',  'Maximum' => 'maximum_5v_power'],
+                        '12V' => ['Current' => 'average_12v_power', 'Average' => 'average_12v_power', 'Minimum' => 'minimum_12v_power', 'Maximum' => 'maximum_12v_power'],
+                        '5V'  => ['Current' => 'average_5v_power',  'Average' => 'average_5v_power',  'Minimum' => 'minimum_5v_power',  'Maximum' => 'maximum_5v_power'],
                     ];
                     $powerData = [];
                     foreach ($powerRails as $label => $statCols) {
-                        $row = ['label' => $label, 'rail' => true, 'Current' => isset($byName[$statCols['vcurrent']]) ? $byName[$statCols['vcurrent']]['value'] : null];
-                        foreach (['Average', 'Minimum', 'Maximum'] as $col) {
+                        $row = ['label' => $label, 'rail' => true];
+                        foreach (['Current', 'Average', 'Minimum', 'Maximum'] as $col) {
                             $stat = $statCols[$col];
                             $row[$col] = isset($byName[$stat]) ? $byName[$stat]['value'] : null;
                             if (isset($byName[$stat])) { $consumed[$stat] = true; }
@@ -379,15 +379,14 @@
                     echo '<table class="table table-condensed table-striped table-hover" style="' . $tblStyle . '">';
                     echo '<thead><tr><th>Rail</th><th>Current</th><th>Average</th><th>Minimum</th><th>Maximum</th></tr></thead><tbody>';
                     foreach ($data as $row) {
-                        $isRail = $row['rail'] ?? false;
                         $tooltip = match ($row['label']) {
-                            '12V' => '12V rail: current voltage reading plus power history (average, minimum, maximum).',
-                            '5V' => '5V rail: current voltage reading plus power history (average, minimum, maximum).',
+                            '12V' => '12V rail power history (average, minimum, maximum); FARM has no instantaneous reading, so Current repeats Average.',
+                            '5V' => '5V rail power history (average, minimum, maximum); FARM has no instantaneous reading, so Current repeats Average.',
                             'Motor' => 'Current motor power scalar value used by the servo to keep the motor spinning.',
                             default => '',
                         };
                         echo '<tr><td><strong>' . $labelWithTooltip($row['label'], $tooltip) . '</strong></td>'
-                            . '<td>' . ($isRail ? $fmtMilli($row['Current'] ?? null, 'W') : $fmtMilli($row['Current'] ?? null, 'W')) . '</td>'
+                            . '<td>' . $fmtMilli($row['Current'] ?? null, 'W') . '</td>'
                             . '<td>' . $fmtMilli($row['Average'] ?? null, 'W') . '</td>'
                             . '<td>' . $fmtMilli($row['Minimum'] ?? null, 'W') . '</td>'
                             . '<td>' . $fmtMilli($row['Maximum'] ?? null, 'W') . '</td></tr>';
