@@ -521,7 +521,7 @@ class HtmlData
         ];
     }
 
-    /** Available per-disk view modes. */
+    /** Available per-disk view modes, across all disk types. */
     public function diskViewModes(): array
     {
         return [
@@ -533,6 +533,21 @@ class HtmlData
             'tables'   => 'Statistics',
             'graphs'   => 'Graphs',
         ];
+    }
+
+    /** Available per-disk view modes for the given disk, filtered by NVMe vs SATA/SAS capability. */
+    public function diskViewModesFor(array $disk): array
+    {
+        if ($this->isNvme($disk)) {
+            return [
+                'basic'    => 'Basic',
+                'detailed' => 'Detailed',
+                'overview' => 'Overview',
+                'graphs'   => 'Graphs',
+            ];
+        }
+
+        return $this->diskViewModes();
     }
 
     /** Resolve a navigation label for a disk under the given label mode. */

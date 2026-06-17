@@ -316,39 +316,29 @@ class Common extends Application
                 if ($lowCrit !== null && $lowWarn !== null && $lowWarn == $lowCrit) {
                     $lowWarn = $lowCrit + 5;
                 }
-                $attrs = [
-                    'device_id'         => $device['device_id'],
-                    'poller_type'       => 'agent',
-                    'sensor_class'      => $sensorClass,
-                    'sensor_type'       => $sensorType,
-                    'sensor_index'      => $sIdx,
-                    'sensor_oid'        => "app:smart_mib:{$sIdx}",
-                    'group'             => $group,
-
-                    'sensor_descr'      => $descr,
-                    'sensor_current'    => $value,
-                ];
                 // Carry the scale as divisor/multiplier so the poll can rescale the raw value.
-                $attrs += $this->sensorScaleColumns($row);
-                if ($highCrit !== null) {
-                    $attrs['sensor_limit'] = $highCrit;
-                }
-                if ($highWarn !== null) {
-                    $attrs['sensor_limit_warn'] = $highWarn;
-                }
-                if ($lowWarn !== null) {
-                    $attrs['sensor_limit_low_warn'] = $lowWarn;
-                }
-                if ($lowCrit !== null) {
-                    $attrs['sensor_limit_low'] = $lowCrit;
-                }
+                $scale = $this->sensorScaleColumns($row);
                 $intendedLimits["app:smart_mib:{$sIdx}"] = [
                     'sensor_limit'          => $highCrit,
                     'sensor_limit_warn'     => $highWarn,
                     'sensor_limit_low_warn' => $lowWarn,
                     'sensor_limit_low'      => $lowCrit,
                 ];
-                app('sensor-discovery')->discover(new Sensor($attrs));
+                $this->discoverSensor(
+                    class: $sensorClass,
+                    type: $sensorType,
+                    index: $sIdx,
+                    oid: "app:smart_mib:{$sIdx}",
+                    descr: $descr,
+                    current: $value,
+                    group: $group,
+                    divisor: $scale['sensor_divisor'],
+                    multiplier: $scale['sensor_multiplier'],
+                    lowLimit: $lowCrit,
+                    lowWarnLimit: $lowWarn,
+                    warnLimit: $highWarn,
+                    highLimit: $highCrit,
+                );
             }
         }
 
@@ -433,19 +423,15 @@ class Common extends Application
         // Health: synthesised from overall status + attribute statuses
         if (isset($health['smartmonSataHealthOverallStatus'])) {
             $synthesized = $this->synthesizeHealthStatus($health, $attrRows);
-            app('sensor-discovery')
-                ->discover(new Sensor([
-                    'device_id'         => $device['device_id'],
-                    'poller_type'       => 'agent',
-                    'sensor_class'      => 'state',
-                    'sensor_type'       => 'smart_mib_health',
-                    'sensor_index'      => "{$idx}_health",
-                    'sensor_oid'        => "app:smart_mib:{$idx}_health",
-                    'group'             => $group,
-
-                    'sensor_descr'      => "{$group} {$devName} Health",
-                    'sensor_current'    => $synthesized,
-                ]))
+            $this->discoverSensor(
+                class: 'state',
+                type: 'smart_mib_health',
+                index: "{$idx}_health",
+                oid: "app:smart_mib:{$idx}_health",
+                descr: "{$group} {$devName} Health",
+                current: $synthesized,
+                group: $group,
+            )
                 ->withStateTranslations('smart_mib_health', [
                     StateTranslation::define('OK', 1, Severity::Ok),
                     StateTranslation::define('Warning', 2, Severity::Warning),
@@ -459,19 +445,15 @@ class Common extends Application
         $statusRaw = $health['smartmonSataSelfTestExecutionStatusValue'] ?? null;
         if ($statusRaw !== null) {
             $statusNibble = (int) $statusRaw;
-            app('sensor-discovery')
-                ->discover(new Sensor([
-                    'device_id'         => $device['device_id'],
-                    'poller_type'       => 'agent',
-                    'sensor_class'      => 'state',
-                    'sensor_type'       => 'smart_selftest_status',
-                    'sensor_index'      => "{$idx}_selftest_status",
-                    'sensor_oid'        => "app:smart_mib:{$idx}_selftest_status",
-                    'group'             => $group,
-
-                    'sensor_descr'      => "{$group} {$devName} Self-test Status",
-                    'sensor_current'    => $statusNibble,
-                ]))
+            $this->discoverSensor(
+                class: 'state',
+                type: 'smart_selftest_status',
+                index: "{$idx}_selftest_status",
+                oid: "app:smart_mib:{$idx}_selftest_status",
+                descr: "{$group} {$devName} Self-test Status",
+                current: $statusNibble,
+                group: $group,
+            )
                 ->withStateTranslations('smart_selftest_status', [
                     StateTranslation::define('Completed without error', 0x0, Severity::Ok),
                     StateTranslation::define('Aborted by host', 0x1, Severity::Ok),
@@ -556,28 +538,25 @@ class Common extends Application
             $devName = $this->sensorLabel($dev, $dev['snmp_index']);
 
             foreach ([
-                ['short', 1, 'Last Short Test', 1440, 1600],
-                ['long',  2, 'Last Long Test',  57600, 60000],
+                ['short', 1, 'Last Short SelfTest', 12000, 16000],
+                ['long',  2, 'Last Long SelfTest',  57600, 60000],
             ] as [$suffix, $testType, $label, $warn, $max]) {
                 $age = $this->sataSelftestAgeHours($diskKey, $testType);
                 if ($age === null) {
                     continue;
                 }
-                app('sensor-discovery')->discover(new Sensor([
-                    'device_id'         => $device['device_id'],
-                    'poller_type'       => 'agent',
-                    'sensor_class'      => 'runtime',
-                    'sensor_type'       => "smart_selftest_{$suffix}",
-                    'sensor_index'      => "{$idx}_selftest_{$suffix}",
-                    'sensor_oid'        => "app:smart_mib:{$idx}_selftest_{$suffix}",
-                    'group'             => $group,
-                    'sensor_descr'      => "{$group} {$devName} {$label}",
-                    'sensor_current'    => (float) $age,
-                    'sensor_multiplier' => 60,
-                    'sensor_limit_warn' => $warn,
-                    'sensor_max'        => $max,
-                    'sensor_min'        => 0,
-                ]));
+                $this->discoverSensor(
+                    class: 'runtime',
+                    type: "smart_selftest_{$suffix}",
+                    index: "{$idx}_selftest_{$suffix}",
+                    oid: "app:smart_mib:{$idx}_selftest_{$suffix}",
+                    descr: "{$group} {$devName} {$label}",
+                    current: (float) $age * 60,
+                    group: $group,
+                    multiplier: 60,
+                    warnLimit: $warn,
+                    highLimit: $max,
+                );
             }
         }
     }
@@ -598,28 +577,25 @@ class Common extends Application
             $devName = $this->sensorLabel($dev, $dev['snmp_index']);
 
             foreach ([
-                ['short', 1, 'Last Short Test', 1440, 1600],
-                ['long',  2, 'Last Long Test',  57600, 60000],
+                ['short', 1, 'Last Short SelfTest', 12000, 16000],
+                ['long',  2, 'Last Long SelfTest',  57600, 60000],
             ] as [$suffix, $testType, $label, $warn, $max]) {
                 $age = $this->nvmeSelftestAgeHours($diskKey, $testType);
                 if ($age === null) {
                     continue;
                 }
-                app('sensor-discovery')->discover(new Sensor([
-                    'device_id'         => $device['device_id'],
-                    'poller_type'       => 'agent',
-                    'sensor_class'      => 'runtime',
-                    'sensor_type'       => "smart_nvme_selftest_{$suffix}",
-                    'sensor_index'      => "{$idx}_selftest_{$suffix}",
-                    'sensor_oid'        => "app:smart_mib:{$idx}_selftest_{$suffix}",
-                    'group'             => $group,
-                    'sensor_descr'      => "{$group} {$devName} {$label}",
-                    'sensor_current'    => (float) $age,
-                    'sensor_multiplier' => 60,
-                    'sensor_limit_warn' => $warn,
-                    'sensor_max'        => $max,
-                    'sensor_min'        => 0,
-                ]));
+                $this->discoverSensor(
+                    class: 'runtime',
+                    type: "smart_nvme_selftest_{$suffix}",
+                    index: "{$idx}_selftest_{$suffix}",
+                    oid: "app:smart_mib:{$idx}_selftest_{$suffix}",
+                    descr: "{$group} {$devName} {$label}",
+                    current: (float) $age * 60,
+                    group: $group,
+                    multiplier: 60,
+                    warnLimit: $warn,
+                    highLimit: $max,
+                );
             }
         }
     }
@@ -877,27 +853,44 @@ class Common extends Application
             $idx = $this->mibDiskIndex($diskKey);
             $sensors = $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
 
+            // Health, self-test status, and self-test age are batched through a single
+            // updateSensorValues() call so stored multipliers (selftest age -> minutes),
+            // threshold alerts, and state-change events are all applied.
+            $sataValues = [];
+
             // Health state sensor — synthesized from DB
-            if ($sensor = $sensors->get("{$idx}_health")) {
+            if ($sensors->has("{$idx}_health")) {
                 $value = $this->synthesizeHealthFromDb($diskKey);
-                $this->updateMibSensor($this->device, $sensor, $value !== null ? (float) $value : null);
+                if ($value !== null) {
+                    $sataValues["{$idx}_health"] = (float) $value;
+                }
             }
 
             // Self-test execution status from DB
-            if ($sensor = $sensors->get("{$idx}_selftest_status")) {
+            if ($sensors->has("{$idx}_selftest_status")) {
                 $raw = DB::table('smart_sata_health')
                     ->where('app_id', $this->appId)
                     ->where('disk_key', $diskKey)
                     ->value('selftest_exec_status_raw');
-                $this->updateMibSensor($this->device, $sensor, $raw !== null ? (float) $raw : null);
+                if ($raw !== null) {
+                    $sataValues["{$idx}_selftest_status"] = (float) $raw;
+                }
             }
 
             // Self-test age (recomputed each poll: grows over time, resets when a test runs).
+            // Raw value is hours; updateSensorValues() applies the sensor's stored
+            // multiplier (60) to convert to minutes, matching the 'runtime' sensor unit.
             foreach (['short' => 1, 'long' => 2] as $suffix => $testType) {
-                if ($sensor = $sensors->get("{$idx}_selftest_{$suffix}")) {
+                if ($sensors->has("{$idx}_selftest_{$suffix}")) {
                     $age = $this->sataSelftestAgeHours($diskKey, $testType);
-                    $this->updateMibSensor($this->device, $sensor, $age !== null ? (float) $age : null);
+                    if ($age !== null) {
+                        $sataValues["{$idx}_selftest_{$suffix}"] = (float) $age;
+                    }
                 }
+            }
+
+            if ($sataValues !== []) {
+                $this->updateSensorValues($sataValues, "app:smart_mib:{$idx}_");
             }
         }
 
@@ -906,18 +899,25 @@ class Common extends Application
             $idx = $this->mibDiskIndex($diskKey);
             $sensors = $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
 
+            // Health, self-test status, and self-test age are batched through a single
+            // updateSensorValues() call so stored multipliers (selftest age -> minutes),
+            // threshold alerts, and state-change events are all applied.
+            $selftestValues = [];
+
             // Merged health state — overall status + critical warning stored at poll time.
-            if ($sensor = $sensors->get("{$idx}_health")) {
+            if ($sensors->has("{$idx}_health")) {
                 $row = DB::table('smart_nvme_health')
                     ->where('app_id', $this->appId)
                     ->where('disk_key', $diskKey)
                     ->first(['overall_status', 'critical_warning']);
                 $value = $row === null ? null : $this->nvmeHealthLevel($row->overall_status, $row->critical_warning);
-                $this->updateMibSensor($this->device, $sensor, $value !== null ? (float) $value : null);
+                if ($value !== null) {
+                    $selftestValues["{$idx}_health"] = (float) $value;
+                }
             }
 
             // Self-test status from DB (current op, else most recent log result).
-            if ($sensor = $sensors->get("{$idx}_selftest_status")) {
+            if ($sensors->has("{$idx}_selftest_status")) {
                 $currentOp = (int) (DB::table('smart_nvme_health')
                     ->where('app_id', $this->appId)
                     ->where('disk_key', $diskKey)
@@ -929,15 +929,25 @@ class Common extends Application
                     ->map(static fn ($r) => (array) $r)
                     ->all();
                 $value = $this->nvmeSelftestStatusValue($currentOp, $entries);
-                $this->updateMibSensor($this->device, $sensor, $value !== null ? (float) $value : null);
+                if ($value !== null) {
+                    $selftestValues["{$idx}_selftest_status"] = (float) $value;
+                }
             }
 
             // Self-test age (recomputed each poll: grows over time, resets when a test runs).
+            // Raw value is hours; updateSensorValues() applies the sensor's stored
+            // multiplier (60) to convert to minutes, matching the 'runtime' sensor unit.
             foreach (['short' => 1, 'long' => 2] as $suffix => $testType) {
-                if ($sensor = $sensors->get("{$idx}_selftest_{$suffix}")) {
+                if ($sensors->has("{$idx}_selftest_{$suffix}")) {
                     $age = $this->nvmeSelftestAgeHours($diskKey, $testType);
-                    $this->updateMibSensor($this->device, $sensor, $age !== null ? (float) $age : null);
+                    if ($age !== null) {
+                        $selftestValues["{$idx}_selftest_{$suffix}"] = (float) $age;
+                    }
                 }
+            }
+
+            if ($selftestValues !== []) {
+                $this->updateSensorValues($selftestValues, "app:smart_mib:{$idx}_");
             }
         }
     }
@@ -977,7 +987,7 @@ class Common extends Application
         $values = [];
         foreach ($walked as $sensorIdx => $rawValue) {
             if ($sensor = $bySuffix[(string) $sensorIdx] ?? null) {
-                $raw        = $this->leafValue($rawValue, 'smartmonSensorValue');
+                $raw = $this->leafValue($rawValue, 'smartmonSensorValue');
                 $operStatus = $this->intValue($this->leafValue($rawValue, 'smartmonSensorOperStatus'));
                 // SmartmonSensorStatus: ok(1) = value reported; unavailable(2)/nonoperational(3) = no trustworthy reading.
                 if ($operStatus !== null && $operStatus !== 1) {
@@ -1041,24 +1051,6 @@ class Common extends Application
                 ], $fields);
             }
         }
-    }
-
-    private function updateMibSensor(Device $device, Sensor $sensor, ?float $value): void
-    {
-        $this->vlog("updateMibSensor: {$sensor->sensor_index} ({$sensor->sensor_class}) <- " . var_export($value, true));
-
-        $sensor->sensor_current = $value;
-        $sensor->save();
-
-        $tags = [
-            'sensor_class' => $sensor->sensor_class,
-            'sensor_type'  => $sensor->sensor_type,
-            'sensor_descr' => $sensor->sensor_descr,
-            'sensor_index' => $sensor->sensor_index,
-            'rrd_name'     => ['sensor', $sensor->sensor_class, $sensor->sensor_type, $sensor->sensor_index],
-            'rrd_def'      => RrdDefinition::make()->addDataset('sensor', 'GAUGE'),
-        ];
-        app('Datastore')->put($device, 'sensor', $tags, ['sensor' => $value]);
     }
 
     // ── NVMe ──────────────────────────────────────────────────────────────────
@@ -1128,18 +1120,15 @@ class Common extends Application
             $health['smartmonNvmeCriticalWarning'] ?? null
         );
 
-        app('sensor-discovery')
-            ->discover(new Sensor([
-                'device_id'      => $device['device_id'],
-                'poller_type'    => 'agent',
-                'sensor_class'   => 'state',
-                'sensor_type'    => 'smart_nvme_health',
-                'sensor_index'   => "{$idx}_health",
-                'sensor_oid'     => "app:smart_mib:{$idx}_health",
-                'group'          => $group,
-                'sensor_descr'   => "{$group} {$devName} Health",
-                'sensor_current' => $state,
-            ]))
+        $this->discoverSensor(
+            class: 'state',
+            type: 'smart_nvme_health',
+            index: "{$idx}_health",
+            oid: "app:smart_mib:{$idx}_health",
+            descr: "{$group} {$devName} Health",
+            current: $state,
+            group: $group,
+        )
             ->withStateTranslations('smart_nvme_health', [
                 StateTranslation::define('OK', 1, Severity::Ok),
                 StateTranslation::define('Warning', 2, Severity::Warning),
@@ -1168,19 +1157,15 @@ class Common extends Application
         $devName = $this->sensorLabel($dev, $dev['snmp_index']);
         $group = 'SMART';
 
-        app('sensor-discovery')
-            ->discover(new Sensor([
-                'device_id'         => $device['device_id'],
-                'poller_type'       => 'agent',
-                'sensor_class'      => 'state',
-                'sensor_type'       => 'smart_nvme_selftest_status',
-                'sensor_index'      => "{$idx}_selftest_status",
-                'sensor_oid'        => "app:smart_mib:{$idx}_selftest_status",
-                'group'             => $group,
-
-                'sensor_descr'      => "{$group} {$devName} Self-test Status",
-                'sensor_current'    => $value,
-            ]))
+        $this->discoverSensor(
+            class: 'state',
+            type: 'smart_nvme_selftest_status',
+            index: "{$idx}_selftest_status",
+            oid: "app:smart_mib:{$idx}_selftest_status",
+            descr: "{$group} {$devName} Self-test Status",
+            current: $value,
+            group: $group,
+        )
             ->withStateTranslations('smart_nvme_selftest_status', [
                 StateTranslation::define('Completed without error', 0, Severity::Ok),
                 StateTranslation::define('Aborted by self-test command', 1, Severity::Ok),

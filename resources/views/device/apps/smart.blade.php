@@ -373,7 +373,7 @@
         }
         $hours = (int) round((float) $sensor->sensor_current);
         $class = 'default';
-        if ($sensor->sensor_max !== null && $hours >= (float) $sensor->sensor_max) {
+        if ($sensor->sensor_limit !== null && $hours >= (float) $sensor->sensor_limit) {
             $class = 'danger';
         } elseif ($sensor->sensor_limit_warn !== null && $hours >= (float) $sensor->sensor_limit_warn) {
             $class = 'warning';
@@ -417,10 +417,14 @@
     }
     echo implode(' | ', $links);
 
-    // Per-disk view-mode sub-nav.
+    // Per-disk view-mode sub-nav, filtered to the modes the selected disk's type supports.
     if ($selectedDisk !== null && $data->disk($selectedDisk) !== null) {
+        $diskViewModes = $data->diskViewModesFor($data->disk($selectedDisk));
+        if (! isset($diskViewModes[$viewMode])) {
+            $viewMode = array_key_first($diskViewModes);
+        }
         $viewLinks = [];
-        foreach ($viewModes as $mode => $title) {
+        foreach ($diskViewModes as $mode => $title) {
             $lbl = htmlspecialchars($title);
             if ($mode === $viewMode) {
                 $lbl = '<span class="pagemenu-selected">' . $lbl . '</span>';
@@ -489,6 +493,108 @@
         </div>
         @php $panelEnd(); @endphp
 
+        {{-- All-disk SMART Attributes cross-table (SATA/SAS disks only) --}}
+        @php
+            $sataKeys = array_values(array_filter($data->diskKeys(), static fn ($k) => ! $data->isNvme($data->disk($k))));
+
+            if ($sataKeys !== []) {
+                // Collect all unique attribute IDs+names across all SATA/SAS disks.
+                $allAttrCols = [];  // id => display-name
+                foreach ($sataKeys as $k) {
+                    foreach ($data->disk($k)['attributes'] ?? [] as $a) {
+                        $id = (int) ($a['attribute_id'] ?? 0);
+                        if ($id > 0 && ! isset($allAttrCols[$id])) {
+                            $allAttrCols[$id] = str_replace('_', ' ', (string) ($a['name'] ?? ''));
+                        }
+                    }
+                }
+                ksort($allAttrCols);
+
+                if ($allAttrCols !== []) {
+                    $dark    = session('applied_site_style') === 'dark';
+                    $aaId    = 'smart-allattr-' . $deviceId;
+                    $aaRadio = $aaId . '-mode';
+
+                    $panelStart('SMART Attributes — All Disks');
+
+                    // Mode selector.
+                    echo '<div style="margin-bottom:10px;display:flex;gap:18px;align-items:center">'
+                        . '<strong style="white-space:nowrap">Show:</strong>'
+                        . '<label style="font-weight:normal;margin:0;cursor:pointer"><input type="radio" name="' . $aaRadio . '" value="rawdisp" checked onchange="smartAllAttrMode(\'' . $aaId . '\',this.value)"> Raw Display</label>'
+                        . '<label style="font-weight:normal;margin:0;cursor:pointer"><input type="radio" name="' . $aaRadio . '" value="raw" onchange="smartAllAttrMode(\'' . $aaId . '\',this.value)"> Raw</label>'
+                        . '<label style="font-weight:normal;margin:0;cursor:pointer"><input type="radio" name="' . $aaRadio . '" value="norm" onchange="smartAllAttrMode(\'' . $aaId . '\',this.value)"> Normalized</label>'
+                        . '<span class="text-muted" style="font-size:12px">SATA/SAS only — cells coloured by attribute status.</span>'
+                        . '</div>';
+
+                    echo '<div class="table-responsive"><table id="' . $aaId . '" class="table table-condensed table-hover sa-mode-rawdisp" style="white-space:nowrap">';
+
+                    // Header row: ID (small) above Name.
+                    echo '<thead><tr><th style="white-space:nowrap">Disk</th>';
+                    foreach ($allAttrCols as $id => $name) {
+                        $tip = $tooltipForLabel($name);
+                        $inner = '<small class="text-muted">' . $id . '</small><br>' . htmlspecialchars($name);
+                        $hdr = $tip !== ''
+                            ? '<abbr style="cursor:help;text-decoration:underline dotted;white-space:normal" title="'
+                                . htmlspecialchars($tip, ENT_QUOTES) . '">' . $inner . '</abbr>'
+                            : $inner;
+                        echo '<th style="text-align:center;min-width:70px;font-weight:normal">' . $hdr . '</th>';
+                    }
+                    echo '</tr></thead><tbody>';
+
+                    // One row per disk.
+                    foreach ($sataKeys as $k) {
+                        $d       = $data->disk($k);
+                        $devLink = generate_link(htmlspecialchars($data->deviceLabel($d)), $linkArray, ['disk' => $k]);
+
+                        // Build attribute lookup for this disk.
+                        $attrMap = [];
+                        foreach ($d['attributes'] ?? [] as $a) {
+                            $attrMap[(int) ($a['attribute_id'] ?? 0)] = $a;
+                        }
+
+                        echo '<tr><td style="white-space:nowrap">' . $devLink . '</td>';
+                        foreach ($allAttrCols as $id => $_) {
+                            if (! isset($attrMap[$id])) {
+                                echo '<td style="text-align:center" class="text-muted">-</td>';
+                                continue;
+                            }
+                            $a       = $attrMap[$id];
+                            $status  = (int) ($a['status'] ?? 0);
+                            $rawDisp = htmlspecialchars($data->formatRawSpaced($a['value_raw_string'] ?? $a['value_raw'] ?? ''));
+                            $rawNum  = is_numeric($a['value_raw'] ?? null) ? htmlspecialchars((string) (int) $a['value_raw']) : '-';
+                            $norm    = is_numeric($a['value_norm'] ?? null) ? htmlspecialchars((string) (int) $a['value_norm']) : '-';
+
+                            $bg = match ($status) {
+                                2  => $dark ? 'background-color:#5a2a2a' : 'background-color:#f2a8a8',
+                                3  => $dark ? 'background-color:#3f2a2c' : 'background-color:#fbdede',
+                                -1 => $dark ? 'background-color:#15171a' : 'background-color:#f4f4f4',
+                                default => '',
+                            };
+                            echo '<td style="text-align:center;' . $bg . '">'
+                                . '<span class="sa-rawdisp">' . $rawDisp . '</span>'
+                                . '<span class="sa-raw">' . $rawNum . '</span>'
+                                . '<span class="sa-norm">' . $norm . '</span>'
+                                . '</td>';
+                        }
+                        echo '</tr>';
+                    }
+
+                    echo '</tbody></table></div>';
+                    echo <<<'SCRIPT'
+<style>
+.sa-mode-rawdisp .sa-raw,.sa-mode-rawdisp .sa-norm{display:none}
+.sa-mode-raw .sa-rawdisp,.sa-mode-raw .sa-norm{display:none}
+.sa-mode-norm .sa-rawdisp,.sa-mode-norm .sa-raw{display:none}
+</style>
+<script>
+function smartAllAttrMode(id,mode){var t=document.getElementById(id);if(t)t.className=t.className.replace(/\bsa-mode-\S+/g,'')+' sa-mode-'+mode;}
+</script>
+SCRIPT;
+                    $panelEnd();
+                }
+            }
+        @endphp
+
         {{-- Overview graphs + jump nav --}}
         @php
             $now    = LibrenmsConfig::get('time.now');
@@ -541,7 +647,9 @@
     {{-- Per-disk detail                                                     --}}
     {{-- ================================================================== --}}
     @php $detailDisk = $data->disk($selectedDisk); @endphp
-    @if($detailDisk !== null && $data->isNvme($detailDisk))
+    @if($detailDisk !== null && $data->isNvme($detailDisk) && $viewMode === 'overview')
+        @include('device.apps.smart-nvme-overview', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @elseif($detailDisk !== null && $data->isNvme($detailDisk))
         @include('device.apps.smart-nvme-detail', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($viewMode === 'overview')
         {{-- Alternative drive view, laid out like the device Overview tab (SATA/SAS only). --}}
