@@ -134,6 +134,18 @@ class Common extends Application
         'extended', 'short', 'conveyance', 'selective',
     ];
 
+    // Per-disk child tables keyed by (app_id, disk_key). Pruned alongside
+    // smart_devices when a drive disappears. smart_sata_change is keyed by
+    // device_idx (snmp_index) instead and handled separately.
+    private const DEVICE_CHILD_TABLES = [
+        'smart_sata_info', 'smart_sata_health', 'smart_sata_attributes',
+        'smart_sata_selftest_log', 'smart_sata_error_log', 'smart_sata_error_cmd',
+        'smart_sata_erc', 'smart_sata_phy_events', 'smart_sata_selective_test',
+        'smart_sata_log_dir', 'smart_sata_dev_stats', 'smart_sata_pending_defects',
+        'smart_nvme_info', 'smart_nvme_health', 'smart_nvme_namespaces', 'smart_nvme_selftest_log',
+        'smart_sas_info', 'smart_sas_health', 'smart_sas_error_counters', 'smart_sas_selftest_log',
+    ];
+
     private ?array $commonDevices = null;
     private ?array $sataChangeRows = null;
     private ?array $sataSubindexChangeRows = null;
@@ -162,7 +174,19 @@ class Common extends Application
 
         $this->vlog("shouldDiscover: MIB rowCount={$rowCount}");
 
-        return $rowCount > 0;
+        if ($rowCount > 0) {
+            return true;
+        }
+
+        // The device-table OID is empty or unresponsive. Still run discovery when
+        // the DB holds devices for this app so the cleanup pass can remove the now
+        // stale device rows, child rows, and sensors.
+        $hasRows = DB::table('smart_devices')
+            ->where('app_id', $this->app->app_id)
+            ->exists();
+        $this->vlog('shouldDiscover: OID empty/unresponsive, DB ' . ($hasRows ? 'non-empty — run for cleanup' : 'empty — skip'));
+
+        return $hasRows;
     }
 
     public function discover(): void
@@ -201,6 +225,22 @@ class Common extends Application
         // SENSOR-MIB values (temperature, NVMe spare/used) for every polled device.
         $this->pollSensorValues();
         update_application($this->app, 'ok', null);
+    }
+
+    /**
+     * Remove every DB row owned by this app when the application is deleted or
+     * its handler changes. Runs before initContext(), so read app_id directly.
+     * Returns the sensor count deleted by the parent (the documented contract).
+     */
+    public function cleanup(): int
+    {
+        $appId = $this->app->app_id;
+
+        foreach ([...self::DEVICE_CHILD_TABLES, 'smart_devices', 'smart_sata_change', 'smart_app_state'] as $table) {
+            DB::table($table)->where('app_id', $appId)->delete();
+        }
+
+        return parent::cleanup();
     }
 
     /** Cache the stable identity context used throughout discovery and polling. */
@@ -317,6 +357,7 @@ class Common extends Application
         $this->correctGuessedSensorLimits($intendedLimits);
 
         $this->cleanupStaleMibSensors();
+        $this->cleanupStaleDevices();
     }
 
     /**
@@ -519,6 +560,45 @@ class Common extends Application
 
         if ($deleted > 0) {
             echo PHP_EOL . "smart_mib: removed {$deleted} stale sensor(s)" . PHP_EOL;
+        }
+    }
+
+    /**
+     * Remove DB rows for drives that no longer appear in the device table.
+     *
+     * Covers two cases with one pass:
+     *  - a single drive removed while SNMP is healthy (prune by disk_key), and
+     *  - the device-table OID gone empty/unresponsive (commonDevices is empty,
+     *    so every row for this app is deleted — the full-wipe path).
+     */
+    private function cleanupStaleDevices(): void
+    {
+        $keepKeys = array_values(array_map(
+            static fn ($dev) => $dev['disk_key'],
+            $this->commonDevices ?? []
+        ));
+        $keepIdx = array_map('intval', array_keys($this->commonDevices ?? []));
+
+        $totalDeleted = 0;
+
+        // Disk-keyed child tables + the device table itself.
+        foreach ([...self::DEVICE_CHILD_TABLES, 'smart_devices'] as $table) {
+            $query = DB::table($table)->where('app_id', $this->appId);
+            if ($keepKeys !== []) {
+                $query->whereNotIn('disk_key', $keepKeys);
+            }
+            $totalDeleted += $query->delete();
+        }
+
+        // smart_sata_change is keyed by device_idx (snmp_index), not disk_key.
+        $changeQuery = DB::table('smart_sata_change')->where('app_id', $this->appId);
+        if ($keepIdx !== []) {
+            $changeQuery->whereNotIn('device_idx', $keepIdx);
+        }
+        $totalDeleted += $changeQuery->delete();
+
+        if ($totalDeleted > 0) {
+            echo PHP_EOL . "smart_mib: removed {$totalDeleted} stale device row(s)" . PHP_EOL;
         }
     }
 
@@ -1092,6 +1172,66 @@ class Common extends Application
                 'wwn'                  => $row['smartmonDeviceWwn'] ?? null,
             ];
         }
+
+        $this->dedupeCommonDevices();
+    }
+
+    /**
+     * Collapse device-table entries that describe the same physical drive.
+     *
+     * A drive enumerated via two transports can appear twice — e.g. one path
+     * reports a WWN and the other only a serial — yielding two different
+     * disk_keys. Entries sharing any non-empty WWN or serial are treated as one
+     * logical drive; the most complete entry (WWN-bearing, then lowest
+     * snmp_index) is kept as canonical and the rest are dropped so only a single
+     * row is discovered, stored, and shown.
+     */
+    private function dedupeCommonDevices(): void
+    {
+        if ($this->commonDevices === null || count($this->commonDevices) < 2) {
+            return;
+        }
+
+        // Order so the most complete identity wins as canonical: WWN-bearing
+        // first, then by numeric snmp_index for stable, deterministic results.
+        $ordered = $this->commonDevices;
+        uksort($ordered, function ($a, $b) use ($ordered) {
+            $aw = trim((string) ($ordered[$a]['wwn'] ?? '')) !== '' ? 0 : 1;
+            $bw = trim((string) ($ordered[$b]['wwn'] ?? '')) !== '' ? 0 : 1;
+
+            return $aw <=> $bw ?: (int) $a <=> (int) $b;
+        });
+
+        $seen = [];   // identity value => canonical snmp_index
+        $kept = [];
+        foreach ($ordered as $idx => $dev) {
+            $identities = array_filter([
+                trim((string) ($dev['wwn'] ?? '')),
+                trim((string) ($dev['serial_number'] ?? '')),
+            ], static fn ($v) => $v !== '');
+
+            $canonical = null;
+            foreach ($identities as $id) {
+                if (isset($seen[$id])) {
+                    $canonical = $seen[$id];
+                    break;
+                }
+            }
+            if ($canonical !== null) {
+                $this->vlog("dedupeCommonDevices: snmp_index={$idx} (disk_key={$dev['disk_key']}) is a duplicate of snmp_index={$canonical} — dropped");
+                continue;
+            }
+            foreach ($identities as $id) {
+                $seen[$id] = $idx;
+            }
+            $kept[(string) $idx] = $dev;
+        }
+
+        $dropped = count($this->commonDevices) - count($kept);
+        if ($dropped > 0) {
+            $this->vlog("dedupeCommonDevices: collapsed {$dropped} duplicate device entry/entries");
+        }
+        $this->commonDevices = $kept;
     }
 
     private function sataChangeByDeviceTable(): void
