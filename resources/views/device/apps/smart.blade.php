@@ -660,9 +660,9 @@ SCRIPT;
     @elseif($detailDisk !== null && $data->isNvme($detailDisk))
         {{-- Graphs (NVMe only; this is the only remaining viewMode that reaches here). --}}
         @include('device.apps.smart-nvme-graphs', ['disk' => $detailDisk, 'viewMode' => $viewMode])
-    @elseif($viewMode === 'overview')
-        {{-- Alternative drive view, laid out like the device Overview tab (SATA/SAS only). --}}
-        @include('device.apps.smart-sata-overview', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @elseif($viewMode === 'basic')
+        {{-- Identity, health sensors, SMART attributes (SATA/SAS only). --}}
+        @include('device.apps.smart-sata-basic', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($viewMode === 'metadata')
         {{-- Static identity/capability metadata + FARM header pages (SATA/SAS only). --}}
         @include('device.apps.smart-sata-metadata', ['disk' => $detailDisk, 'viewMode' => $viewMode])
@@ -673,6 +673,7 @@ SCRIPT;
         {{-- Device statistics tables (General, Rotating Media, Errors, Transport, FARM*) + PHY counters. --}}
         @include('device.apps.smart-sata-tables', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @else
-        @include('device.apps.smart-sata-detail', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        {{-- Graphs (SATA/SAS only; this is the only remaining viewMode that reaches here). --}}
+        @include('device.apps.smart-sata-graphs', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @endif
 @endif

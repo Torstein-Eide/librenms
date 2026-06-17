@@ -1,10 +1,10 @@
-{{-- SATA/SAS per-disk "Overview" view: identity, health sensors, pending defects, --}}
+{{-- SATA/SAS per-disk "Basic" view: identity, health sensors, pending defects, --}}
 {{-- and SMART attributes. SCT ERC lives on the Metadata view; device statistics  --}}
 {{-- and PHY event counters live on the Statistics view.                           --}}
 {{-- Inherits closures ($panelStart, $panelEnd, $tableRow, $tooltipForLabel, --}}
 {{-- $labelWithTooltip, $formatHoursAgo, $stateBadge, $tempBadge, $wearBadge, --}}
-{{-- $percentBadge, $selftestBadge) and $data, $device, $selectedDisk, $linkArray --}}
-{{-- from the parent smart.blade.php. --}}
+{{-- $percentBadge, $selftestBadge) and $data, $device, $selectedDisk, $linkArray, --}}
+{{-- $currentUrl, $viewCookie from the parent smart.blade.php. --}}
 @php
     $disk    = $data->disk($selectedDisk);
     $idx     = $disk['idx'];
@@ -14,6 +14,20 @@
     $powerOnHours = $data->powerOnHours($disk);
     $healthSensor = $data->healthSensor($selectedDisk);
     $healthBadge  = $stateBadge($healthSensor, 'SMART overall-health self-assessment test result.');
+
+    // Navigate to another disk view mode: sets the cookie the sub-nav reads, then the
+    // href (the current URL) reloads the page with that mode picked up.
+    $gotoModeAttr = static function (string $mode) use ($viewCookie): string {
+        return 'document.cookie=\'' . htmlspecialchars($viewCookie, ENT_QUOTES) . '=' . $mode
+            . '; path=/; max-age=31536000; samesite=lax\';';
+    };
+    $gotoRowOpen = static function (string $mode) use ($gotoModeAttr, $currentUrl): string {
+        return '<tr style="cursor:pointer" onclick="' . $gotoModeAttr($mode) . 'window.location=\''
+            . htmlspecialchars($currentUrl, ENT_QUOTES) . '\';">';
+    };
+    $gotoHeaderLink = static function (string $mode, string $inner) use ($gotoModeAttr, $currentUrl): string {
+        return '<a href="' . htmlspecialchars($currentUrl, ENT_QUOTES) . '" onclick="' . $gotoModeAttr($mode) . '" style="color:inherit">' . $inner . '</a>';
+    };
 @endphp
 
 <div class="tw:grid tw:grid-cols-1 tw:md:grid-cols-2 tw:gap-4">
@@ -59,15 +73,24 @@
             $identityTitle = '<i class="fa ' . ($isSsd ? 'fa-microchip' : 'fa-hdd-o') . '" style="margin-right:6px"></i>'
                 . htmlspecialchars($identityHd) . ' (' . htmlspecialchars($data->deviceLabel($disk)) . ')';
 
-            $panelStart($identityTitle, $healthBadge);
-            echo '<table class="table table-condensed table-hover" style="width:100%">';
+            $identityRows = [];
             foreach ($rows as $label => $value) {
                 if ($value === null || $value === '') { continue; }
                 $cell = $value instanceof \Illuminate\Support\HtmlString
                     ? (string) $value : htmlspecialchars((string) $value);
-                echo $tableRow($label, $cell, $tooltipForLabel($label));
+                $identityRows[] = $tableRow($label, $cell, $tooltipForLabel($label));
             }
-            echo '</table>';
+
+            $panelStart($identityTitle, $healthBadge);
+            $half = (int) ceil(count($identityRows) / 2);
+            $colA = array_slice($identityRows, 0, $half);
+            $colB = array_slice($identityRows, $half);
+            echo '<div class="tw:flex tw:flex-wrap tw:gap-4">';
+            echo '<table class="table table-condensed table-hover" style="flex:1 1 0;width:100%;min-width:0">' . implode('', $colA) . '</table>';
+            if ($colB !== []) {
+                echo '<table class="table table-condensed table-hover" style="flex:1 1 0;width:100%;min-width:0">' . implode('', $colB) . '</table>';
+            }
+            echo '</div>';
             $panelEnd();
         @endphp
 
@@ -124,10 +147,14 @@
             $healthSensors = $data->diskSensors($selectedDisk);
             uasort($healthSensors, static fn ($a, $b) => (($a->sensor_class === 'state') ? 0 : 1) <=> (($b->sensor_class === 'state') ? 0 : 1));
 
-            $panelStart('<i class="fa fa-heartbeat" style="margin-right:6px"></i>Health', $healthBadge);
+            $healthHeader = $gotoHeaderLink('tables', '<i class="fa fa-heartbeat" style="margin-right:6px"></i>Health');
+            $panelStart($healthHeader, $healthBadge);
             echo '<table class="table table-condensed table-hover" style="width:100%">';
             foreach ($healthSensors as $s) {
-                echo '<tr>'
+                $isSelftestAge = $s->sensor_class === 'runtime'
+                    && (str_ends_with((string) $s->sensor_index, '_selftest_short')
+                        || str_ends_with((string) $s->sensor_index, '_selftest_long'));
+                echo ($isSelftestAge ? $gotoRowOpen('selftest') : '<tr>')
                     . '<td style="white-space:nowrap"><i class="fa ' . $sensorIcon($s->sensor_class) . ' text-muted" style="margin-right:6px"></i>' . htmlspecialchars($data->shortSensorName($s, $disk)) . '</td>'
                     . '<td style="width:110px">' . $sensorMini($s) . '</td>'
                     . '<td style="text-align:right">' . $sensorBadge($s) . '</td>'
@@ -154,7 +181,7 @@
                     ? '<span class="label label-default">Enabled</span>'
                     : '<span class="label" style="background-color:#e8857f">Disabled</span>';
                 $odcVal    = $odcBadge . ', ' . htmlspecialchars($data->decode('offline_status', (int) $odcStatus & 0x7f));
-                echo '<tr><td style="white-space:nowrap"><i class="fa fa-clock-o text-muted" style="margin-right:6px"></i>'
+                echo $gotoRowOpen('selftest') . '<td style="white-space:nowrap"><i class="fa fa-clock-o text-muted" style="margin-right:6px"></i>'
                     . $labelWithTooltip('Offline Data Collection', $tooltipForLabel('Auto Offline Data Collection')) . '</td>'
                     . '<td colspan="2" style="text-align:right">' . $odcVal . '</td></tr>';
             }
@@ -174,7 +201,9 @@
                 $attrVal = 'Total: <span class="label label-default">' . $attrCount . '</span>'
                     . ' &nbsp; Has failed: <span class="label label-' . ($attrFailed > 0 ? 'warning' : 'default') . '">' . $attrFailed . '</span>'
                     . ' &nbsp; Is failing: <span class="label label-' . ($attrFailing > 0 ? 'danger' : 'default') . '">' . $attrFailing . '</span>';
-                echo '<tr><td style="white-space:nowrap"><i class="fa fa-list text-muted" style="margin-right:6px"></i>'
+                $attrAnchorId = 'smart-attributes-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $idx);
+                echo '<tr style="cursor:pointer" onclick="document.getElementById(\'' . $attrAnchorId . '\').scrollIntoView({behavior:\'smooth\'});">'
+                    . '<td style="white-space:nowrap"><i class="fa fa-list text-muted" style="margin-right:6px"></i>'
                     . '<abbr style="cursor:help;text-decoration:underline dotted" title="Attributes with NA status excluded">SMART Attributes Overall</abbr></td>'
                     . '<td colspan="2" style="text-align:right">' . $attrVal . '</td></tr>';
             }
@@ -203,6 +232,9 @@
 {{-- ====================== Full-width: SMART Attributes ====================== --}}
 @if(! empty($disk['attributes']))
 @php
+    $attrAnchorId = 'smart-attributes-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $idx);
+    echo '<a id="' . $attrAnchorId . '" style="position:relative;top:-70px;display:block;visibility:hidden"></a>';
+
     $panelStart('SMART Attributes');
 
     $attrAppId = $data->app->app_id;
