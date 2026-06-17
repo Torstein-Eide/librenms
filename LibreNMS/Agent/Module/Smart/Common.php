@@ -396,7 +396,7 @@ class Common extends Application
         $this->walkAndSyncSataTable('smartmonSataDevStatTable', 3, self::SATA_TID_DEV_STAT, [$this, 'syncSataDevStatRows'], true);
 
         // Self-test age sensors, computed from the freshly-synced self-test log + power-on hours.
-        $this->discoverSataSelftestAgeSensors();
+        $this->discoverSelftestAgeSensors($this->sataDeviceList, 'smart_selftest_', 'smart_sata_health', 'smart_sata_selftest_log');
 
         // Register all sensor types with the discovery system.
         $this->syncSensorTypes();
@@ -470,40 +470,13 @@ class Common extends Application
     }
 
     /**
-     * Hours elapsed since the most recent NVMe self-test of the given type
-     * (1 = short, 2 = extended), computed from the synced DB rows.
-     * Returns null when power-on hours or a matching self-test entry is unknown.
-     */
-    private function nvmeSelftestAgeHours(string $diskKey, int $testType): ?int
-    {
-        $currentPoh = DB::table('smart_nvme_health')
-            ->where('app_id', $this->appId)
-            ->where('disk_key', $diskKey)
-            ->value('power_on_hours');
-        if ($currentPoh === null) {
-            return null;
-        }
-
-        $lastTestPoh = DB::table('smart_nvme_selftest_log')
-            ->where('app_id', $this->appId)
-            ->where('disk_key', $diskKey)
-            ->where('test_type', $testType)
-            ->max('power_on_hours');
-        if ($lastTestPoh === null) {
-            return null;
-        }
-
-        return max(0, (int) $currentPoh - (int) $lastTestPoh);
-    }
-
-    /**
      * Hours elapsed since the most recent self-test of the given type
      * (1 = short, 2 = extended/long), computed from the synced DB rows.
      * Returns null when power-on hours or a matching self-test entry is unknown.
      */
-    private function sataSelftestAgeHours(string $diskKey, int $testType): ?int
+    private function selftestAgeHours(string $healthTable, string $logTable, string $diskKey, int $testType): ?int
     {
-        $currentPoh = DB::table('smart_sata_health')
+        $currentPoh = DB::table($healthTable)
             ->where('app_id', $this->appId)
             ->where('disk_key', $diskKey)
             ->value('power_on_hours');
@@ -511,7 +484,7 @@ class Common extends Application
             return null;
         }
 
-        $lastTestPoh = DB::table('smart_sata_selftest_log')
+        $lastTestPoh = DB::table($logTable)
             ->where('app_id', $this->appId)
             ->where('disk_key', $diskKey)
             ->where('test_type', $testType)
@@ -525,53 +498,17 @@ class Common extends Application
 
     /**
      * Register the "Last Short/Long Test" age sensors (runtime class) for each
-     * SATA device. Runs after the self-test log table has been synced so the
-     * age is computed from the current cycle's data.
-     */
-    private function discoverSataSelftestAgeSensors(): void
-    {
-        $device = $this->device;
-        $group = 'SMART';
-        foreach ($this->sataDeviceList as $dev) {
-            $diskKey = $dev['disk_key'];
-            $idx = $this->mibDiskIndex($diskKey);
-            $devName = $this->sensorLabel($dev, $dev['snmp_index']);
-
-            foreach ([
-                ['short', 1, 'Last Short SelfTest', 12000, 16000],
-                ['long',  2, 'Last Long SelfTest',  57600, 60000],
-            ] as [$suffix, $testType, $label, $warn, $max]) {
-                $age = $this->sataSelftestAgeHours($diskKey, $testType);
-                if ($age === null) {
-                    continue;
-                }
-                $this->discoverSensor(
-                    class: 'runtime',
-                    type: "smart_selftest_{$suffix}",
-                    index: "{$idx}_selftest_{$suffix}",
-                    oid: "app:smart_mib:{$idx}_selftest_{$suffix}",
-                    descr: "{$group} {$devName} {$label}",
-                    current: (float) $age * 60,
-                    group: $group,
-                    multiplier: 60,
-                    warnLimit: $warn,
-                    highLimit: $max,
-                );
-            }
-        }
-    }
-
-    /**
-     * Register the "Last Short/Long Test" age sensors (runtime class) for each
-     * NVMe device. Runs after the self-test log table has been synced. Only
+     * device in $deviceList. Runs after the self-test log table has been
+     * synced so the age is computed from the current cycle's data. Only
      * creates a sensor when a matching log entry with power-on hours exists —
-     * not all NVMe devices implement the self-test log.
+     * not all devices (especially NVMe) implement the self-test log.
+     *
+     * @param  array<int|string, array{disk_key: string, snmp_index: string}>  $deviceList
      */
-    private function discoverNvmeSelftestAgeSensors(): void
+    private function discoverSelftestAgeSensors(array $deviceList, string $sensorTypePrefix, string $healthTable, string $logTable): void
     {
-        $device = $this->device;
         $group = 'SMART';
-        foreach ($this->nvmeDeviceList as $dev) {
+        foreach ($deviceList as $dev) {
             $diskKey = $dev['disk_key'];
             $idx = $this->mibDiskIndex($diskKey);
             $devName = $this->sensorLabel($dev, $dev['snmp_index']);
@@ -580,13 +517,13 @@ class Common extends Application
                 ['short', 1, 'Last Short SelfTest', 12000, 16000],
                 ['long',  2, 'Last Long SelfTest',  57600, 60000],
             ] as [$suffix, $testType, $label, $warn, $max]) {
-                $age = $this->nvmeSelftestAgeHours($diskKey, $testType);
+                $age = $this->selftestAgeHours($healthTable, $logTable, $diskKey, $testType);
                 if ($age === null) {
                     continue;
                 }
                 $this->discoverSensor(
                     class: 'runtime',
-                    type: "smart_nvme_selftest_{$suffix}",
+                    type: "{$sensorTypePrefix}{$suffix}",
                     index: "{$idx}_selftest_{$suffix}",
                     oid: "app:smart_mib:{$idx}_selftest_{$suffix}",
                     descr: "{$group} {$devName} {$label}",
@@ -754,7 +691,7 @@ class Common extends Application
     {
         $this->sataDeviceList = $this->sataDevicesFromDb();
 
-        // Table: Health (change-guarded; DB sync — sensors updated from DB in pollSensorValues)
+        // Table: Health (change-guarded; DB sync — sensors updated below)
         $this->walkAndSyncSataTable('smartmonSataHealthTable', 1, self::SATA_TID_HEALTH, [$this, 'syncSataHealthRow']);
 
         // Table: Attributes (change-guarded; limited columns for DB sync + RRD)
@@ -771,8 +708,48 @@ class Common extends Application
         $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
         $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable', 2, self::SATA_TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
 
+        // Health, self-test status, and self-test age sensors, computed from the
+        // tables just synced above and batched through a single updateSensorValues()
+        // call per device so stored multipliers (selftest age -> minutes), threshold
+        // alerts, and state-change events are all applied.
+        foreach ($this->sataDeviceList as $dev) {
+            $this->pollSataDeviceSensors($dev);
+        }
+
         $this->persistSataChangeSnapshot();
         update_application($this->app, 'ok', null);
+    }
+
+    /** Update the SATA Health, Self-test Status, and Self-test age sensors for one device. */
+    private function pollSataDeviceSensors(array $dev): void
+    {
+        $diskKey = $dev['disk_key'];
+        $idx = $this->mibDiskIndex($diskKey);
+        $values = [];
+
+        // Health state sensor — synthesized from DB
+        $health = $this->synthesizeHealthFromDb($diskKey);
+        if ($health !== null) {
+            $values["{$idx}_health"] = (float) $health;
+        }
+
+        // Self-test execution status from DB
+        $raw = DB::table('smart_sata_health')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->value('selftest_exec_status_raw');
+        if ($raw !== null) {
+            $values["{$idx}_selftest_status"] = (float) $raw;
+        }
+
+        // Self-test age (recomputed each poll: grows over time, resets when a test runs).
+        // Raw value is hours; updateSensorValues() applies the sensor's stored
+        // multiplier (60) to convert to minutes, matching the 'runtime' sensor unit.
+        $values += $this->selftestAgeValues($idx, $diskKey, 'smart_sata_health', 'smart_sata_selftest_log');
+
+        if ($values !== []) {
+            $this->updateSensorValues($values, "app:smart_mib:{$idx}_");
+        }
     }
 
     /**
@@ -828,8 +805,11 @@ class Common extends Application
 
     /**
      * Poll smartmonSensorValue for every SATA + NVMe device (one SNMP walk for
-     * all types). Generic SENSOR-MIB sensors (temperature, NVMe spare/used) are
-     * matched by trailing index; the per-type state sensors are read from the DB.
+     * all types). Only the generic SENSOR-MIB sensors (temperature, NVMe
+     * spare/used, etc.) are updated here, matched by trailing index. The
+     * per-type synthesized sensors (Health, Self-test Status/age) are updated
+     * from pollSata()/pollNvme() instead, where the underlying DB tables they
+     * read from have just been synced.
      */
     private function pollSensorValues(): void
     {
@@ -849,117 +829,18 @@ class Common extends Application
             . count($this->sataDeviceList) . ' SATA / ' . count($this->nvmeDeviceList) . ' NVMe device(s) to update');
 
         foreach ($this->sataDeviceList as $devIdx => $dev) {
-            $diskKey = $dev['disk_key'];
-            $idx = $this->mibDiskIndex($diskKey);
-            $sensors = $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
-
-            // Health, self-test status, and self-test age are batched through a single
-            // updateSensorValues() call so stored multipliers (selftest age -> minutes),
-            // threshold alerts, and state-change events are all applied.
-            $sataValues = [];
-
-            // Health state sensor — synthesized from DB
-            if ($sensors->has("{$idx}_health")) {
-                $value = $this->synthesizeHealthFromDb($diskKey);
-                if ($value !== null) {
-                    $sataValues["{$idx}_health"] = (float) $value;
-                }
-            }
-
-            // Self-test execution status from DB
-            if ($sensors->has("{$idx}_selftest_status")) {
-                $raw = DB::table('smart_sata_health')
-                    ->where('app_id', $this->appId)
-                    ->where('disk_key', $diskKey)
-                    ->value('selftest_exec_status_raw');
-                if ($raw !== null) {
-                    $sataValues["{$idx}_selftest_status"] = (float) $raw;
-                }
-            }
-
-            // Self-test age (recomputed each poll: grows over time, resets when a test runs).
-            // Raw value is hours; updateSensorValues() applies the sensor's stored
-            // multiplier (60) to convert to minutes, matching the 'runtime' sensor unit.
-            foreach (['short' => 1, 'long' => 2] as $suffix => $testType) {
-                if ($sensors->has("{$idx}_selftest_{$suffix}")) {
-                    $age = $this->sataSelftestAgeHours($diskKey, $testType);
-                    if ($age !== null) {
-                        $sataValues["{$idx}_selftest_{$suffix}"] = (float) $age;
-                    }
-                }
-            }
-
-            if ($sataValues !== []) {
-                $this->updateSensorValues($sataValues, "app:smart_mib:{$idx}_");
-            }
+            $idx = $this->mibDiskIndex($dev['disk_key']);
+            $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
         }
 
         foreach ($this->nvmeDeviceList as $devIdx => $dev) {
-            $diskKey = $dev['disk_key'];
-            $idx = $this->mibDiskIndex($diskKey);
-            $sensors = $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
-
-            // Health, self-test status, and self-test age are batched through a single
-            // updateSensorValues() call so stored multipliers (selftest age -> minutes),
-            // threshold alerts, and state-change events are all applied.
-            $selftestValues = [];
-
-            // Merged health state — overall status + critical warning stored at poll time.
-            if ($sensors->has("{$idx}_health")) {
-                $row = DB::table('smart_nvme_health')
-                    ->where('app_id', $this->appId)
-                    ->where('disk_key', $diskKey)
-                    ->first(['overall_status', 'critical_warning']);
-                $value = $row === null ? null : $this->nvmeHealthLevel($row->overall_status, $row->critical_warning);
-                if ($value !== null) {
-                    $selftestValues["{$idx}_health"] = (float) $value;
-                }
-            }
-
-            // Self-test status from DB (current op, else most recent log result).
-            if ($sensors->has("{$idx}_selftest_status")) {
-                $currentOp = (int) (DB::table('smart_nvme_health')
-                    ->where('app_id', $this->appId)
-                    ->where('disk_key', $diskKey)
-                    ->value('current_selftest_op') ?? 0);
-                $entries = DB::table('smart_nvme_selftest_log')
-                    ->where('app_id', $this->appId)
-                    ->where('disk_key', $diskKey)
-                    ->get(['result', 'power_on_hours'])
-                    ->map(static fn ($r) => (array) $r)
-                    ->all();
-                $value = $this->nvmeSelftestStatusValue($currentOp, $entries);
-                if ($value !== null) {
-                    $selftestValues["{$idx}_selftest_status"] = (float) $value;
-                }
-            }
-
-            // Self-test age (recomputed each poll: grows over time, resets when a test runs).
-            // Raw value is hours; updateSensorValues() applies the sensor's stored
-            // multiplier (60) to convert to minutes, matching the 'runtime' sensor unit.
-            foreach (['short' => 1, 'long' => 2] as $suffix => $testType) {
-                if ($sensors->has("{$idx}_selftest_{$suffix}")) {
-                    $age = $this->nvmeSelftestAgeHours($diskKey, $testType);
-                    if ($age !== null) {
-                        $selftestValues["{$idx}_selftest_{$suffix}"] = (float) $age;
-                    }
-                }
-            }
-
-            if ($selftestValues !== []) {
-                $this->updateSensorValues($selftestValues, "app:smart_mib:{$idx}_");
-            }
+            $idx = $this->mibDiskIndex($dev['disk_key']);
+            $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
         }
     }
 
-    /**
-     * Load this device's app:smart_mib sensors, update the generic SENSOR-MIB
-     * ones from the walked values (matched by trailing index), and return the
-     * keyed collection so the caller can update its per-type state sensors.
-     *
-     * @return \Illuminate\Support\Collection<string, Sensor>
-     */
-    private function matchSensorMibValues(string $idx, string $devIdx, array $sensorValues): \Illuminate\Support\Collection
+    /** Load this device's app:smart_mib sensors and update the generic SENSOR-MIB ones from the walked values (matched by trailing index). */
+    private function matchSensorMibValues(string $idx, string $devIdx, array $sensorValues): void
     {
         $sensors = Sensor::where('device_id', $this->device['device_id'])
             ->where('sensor_oid', 'like', "app:smart_mib:{$idx}_%")
@@ -1007,8 +888,6 @@ class Common extends Application
         if ($values !== []) {
             $this->updateSensorValues($values, "app:smart_mib:{$idx}_");
         }
-
-        return $sensors;
     }
 
     /** Write per-disk RRDs for one SATA device. */
@@ -1099,7 +978,7 @@ class Common extends Application
             }
         }
 
-        $this->discoverNvmeSelftestAgeSensors();
+        $this->discoverSelftestAgeSensors($this->nvmeDeviceList, 'smart_nvme_selftest_', 'smart_nvme_health', 'smart_nvme_selftest_log');
         $this->syncNvmeSensorTypes();
     }
 
@@ -1258,7 +1137,65 @@ class Common extends Application
             }
             $this->syncNvmeSelfTestRows($dev, $this->subRows($selftests[$key] ?? null));
             $this->syncNvmeErrorLogRows($dev, $this->subRows($errors[$key] ?? null));
+
+            // Health, self-test status, and self-test age sensors, computed from the
+            // tables just synced above and batched through a single updateSensorValues()
+            // call so stored multipliers (selftest age -> minutes), threshold alerts, and
+            // state-change events are all applied.
+            $this->pollNvmeDeviceSensors($dev);
         }
+    }
+
+    /** Update the NVMe Health, Self-test Status, and Self-test age sensors for one device. */
+    private function pollNvmeDeviceSensors(array $dev): void
+    {
+        $diskKey = $dev['disk_key'];
+        $idx = $this->mibDiskIndex($diskKey);
+        $values = [];
+
+        // Merged health state — overall status + critical warning stored at poll time.
+        $row = DB::table('smart_nvme_health')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->first(['overall_status', 'critical_warning', 'current_selftest_op']);
+        if ($row !== null) {
+            $values["{$idx}_health"] = (float) $this->nvmeHealthLevel($row->overall_status, $row->critical_warning);
+        }
+
+        // Self-test status from DB (current op, else most recent log result).
+        $entries = DB::table('smart_nvme_selftest_log')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->get(['result', 'power_on_hours'])
+            ->map(static fn ($r) => (array) $r)
+            ->all();
+        $statusValue = $this->nvmeSelftestStatusValue((int) ($row?->current_selftest_op ?? 0), $entries);
+        if ($statusValue !== null) {
+            $values["{$idx}_selftest_status"] = (float) $statusValue;
+        }
+
+        // Self-test age (recomputed each poll: grows over time, resets when a test runs).
+        // Raw value is hours; updateSensorValues() applies the sensor's stored
+        // multiplier (60) to convert to minutes, matching the 'runtime' sensor unit.
+        $values += $this->selftestAgeValues($idx, $diskKey, 'smart_nvme_health', 'smart_nvme_selftest_log');
+
+        if ($values !== []) {
+            $this->updateSensorValues($values, "app:smart_mib:{$idx}_");
+        }
+    }
+
+    /** Build the `{idx}_selftest_short`/`_long` raw-hours values for one device, ready to batch into updateSensorValues(). */
+    private function selftestAgeValues(string $idx, string $diskKey, string $healthTable, string $logTable): array
+    {
+        $values = [];
+        foreach (['short' => 1, 'long' => 2] as $suffix => $testType) {
+            $age = $this->selftestAgeHours($healthTable, $logTable, $diskKey, $testType);
+            if ($age !== null) {
+                $values["{$idx}_selftest_{$suffix}"] = (float) $age;
+            }
+        }
+
+        return $values;
     }
 
     /** Write the per-disk NVMe SMART/Health RRD (['app','smart_nvme',app_id,idx]). */
