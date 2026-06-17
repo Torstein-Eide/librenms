@@ -1221,8 +1221,8 @@ JS;
         }
         if ($hasSelftest) {
             $stParts = [];
-            if ($shortSensor) { $stParts[] = 'Short: ' . (string) ($shortSensor->sensor_current ?? '-'); }
-            if ($longSensor)  { $stParts[] = 'Long: '  . (string) ($longSensor->sensor_current ?? '-'); }
+            if ($shortSensor) { $stParts[] = 'Short: ' . $shortSensor->formatValue(); }
+            if ($longSensor)  { $stParts[] = 'Long: '  . $longSensor->formatValue(); }
             $appGraph('smart_v2_selftest', 'Self-test Age', $anchorPrefix . 'selftest', $stParts !== [] ? implode(' | ', $stParts) : '');
         }
         if ($powerSpec) {

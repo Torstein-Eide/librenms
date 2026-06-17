@@ -371,13 +371,15 @@
         if ($sensor === null || $sensor->sensor_current === null) {
             return '<span class="text-muted">-</span>';
         }
-        $hours = (int) round((float) $sensor->sensor_current);
+        // sensor_current/limits are stored in minutes (runtime sensor convention); convert to hours for display.
+        $minutes = (float) $sensor->sensor_current;
         $class = 'default';
-        if ($sensor->sensor_limit !== null && $hours >= (float) $sensor->sensor_limit) {
+        if ($sensor->sensor_limit !== null && $minutes >= (float) $sensor->sensor_limit) {
             $class = 'danger';
-        } elseif ($sensor->sensor_limit_warn !== null && $hours >= (float) $sensor->sensor_limit_warn) {
+        } elseif ($sensor->sensor_limit_warn !== null && $minutes >= (float) $sensor->sensor_limit_warn) {
             $class = 'warning';
         }
+        $hours = (int) round($minutes / 60);
         return '<span class="label label-' . $class . '">' . htmlspecialchars(ltrim($formatHoursAgo($hours), '-')) . ' ago</span>';
     };
 @endphp
