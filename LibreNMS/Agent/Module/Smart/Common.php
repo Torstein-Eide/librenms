@@ -488,6 +488,33 @@ class Common extends Application
     }
 
     /**
+     * Hours elapsed since the most recent NVMe self-test of the given type
+     * (1 = short, 2 = extended), computed from the synced DB rows.
+     * Returns null when power-on hours or a matching self-test entry is unknown.
+     */
+    private function nvmeSelftestAgeHours(string $diskKey, int $testType): ?int
+    {
+        $currentPoh = DB::table('smart_nvme_health')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->value('power_on_hours');
+        if ($currentPoh === null) {
+            return null;
+        }
+
+        $lastTestPoh = DB::table('smart_nvme_selftest_log')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->where('test_type', $testType)
+            ->max('power_on_hours');
+        if ($lastTestPoh === null) {
+            return null;
+        }
+
+        return max(0, (int) $currentPoh - (int) $lastTestPoh);
+    }
+
+    /**
      * Hours elapsed since the most recent self-test of the given type
      * (1 = short, 2 = extended/long), computed from the synced DB rows.
      * Returns null when power-on hours or a matching self-test entry is unknown.
@@ -541,6 +568,48 @@ class Common extends Application
                     'poller_type'       => 'agent',
                     'sensor_class'      => 'runtime',
                     'sensor_type'       => "smart_selftest_{$suffix}",
+                    'sensor_index'      => "{$idx}_selftest_{$suffix}",
+                    'sensor_oid'        => "app:smart_mib:{$idx}_selftest_{$suffix}",
+                    'group'             => $group,
+                    'sensor_descr'      => "{$group} {$devName} {$label}",
+                    'sensor_current'    => (float) $age,
+                    'sensor_multiplier' => 60,
+                    'sensor_limit_warn' => $warn,
+                    'sensor_max'        => $max,
+                    'sensor_min'        => 0,
+                ]));
+            }
+        }
+    }
+
+    /**
+     * Register the "Last Short/Long Test" age sensors (runtime class) for each
+     * NVMe device. Runs after the self-test log table has been synced. Only
+     * creates a sensor when a matching log entry with power-on hours exists —
+     * not all NVMe devices implement the self-test log.
+     */
+    private function discoverNvmeSelftestAgeSensors(): void
+    {
+        $device = $this->device;
+        $group = 'SMART';
+        foreach ($this->nvmeDeviceList as $dev) {
+            $diskKey = $dev['disk_key'];
+            $idx = $this->mibDiskIndex($diskKey);
+            $devName = $this->sensorLabel($dev, $dev['snmp_index']);
+
+            foreach ([
+                ['short', 1, 'Last Short Test', 1440, 1600],
+                ['long',  2, 'Last Long Test',  57600, 60000],
+            ] as [$suffix, $testType, $label, $warn, $max]) {
+                $age = $this->nvmeSelftestAgeHours($diskKey, $testType);
+                if ($age === null) {
+                    continue;
+                }
+                app('sensor-discovery')->discover(new Sensor([
+                    'device_id'         => $device['device_id'],
+                    'poller_type'       => 'agent',
+                    'sensor_class'      => 'runtime',
+                    'sensor_type'       => "smart_nvme_selftest_{$suffix}",
                     'sensor_index'      => "{$idx}_selftest_{$suffix}",
                     'sensor_oid'        => "app:smart_mib:{$idx}_selftest_{$suffix}",
                     'group'             => $group,
@@ -625,6 +694,8 @@ class Common extends Application
             } elseif (in_array($deviceType, self::NVME_TYPES, true)) {
                 $expected[] = "app:smart_mib:{$idx}_health";
                 $expected[] = "app:smart_mib:{$idx}_selftest_status";
+                $expected[] = "app:smart_mib:{$idx}_selftest_short";
+                $expected[] = "app:smart_mib:{$idx}_selftest_long";
             }
         }
 
@@ -860,6 +931,14 @@ class Common extends Application
                 $value = $this->nvmeSelftestStatusValue($currentOp, $entries);
                 $this->updateMibSensor($this->device, $sensor, $value !== null ? (float) $value : null);
             }
+
+            // Self-test age (recomputed each poll: grows over time, resets when a test runs).
+            foreach (['short' => 1, 'long' => 2] as $suffix => $testType) {
+                if ($sensor = $sensors->get("{$idx}_selftest_{$suffix}")) {
+                    $age = $this->nvmeSelftestAgeHours($diskKey, $testType);
+                    $this->updateMibSensor($this->device, $sensor, $age !== null ? (float) $age : null);
+                }
+            }
         }
     }
 
@@ -1028,6 +1107,7 @@ class Common extends Application
             }
         }
 
+        $this->discoverNvmeSelftestAgeSensors();
         $this->syncNvmeSensorTypes();
     }
 
@@ -1166,6 +1246,8 @@ class Common extends Application
     {
         app('sensor-discovery')->sync(sensor_type: 'smart_nvme_health');
         app('sensor-discovery')->sync(sensor_type: 'smart_nvme_selftest_status');
+        app('sensor-discovery')->sync(sensor_type: 'smart_nvme_selftest_short');
+        app('sensor-discovery')->sync(sensor_type: 'smart_nvme_selftest_long');
     }
 
     /**

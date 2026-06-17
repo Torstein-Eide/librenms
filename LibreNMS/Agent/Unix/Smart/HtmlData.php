@@ -486,6 +486,12 @@ class HtmlData
         return $this->allSensors->get($this->diskIndex($diskKey) . '_selftest_status');
     }
 
+    /** Self-test age sensor for a disk: $suffix is 'short' or 'long'. Returns null when not available. */
+    public function selftestAgeSensor(string $diskKey, string $suffix): ?Sensor
+    {
+        return $this->allSensors->get($this->diskIndex($diskKey) . "_selftest_{$suffix}");
+    }
+
     /** All sensors belonging to a disk, keyed by sensor_index. */
     public function diskSensors(string $diskKey): array
     {
@@ -524,6 +530,7 @@ class HtmlData
             'overview' => 'Overview',
             'metadata' => 'Metadata',
             'selftest' => 'Self-test',
+            'tables'   => 'Statistics',
             'graphs'   => 'Graphs',
         ];
     }

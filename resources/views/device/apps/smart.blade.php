@@ -367,11 +367,18 @@
         return '<span class="label label-' . $class . '">' . $rounded . '%</span>';
     };
 
-    $selftestBadge = static function (?int $ageHours) use ($formatHoursAgo): string {
-        if ($ageHours === null) {
+    $selftestBadge = static function ($sensor) use ($formatHoursAgo): string {
+        if ($sensor === null || $sensor->sensor_current === null) {
             return '<span class="text-muted">-</span>';
         }
-        return '<span class="label label-default">' . htmlspecialchars(ltrim($formatHoursAgo($ageHours), '-')) . ' ago</span>';
+        $hours = (int) round((float) $sensor->sensor_current);
+        $class = 'default';
+        if ($sensor->sensor_max !== null && $hours >= (float) $sensor->sensor_max) {
+            $class = 'danger';
+        } elseif ($sensor->sensor_limit_warn !== null && $hours >= (float) $sensor->sensor_limit_warn) {
+            $class = 'warning';
+        }
+        return '<span class="label label-' . $class . '">' . htmlspecialchars(ltrim($formatHoursAgo($hours), '-')) . ' ago</span>';
     };
 @endphp
 
@@ -473,8 +480,8 @@
                         <td>{!! $stateBadge($data->selftestStatusSensor($key)) !!}</td>
                         <td>{!! $isNvmeDisk ? $percentBadge($usedSensor) : $wearBadge($data->wearRemaining($disk)) !!}</td>
                         <td>{!! $percentBadge($spareSensor) !!}</td>
-                        <td>{!! $selftestBadge($data->selftestAgeHours($disk, 1)) !!}</td>
-                        <td>{!! $selftestBadge($data->selftestAgeHours($disk, 2)) !!}</td>
+                        <td>{!! $selftestBadge($data->selftestAgeSensor($key, 'short')) !!}</td>
+                        <td>{!! $selftestBadge($data->selftestAgeSensor($key, 'long')) !!}</td>
                     </tr>
                 @endforeach
                 </tbody>
@@ -545,6 +552,9 @@
     @elseif($viewMode === 'selftest')
         {{-- Self-test log, selective spans, offline collection and related capabilities. --}}
         @include('device.apps.smart-sata-selftest', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @elseif($viewMode === 'tables')
+        {{-- Device statistics tables (General, Rotating Media, Errors, Transport, FARM*) + PHY counters. --}}
+        @include('device.apps.smart-sata-tables', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @else
         @include('device.apps.smart-sata-detail', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @endif

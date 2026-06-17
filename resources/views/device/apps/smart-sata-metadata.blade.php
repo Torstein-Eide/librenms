@@ -116,6 +116,24 @@
         @endphp
         @endif
 
+        {{-- Error Recovery Control (SCT ERC) --}}
+        @if(! empty($disk['erc']))
+        @php
+            $panelStart('Error Recovery Control (SCT ERC)');
+            echo '<table class="table table-condensed table-hover" style="width:100%">';
+            foreach ($disk['erc'] as $direction => $row) {
+                $label = $data->decode('erc_direction', $direction);
+                $ds    = $row['deciseconds'] ?? null;
+                $val   = ($row['enabled'] ?? 0)
+                    ? (is_numeric($ds) ? number_format($ds / 10, 1) . ' s' : 'Enabled')
+                    : 'Disabled';
+                echo $tableRow($label, htmlspecialchars($val), $tooltipForLabel($label));
+            }
+            echo '</table>';
+            $panelEnd();
+        @endphp
+        @endif
+
         {{-- FARM header pages (Drive Information / Log Header) --}}
         @php
             $farmPages   = ['FARM Drive Information', 'FARM Log Header'];
