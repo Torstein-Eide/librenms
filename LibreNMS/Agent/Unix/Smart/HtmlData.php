@@ -521,6 +521,9 @@ class HtmlData
         return [
             'basic'    => 'Basic',
             'detailed' => 'Detailed',
+            'overview' => 'Overview',
+            'metadata' => 'Metadata',
+            'selftest' => 'Self-test',
             'graphs'   => 'Graphs',
         ];
     }

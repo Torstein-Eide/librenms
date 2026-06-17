@@ -217,7 +217,7 @@ abstract class Application
 
             $value = Number::extract($rawValue);
             if ($value == -32768 || is_nan((float) $value)) {
-                $value = 0;
+                $value = null;
             }
 
             if ($sensor->sensor_divisor && $value !== 0) {

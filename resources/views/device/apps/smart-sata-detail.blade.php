@@ -105,9 +105,6 @@
                     'SATA Version'    => isset($info['sata_version']) ? $data->decode('sata_version', $info['sata_version']) : null,
                     'Logical Block'   => isset($info['logical_block_size']) && is_numeric($info['logical_block_size']) ? \LibreNMS\Util\Number::formatSi((int) $info['logical_block_size'], 0, 0, 'B') : null,
                     'Physical Block'  => isset($info['physical_block_size']) && is_numeric($info['physical_block_size']) ? \LibreNMS\Util\Number::formatSi((int) $info['physical_block_size'], 0, 0, 'B') : null,
-                    'In smartctl DB'  => ($info['in_smartctl_database'] ?? null) !== null ? (((int) $info['in_smartctl_database']) ? 'Yes' : 'No') : null,
-                    'Last Poll'       => $disk['last_poll_time'] ?? null,
-                    'Last Poll Result' => $disk['last_poll_result'] !== null ? $data->decode('poll_result', $disk['last_poll_result']) : null,
                 ];
                 foreach ($rows as $label => $value) {
                     if ($value === null || $value === '') {
@@ -221,6 +218,7 @@
         @endif
 
         {{-- Health / SCT (detailed only) --}}
+        {{--
         @if($showDetailed)
         <div>
             @php
@@ -249,6 +247,7 @@
             @endphp
         </div>
         @endif
+        --}}
     </div>
 
     {{-- Attributes --}}
@@ -341,17 +340,23 @@
                 };
 
                 // In-row mini graph: the same smart_v2_attributes graph, 60x15.
+                // Click → graphs page, hover → day/week/month/year popup (as on device overview).
                 $mini = '';
                 if ($attrId > 0) {
-                    $miniSrc = 'graph.php?type=application_smart_v2_attributes'
-                        . '&id=' . rawurlencode((string) $attrAppId)
-                        . '&disk=' . rawurlencode((string) $idx)
-                        . '&attr_id=' . $attrId
-                        . '&has_raw=1&has_norm=1&legend=no'
-                        . '&from=' . rawurlencode((string) $attrFrom)
-                        . '&to=' . rawurlencode((string) $attrNow)
-                        . '&width=60&height=15';
-                    $mini = '<img loading="lazy" width="60" height="15" src="' . htmlspecialchars($miniSrc, ENT_QUOTES) . '" alt="trend" style="display:block">';
+                    $mini = \LibreNMS\Util\Url::graphPopup([
+                        'id'          => $attrAppId,
+                        'type'        => 'application_smart_v2_attributes',
+                        'disk'        => $idx,
+                        'attr_id'     => $attrId,
+                        'has_raw'     => 1,
+                        'has_norm'    => 1,
+                        'from'        => $attrFrom,
+                        'to'          => $attrNow,
+                        'width'       => 60,
+                        'height'      => 15,
+                        'legend'      => 'no',
+                        'popup_title' => htmlspecialchars($device['hostname'] . ' - ' . $name),
+                    ]);
                 }
 
                 echo '<tr style="' . $rowStyle . '" data-fail="' . $isFail . '" data-flags="' . htmlspecialchars($flagsRaw, ENT_QUOTES) . '">'
@@ -1010,15 +1015,16 @@ JS;
             ];
             $featureRows = array_filter($featureRows, fn ($v) => $v !== null && $v !== '');
 
-            // One sub-table per group; kept whole (not split) within the CSS column layout below.
+            // One sub-table per group. The grid column below has no predefined width;
+            // it's sized to the widest section, and every section stretches to match.
             $capSection = static function (string $heading, string $rows): string {
                 if ($rows === '') {
                     return '';
                 }
 
-                return '<div style="break-inside:avoid-column;-webkit-column-break-inside:avoid;margin-bottom:14px">'
+                return '<div>'
                     . '<div style="font-weight:bold;border-bottom:1px solid #ddd;margin-bottom:4px;padding-bottom:2px">' . htmlspecialchars($heading) . '</div>'
-                    . '<table class="table table-condensed table-hover" style="width:auto;margin-bottom:0">' . $rows . '</table>'
+                    . '<table class="table table-condensed table-hover" style="width:100%;margin-bottom:0">' . $rows . '</table>'
                     . '</div>';
             };
         @endphp
@@ -1067,7 +1073,7 @@ JS;
                         }
                         $sectionsHtml .= $capSection($heading, $rows);
                     }
-                    echo '<div style="column-width:auto;column-count:3;column-gap:18px">' . $sectionsHtml . '</div>';
+                    echo '<div style="display:grid;grid-template-columns:max-content;row-gap:14px">' . $sectionsHtml . '</div>';
                     $panelEnd();
                 @endphp
             </div>

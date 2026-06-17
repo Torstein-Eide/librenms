@@ -328,6 +328,8 @@ class Common extends Application
                     'sensor_descr'      => $descr,
                     'sensor_current'    => $value,
                 ];
+                // Carry the scale as divisor/multiplier so the poll can rescale the raw value.
+                $attrs += $this->sensorScaleColumns($row);
                 if ($highCrit !== null) {
                     $attrs['sensor_limit'] = $highCrit;
                 }
@@ -402,6 +404,9 @@ class Common extends Application
         $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
         $this->walkAndSyncSataTable('smartmonSataLogDirTable', 2, self::SATA_TID_LOG_DIR, [$this, 'syncSataLogDirRows']);
         $this->walkAndSyncSataTable('smartmonSataDevStatTable', 3, self::SATA_TID_DEV_STAT, [$this, 'syncSataDevStatRows'], true);
+
+        // Self-test age sensors, computed from the freshly-synced self-test log + power-on hours.
+        $this->discoverSataSelftestAgeSensors();
 
         // Register all sensor types with the discovery system.
         $this->syncSensorTypes();
@@ -483,13 +488,81 @@ class Common extends Application
     }
 
     /**
+     * Hours elapsed since the most recent self-test of the given type
+     * (1 = short, 2 = extended/long), computed from the synced DB rows.
+     * Returns null when power-on hours or a matching self-test entry is unknown.
+     */
+    private function sataSelftestAgeHours(string $diskKey, int $testType): ?int
+    {
+        $currentPoh = DB::table('smart_sata_health')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->value('power_on_hours');
+        if ($currentPoh === null) {
+            return null;
+        }
+
+        $lastTestPoh = DB::table('smart_sata_selftest_log')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->where('test_type', $testType)
+            ->max('power_on_hours');
+        if ($lastTestPoh === null) {
+            return null;
+        }
+
+        return max(0, (int) $currentPoh - (int) $lastTestPoh);
+    }
+
+    /**
+     * Register the "Last Short/Long Test" age sensors (runtime class) for each
+     * SATA device. Runs after the self-test log table has been synced so the
+     * age is computed from the current cycle's data.
+     */
+    private function discoverSataSelftestAgeSensors(): void
+    {
+        $device = $this->device;
+        $group = 'SMART';
+        foreach ($this->sataDeviceList as $dev) {
+            $diskKey = $dev['disk_key'];
+            $idx = $this->mibDiskIndex($diskKey);
+            $devName = $this->sensorLabel($dev, $dev['snmp_index']);
+
+            foreach ([
+                ['short', 1, 'Last Short Test', 1440, 1600],
+                ['long',  2, 'Last Long Test',  57600, 60000],
+            ] as [$suffix, $testType, $label, $warn, $max]) {
+                $age = $this->sataSelftestAgeHours($diskKey, $testType);
+                if ($age === null) {
+                    continue;
+                }
+                app('sensor-discovery')->discover(new Sensor([
+                    'device_id'         => $device['device_id'],
+                    'poller_type'       => 'agent',
+                    'sensor_class'      => 'runtime',
+                    'sensor_type'       => "smart_selftest_{$suffix}",
+                    'sensor_index'      => "{$idx}_selftest_{$suffix}",
+                    'sensor_oid'        => "app:smart_mib:{$idx}_selftest_{$suffix}",
+                    'group'             => $group,
+                    'sensor_descr'      => "{$group} {$devName} {$label}",
+                    'sensor_current'    => (float) $age,
+                    'sensor_multiplier' => 60,
+                    'sensor_limit_warn' => $warn,
+                    'sensor_max'        => $max,
+                    'sensor_min'        => 0,
+                ]));
+            }
+        }
+    }
+
+    /**
      * Sync the SATA state sensor types (registered in discoverSataDeviceSensors,
      * which runs before this call). The generic SENSOR-MIB types are synced
      * separately in syncMibSensorTypes() after their registration loop.
      */
     private function syncSensorTypes(): void
     {
-        foreach (['smart_mib_health', 'smart_selftest_status'] as $type) {
+        foreach (['smart_mib_health', 'smart_selftest_status', 'smart_selftest_short', 'smart_selftest_long'] as $type) {
             app('sensor-discovery')->sync(sensor_type: $type);
         }
     }
@@ -547,6 +620,8 @@ class Common extends Application
             if (in_array($deviceType, self::SATA_TYPES, true)) {
                 $expected[] = "app:smart_mib:{$idx}_health";
                 $expected[] = "app:smart_mib:{$idx}_selftest_status";
+                $expected[] = "app:smart_mib:{$idx}_selftest_short";
+                $expected[] = "app:smart_mib:{$idx}_selftest_long";
             } elseif (in_array($deviceType, self::NVME_TYPES, true)) {
                 $expected[] = "app:smart_mib:{$idx}_health";
                 $expected[] = "app:smart_mib:{$idx}_selftest_status";
@@ -711,12 +786,18 @@ class Common extends Application
      */
     private function pollSensorValues(): void
     {
+        // Only the raw value + operational status are needed: the scale is stored on
+        // each sensor (sensor_divisor/multiplier at discovery) and applied by
+        // updateSensorValues(), so the heavier full-table walk is unnecessary here.
         $sensorValues = SnmpQuery::mibs(self::SENSOR_MIBS)
             ->hideMib()
-            ->walk('SMARTMON-SENSOR-MIB::smartmonSensorValue')
+            ->walk([
+                'SMARTMON-SENSOR-MIB::smartmonSensorValue',
+                'SMARTMON-SENSOR-MIB::smartmonSensorOperStatus',
+            ])
             ->table(2);
 
-        $this->vlog('pollSensorValues: walked smartmonSensorValue for device idx(es) ['
+        $this->vlog('pollSensorValues: walked smartmonSensorValue/OperStatus for device idx(es) ['
             . implode(', ', array_keys($sensorValues)) . '] — '
             . count($this->sataDeviceList) . ' SATA / ' . count($this->nvmeDeviceList) . ' NVMe device(s) to update');
 
@@ -738,6 +819,14 @@ class Common extends Application
                     ->where('disk_key', $diskKey)
                     ->value('selftest_exec_status_raw');
                 $this->updateMibSensor($this->device, $sensor, $raw !== null ? (float) $raw : null);
+            }
+
+            // Self-test age (recomputed each poll: grows over time, resets when a test runs).
+            foreach (['short' => 1, 'long' => 2] as $suffix => $testType) {
+                if ($sensor = $sensors->get("{$idx}_selftest_{$suffix}")) {
+                    $age = $this->sataSelftestAgeHours($diskKey, $testType);
+                    $this->updateMibSensor($this->device, $sensor, $age !== null ? (float) $age : null);
+                }
             }
         }
 
@@ -804,18 +893,30 @@ class Common extends Application
             $this->vlog("matchSensorMibValues: no walked values for devIdx={$devIdx} (key mismatch?) — sensors left unchanged");
         }
 
+        // Collect raw values keyed by sensor_index, then let updateSensorValues()
+        // apply each sensor's stored sensor_divisor/multiplier (the smartmonSensorScale).
+        $values = [];
         foreach ($walked as $sensorIdx => $rawValue) {
             if ($sensor = $bySuffix[(string) $sensorIdx] ?? null) {
-                // table(2) leaf is ['smartmonSensorValue' => value]; extract the
-                // scalar — casting the wrapper array to float would yield 1.
-                $value = $this->leafValue($rawValue, 'smartmonSensorValue');
+                $raw        = $this->leafValue($rawValue, 'smartmonSensorValue');
+                $operStatus = $this->intValue($this->leafValue($rawValue, 'smartmonSensorOperStatus'));
+                // SmartmonSensorStatus: ok(1) = value reported; unavailable(2)/nonoperational(3) = no trustworthy reading.
+                if ($operStatus !== null && $operStatus !== 1) {
+                    $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} operStatus={$operStatus} (not ok) — skipped");
+                    continue;
+                }
+                if (is_numeric($raw)) {
+                    $values[$sensor->sensor_index] = (float) $raw;
+                }
                 $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} raw="
-                    . (is_array($rawValue) ? 'array(' . json_encode($rawValue) . ')' : var_export($rawValue, true))
-                    . ' value=' . var_export($value, true));
-                $this->updateMibSensor($this->device, $sensor, is_numeric($value) ? (float) $value : null);
+                    . var_export($raw, true) . ' operStatus=' . var_export($operStatus, true));
             } else {
                 $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} has no matching DB sensor — skipped");
             }
+        }
+
+        if ($values !== []) {
+            $this->updateSensorValues($values, "app:smart_mib:{$idx}_");
         }
 
         return $sensors;
@@ -2507,6 +2608,25 @@ class Common extends Application
         $exp = self::SENSOR_SCALE_EXP[$scaleEnum] ?? 0;
 
         return (float) $raw * (10 ** ($exp - $precision));
+    }
+
+    /**
+     * Translate smartmonSensorScale + precision into sensor_divisor / sensor_multiplier
+     * so updateSensorValues() can scale the raw smartmonSensorValue at poll time
+     * (e.g. milli(8) precision 0 → divisor 1000: 12169 → 12.169). Both keys are
+     * always returned so a re-discovery resets any stale factor.
+     *
+     * @return array{sensor_divisor: int, sensor_multiplier: int}
+     */
+    private function sensorScaleColumns(array $row): array
+    {
+        $scaleEnum = $this->intValue($row['smartmonSensorScale'] ?? null) ?? 9;
+        $precision = $this->intValue($row['smartmonSensorPrecision'] ?? null) ?? 0;
+        $exp = (self::SENSOR_SCALE_EXP[$scaleEnum] ?? 0) - $precision;
+
+        return $exp >= 0
+            ? ['sensor_divisor' => 1, 'sensor_multiplier' => 10 ** $exp]
+            : ['sensor_divisor' => 10 ** (-$exp), 'sensor_multiplier' => 1];
     }
 
     /**

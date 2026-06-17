@@ -536,6 +536,15 @@
     @php $detailDisk = $data->disk($selectedDisk); @endphp
     @if($detailDisk !== null && $data->isNvme($detailDisk))
         @include('device.apps.smart-nvme-detail', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @elseif($viewMode === 'overview')
+        {{-- Alternative drive view, laid out like the device Overview tab (SATA/SAS only). --}}
+        @include('device.apps.smart-sata-overview', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @elseif($viewMode === 'metadata')
+        {{-- Static identity/capability metadata + FARM header pages (SATA/SAS only). --}}
+        @include('device.apps.smart-sata-metadata', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+    @elseif($viewMode === 'selftest')
+        {{-- Self-test log, selective spans, offline collection and related capabilities. --}}
+        @include('device.apps.smart-sata-selftest', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @else
         @include('device.apps.smart-sata-detail', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @endif
