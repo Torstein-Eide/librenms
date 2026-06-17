@@ -145,6 +145,58 @@
             echo \LibreNMS\Util\Url::overlibLink($luLink, $luGraph, $luOverlib);
             $panelEnd();
         @endphp
+        @else
+        {{-- No LBA-count attributes — fall back to a generic disk I/O graph (UCD-DISKIO-MIB), if available. --}}
+        @php
+            $diskioCandidates = [];
+            foreach ([$disk['device_path'] ?? null, $disk['device_name'] ?? null] as $cand) {
+                $cand = trim((string) $cand);
+                if ($cand === '') { continue; }
+                $diskioCandidates[] = $cand;
+                $diskioCandidates[] = ltrim((string) preg_replace('#^/dev/#', '', $cand), '/');
+                $diskioCandidates[] = basename($cand);
+            }
+            $diskioCandidates = array_values(array_unique($diskioCandidates));
+            $diskioDescr = $diskioCandidates !== [] ? \Illuminate\Support\Facades\DB::table('ucd_diskio')
+                ->where('device_id', $device['device_id'])
+                ->whereIn('diskio_descr', $diskioCandidates)
+                ->value('diskio_descr') : null;
+        @endphp
+        @if($diskioDescr !== null)
+        @php
+            $dioNow  = \App\Facades\LibrenmsConfig::get('time.now');
+            $dioFrom = \App\Facades\LibrenmsConfig::get('time.day');
+            $dioGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
+                'id'     => $data->app->app_id,
+                'type'   => 'application_smart_v2_diskio',
+                'disk'   => $idx,
+                'from'   => $dioFrom,
+                'to'     => $dioNow,
+                'legend' => 'no',
+            ]);
+            $dioGraph = \LibreNMS\Util\Url::lazyGraphTag($dioGraphArray, 'tw:w-full tw:h-auto');
+
+            $dioLinkArray = $dioGraphArray;
+            $dioLinkArray['page'] = 'graphs';
+            unset($dioLinkArray['height'], $dioLinkArray['width']);
+            $dioLink = \LibreNMS\Util\Url::generate($dioLinkArray);
+
+            $dioOverlibArray = $dioGraphArray;
+            $dioOverlibArray['width'] = 210;
+            $dioOverlib = generate_overlib_content($dioOverlibArray, $device['hostname'] . ' - Disk I/O');
+
+            $dioRrdFile = \App\Facades\Rrd::name($device['hostname'], ['ucd_diskio', $diskioDescr]);
+            $dioRates   = \App\Facades\Rrd::getLastRates($dioRrdFile, ['read', 'written']);
+            $dioRd = is_numeric($dioRates?->get('read')) ? \LibreNMS\Util\Number::formatSi((float) $dioRates->get('read'), 2, 0, 'B') . '/s' : null;
+            $dioWr = is_numeric($dioRates?->get('written')) ? \LibreNMS\Util\Number::formatSi((float) $dioRates->get('written'), 2, 0, 'B') . '/s' : null;
+            $dioParts = array_filter([$dioRd !== null ? 'R: ' . $dioRd : null, $dioWr !== null ? 'W: ' . $dioWr : null]);
+            $dioBadge = $dioParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $dioParts)) . '</span>' : '';
+
+            $panelStart('<i class="fa fa-exchange" style="margin-right:6px"></i>Disk I/O', $dioBadge);
+            echo \LibreNMS\Util\Url::overlibLink($dioLink, $dioGraph, $dioOverlib);
+            $panelEnd();
+        @endphp
+        @endif
         @endif
 
     </div>
