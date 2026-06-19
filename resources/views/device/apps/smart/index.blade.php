@@ -6,6 +6,11 @@
     /** @var \LibreNMS\Agent\Unix\Smart\HtmlData $data */
 
     $deviceId  = (int) $data->device['device_id'];
+
+    // Reached directly via the dedicated device.apps.smart(.compare) routes, which always
+    // pass smartPage explicitly — as opposed to the legacy device=X/tab=apps/app=smart route,
+    // which already renders the device's "Apps »" selector panel before including this view.
+    $viaDedicatedRoute = isset($smartPage);
     $smartPage = $smartPage ?? 'overview';
 
     // Builds a URL back to this same SMART app page, optionally for a specific disk.
@@ -390,6 +395,34 @@
     };
 @endphp
 
+{{-- App selector, same as the device "Apps" tab uses to switch between a device's apps. --}}
+@php
+    if ($viaDedicatedRoute) {
+        $appsLinkArray = ['page' => 'device', 'device' => $deviceId, 'tab' => 'apps'];
+        $deviceApps = \App\Models\Application::where('device_id', $deviceId)->get()
+            ->sortBy('show_name', SORT_NATURAL | SORT_FLAG_CASE);
+
+        $appLinks = [];
+        foreach ($deviceApps as $currentApp) {
+            if ($currentApp->app_type === 'smart') {
+                $appHref = $smartUrl();
+            } else {
+                $appLinkAdd = ['app' => $currentApp->app_type];
+                if (! empty($currentApp->app_instance)) {
+                    $appLinkAdd['instance'] = $currentApp->app_id;
+                }
+                $appHref = \LibreNMS\Util\Url::generate($appsLinkArray, $appLinkAdd);
+            }
+            $appText = htmlspecialchars($currentApp->displayName() . (! empty($currentApp->app_instance) ? '(' . $currentApp->app_instance . ')' : ''));
+            $class = $currentApp->app_type === 'smart' ? ' class="pagemenu-selected"' : '';
+            $appLinks[] = '<a href="' . htmlspecialchars($appHref, ENT_QUOTES) . '"' . $class . '>' . $appText . '</a>';
+        }
+
+        echo '<div class="panel panel-default"><div class="panel-heading"><span style="font-weight:bold">Apps</span> &#187; '
+            . implode(' | ', $appLinks) . '</div></div>';
+    }
+@endphp
+
 {{-- Optionbar --}}
 @php
     print_optionbar_start();
@@ -417,7 +450,7 @@
         . htmlspecialchars(route('device.apps.smart.settings', $device['device_id']), ENT_QUOTES)
         . '"><i class="fa fa-cog"></i> Settings</a>';
 
-    $ovLabel = $selectedDisk === null && $smartPage === 'overview' ? '<span class="pagemenu-selected">All Drives</span>' : 'All Drives';
+    $ovLabel = $selectedDisk === null && $smartPage === 'overview' ? '<span class="pagemenu-selected">Overview</span>' : 'Overview';
     $compareLabel = $smartPage === 'compare' ? '<span class="pagemenu-selected">Compare</span>' : 'Compare';
     $links = [
         '<a href="' . htmlspecialchars($smartUrl(), ENT_QUOTES) . '">' . $ovLabel . '</a>',

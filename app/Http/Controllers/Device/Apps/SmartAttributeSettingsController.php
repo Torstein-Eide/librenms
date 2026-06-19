@@ -25,6 +25,8 @@ class SmartAttributeSettingsController
     {
         $this->authorize('update', $device);
 
+        require_once base_path('includes/html/functions.inc.php');
+
         $app = Application::where('device_id', $device->device_id)->where('app_type', 'smart')->first();
         $appId = $app?->app_id;
 

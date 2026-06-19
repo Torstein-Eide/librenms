@@ -33,14 +33,15 @@
         </div>
 
         {{-- Optionbar, matching the SMART app's own pagemenu-style navigation. --}}
-        <div class="panel panel-default">
-            <div class="panel-heading">
-                <a href="{{ $smartAppHref }}">{{ __('Overview') }}</a>
-                | <a href="{{ route('device.apps.smart.compare', $device) }}">{{ __('Compare') }}</a>
-                | <span class="pagemenu-selected">{{ __('Settings') }}</span>
-                <br>&nbsp;&nbsp; {{ __('Setting') }}: <span class="pagemenu-selected">{{ __('Attribute Warning Thresholds') }}</span> | <span class="text-muted">{{ __('...(more to come)') }}</span>
-            </div>
-        </div>
+        @php
+            print_optionbar_start();
+            echo '<a href="' . htmlspecialchars($smartAppHref, ENT_QUOTES) . '">' . __('Overview') . '</a>'
+                . ' | <a href="' . htmlspecialchars(route('device.apps.smart.compare', $device), ENT_QUOTES) . '">' . __('Compare') . '</a>'
+                . ' | <span class="pagemenu-selected">' . __('Settings') . '</span>'
+                . '<br>&nbsp;&nbsp; ' . __('Setting') . ': <span class="pagemenu-selected">' . __('Attribute Warning Thresholds') . '</span>'
+                . ' | <span class="text-muted">' . __('...(more to come)') . '</span>';
+            print_optionbar_end();
+        @endphp
 
         <p class="text-muted">
             {{ __('Rate-of-change thresholds (raw value change per hour) used to flag an attribute with a rate warning. A row with no per-disk value falls back to the global default for that attribute.') }}

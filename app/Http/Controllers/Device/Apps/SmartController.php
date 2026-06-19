@@ -38,6 +38,12 @@ class SmartController
 
         $app = Application::where('device_id', $device->device_id)->where('app_type', 'smart')->firstOrFail();
 
+        // Matches DeviceController::renderLegacyTab()'s chdir(base_path()) — the view below
+        // (and its graph rows) use legacy includes with paths relative to the install dir
+        // (e.g. includes/html/print-graphrow.inc.php), which silently fail to resolve
+        // otherwise, since this route never goes through that legacy chdir.
+        chdir(base_path());
+
         require_once base_path('includes/html/functions.inc.php');
         require_once base_path('includes/html/pages/device/apps/smart.inc.php');
 
