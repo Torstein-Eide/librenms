@@ -185,6 +185,12 @@ Route::middleware(['auth'])->group(function (): void {
         Route::get('config/diff', [Device\Tabs\ConfigController::class, 'diff'])->name('config.diff');
         Route::put('module/{module}', [Device\Tabs\ModuleController::class, 'update'])->name('module.update');
         Route::delete('module/{module}', [Device\Tabs\ModuleController::class, 'delete'])->name('module.delete');
+
+        Route::get('apps/smart', [Device\Apps\SmartController::class, 'index'])->name('apps.smart');
+        Route::get('apps/smart/settings', [Device\Apps\SmartAttributeSettingsController::class, 'index'])->name('apps.smart.settings');
+        Route::post('apps/smart/settings', [Device\Apps\SmartAttributeSettingsController::class, 'update'])->name('apps.smart.settings.update');
+        Route::post('apps/smart/settings/reset', [Device\Apps\SmartAttributeSettingsController::class, 'reset'])->name('apps.smart.settings.reset');
+        Route::post('apps/smart/settings/copy', [Device\Apps\SmartAttributeSettingsController::class, 'copyToAllDisks'])->name('apps.smart.settings.copy');
     });
 
     // fallback device routes

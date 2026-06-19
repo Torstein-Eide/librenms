@@ -2,17 +2,16 @@
     use App\Facades\LibrenmsConfig;
     use LibreNMS\Enum\Severity;
     use LibreNMS\Util\Number;
-    use LibreNMS\Util\Url;
 
     /** @var \LibreNMS\Agent\Unix\Smart\HtmlData $data */
 
     $deviceId  = (int) $data->device['device_id'];
-    $linkArray = [
-        'page'   => 'device',
-        'device' => $deviceId,
-        'tab'    => 'apps',
-        'app'    => 'smart',
-    ];
+
+    // Builds a URL back to this same SMART app page, optionally for a specific disk.
+    $smartUrl = static fn (?string $disk = null): string => route(
+        'device.apps.smart',
+        $disk !== null ? [$deviceId, 'disk' => $disk] : $deviceId
+    );
 
     // Persisted display modes (cookie-backed, per device).
     $labelCookie = 'smart_label_mode_' . $deviceId;
@@ -395,9 +394,7 @@
     print_optionbar_start();
 
     // Label-mode selector (right side).
-    $currentUrl = $selectedDisk !== null
-        ? Url::generate($linkArray + ['disk' => (string) $selectedDisk])
-        : Url::generate($linkArray);
+    $currentUrl = $smartUrl($selectedDisk);
     $modeOptions = '';
     foreach ($labelModes as $mode => $title) {
         $sel = $mode === $labelMode ? ' selected' : '';
@@ -418,14 +415,14 @@
         . '"><i class="fa fa-cog"></i> Settings</a>';
 
     $ovLabel = $selectedDisk === null ? '<span class="pagemenu-selected">All Drives</span>' : 'All Drives';
-    $links = [generate_link($ovLabel, $linkArray)];
+    $links = ['<a href="' . htmlspecialchars($smartUrl(), ENT_QUOTES) . '">' . $ovLabel . '</a>'];
     foreach ($data->diskKeys() as $key) {
         $disk  = $data->disk($key);
         $label = htmlspecialchars($data->displayLabel($disk, $labelMode));
         if ($selectedDisk === $key) {
             $label = "<span class=\"pagemenu-selected\">{$label}</span>";
         }
-        $links[] = generate_link($label, $linkArray, ['disk' => $key]);
+        $links[] = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . $label . '</a>';
     }
     echo implode(' | ', $links);
 
@@ -477,10 +474,10 @@
                         $disk    = $data->disk($key);
                         $devName = htmlspecialchars($data->deviceLabel($disk));
                         $serial  = $data->serial($disk);
-                        $deviceLink = generate_link($devName, $linkArray, ['disk' => $key]);
-                        $modelLink  = generate_link(htmlspecialchars($data->model($disk)), $linkArray, ['disk' => $key]);
+                        $deviceLink = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . $devName . '</a>';
+                        $modelLink  = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . htmlspecialchars($data->model($disk)) . '</a>';
                         $serialCell = $serial !== ''
-                            ? generate_link(htmlspecialchars($serial), $linkArray, ['disk' => $key])
+                            ? '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . htmlspecialchars($serial) . '</a>'
                             : '-';
                         $isNvmeDisk = $data->isNvme($disk);
                         $usedSensor = $isNvmeDisk ? $data->percentageUsedSensor($key) : null;
@@ -556,7 +553,7 @@
                     // One row per disk.
                     foreach ($sataKeys as $k) {
                         $d       = $data->disk($k);
-                        $devLink = generate_link(htmlspecialchars($data->deviceLabel($d)), $linkArray, ['disk' => $k]);
+                        $devLink = '<a href="' . htmlspecialchars($smartUrl($k), ENT_QUOTES) . '">' . htmlspecialchars($data->deviceLabel($d)) . '</a>';
 
                         // Build attribute lookup for this disk.
                         $attrMap = [];
@@ -612,7 +609,7 @@ SCRIPT;
             $now    = LibrenmsConfig::get('time.now');
             $from   = LibrenmsConfig::get('time.day');
             $appId  = $data->app->app_id;
-            $ovBase = Url::generate($linkArray);
+            $ovBase = $smartUrl();
 
             $sections = [
                 ['id' => 'smart-overview-all-temp', 'title' => 'All Temperatures', 'type' => 'smart_v2_all_temp'],

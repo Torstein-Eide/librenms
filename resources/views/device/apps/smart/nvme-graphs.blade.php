@@ -13,7 +13,7 @@
 @php
     $idx          = $disk['idx'];
     $anchorPrefix = 'smart-device-' . $idx . '-graph-';
-    $graphBase    = \LibreNMS\Util\Url::generate($linkArray + ['disk' => (string) $selectedDisk]);
+    $graphBase    = $smartUrl((string) $selectedDisk);
     $anchor       = static function (string $id): void {
         echo '<a id="' . htmlspecialchars($id) . '" style="position:relative;top:-70px;display:block;visibility:hidden"></a>';
     };

@@ -1,7 +1,7 @@
 {{-- NVMe per-disk "Metadata" view — static identity/capability metadata that --}}
 {{-- rarely changes, namespaces & LBA formats, and power states. Inherits closures --}}
 {{-- ($panelStart, $panelEnd, $tableRow, $tooltipForLabel) and $data, $device, --}}
-{{-- $selectedDisk, $linkArray from the parent smart.blade.php. --}}
+{{-- $selectedDisk, $smartUrl from the parent smart.blade.php. --}}
 @php
     $disk = $data->disk($selectedDisk);
     $idx  = $disk['idx'];

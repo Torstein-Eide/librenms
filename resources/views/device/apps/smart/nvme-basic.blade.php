@@ -1,7 +1,7 @@
 {{-- NVMe per-disk "Basic" view: identity, health sensors and stats, NVMe data units graph. --}}
 {{-- Inherits closures ($panelStart, $panelEnd, $tableRow, $tooltipForLabel, --}}
 {{-- $labelWithTooltip, $stateBadge, $tempBadge, $percentBadge, --}}
-{{-- $selftestBadge) and $data, $device, $selectedDisk, $linkArray --}}
+{{-- $selftestBadge) and $data, $device, $selectedDisk, $smartUrl --}}
 {{-- from the parent smart.blade.php. --}}
 @php
     $disk    = $data->disk($selectedDisk);
@@ -228,7 +228,7 @@
                 ['Power Cycles',      $fmtInt($health['power_cycles'] ?? null),            'pwr_cycles'],
             ];
 
-            $healthGraphsLink = \LibreNMS\Util\Url::generate($linkArray + ['disk' => (string) $selectedDisk]);
+            $healthGraphsLink = $smartUrl((string) $selectedDisk);
             $healthHeader = '<a href="' . htmlspecialchars($healthGraphsLink, ENT_QUOTES) . '" '
                 . 'onclick="document.cookie=\'' . htmlspecialchars($viewCookie, ENT_QUOTES) . '=graphs; path=/; max-age=31536000; samesite=lax\';" '
                 . 'style="color:inherit"><i class="fa fa-heartbeat" style="margin-right:6px"></i>Health</a>';

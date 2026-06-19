@@ -3,7 +3,7 @@
 {{-- and PHY event counters live on the Statistics view.                           --}}
 {{-- Inherits closures ($panelStart, $panelEnd, $tableRow, $tooltipForLabel, --}}
 {{-- $labelWithTooltip, $formatHoursAgo, $stateBadge, $tempBadge, $wearBadge, --}}
-{{-- $percentBadge, $selftestBadge) and $data, $device, $selectedDisk, $linkArray, --}}
+{{-- $percentBadge, $selftestBadge) and $data, $device, $selectedDisk, $smartUrl, --}}
 {{-- $currentUrl, $viewCookie from the parent smart.blade.php. --}}
 @php
     $disk    = $data->disk($selectedDisk);

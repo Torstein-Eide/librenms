@@ -2,7 +2,7 @@
 {{-- statistics tables (General, Rotating Media, General Errors, Transport,    --}}
 {{-- Free-Fall, FARM*). Inherits closures ($panelStart, $panelEnd, $tableRow,  --}}
 {{-- $tooltipForLabel, $labelWithTooltip) and $data, $device, $selectedDisk,   --}}
-{{-- $linkArray from the parent smart.blade.php.                               --}}
+{{-- $smartUrl from the parent smart.blade.php.                                --}}
 @php
     $disk = $data->disk($selectedDisk);
 @endphp

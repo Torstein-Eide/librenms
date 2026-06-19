@@ -1,7 +1,7 @@
 {{-- SATA/SAS per-disk "Metadata" view — static identity/capability metadata that --}}
 {{-- rarely changes, plus the FARM header pages. Inherits closures ($panelStart, --}}
 {{-- $panelEnd, $tableRow, $tooltipForLabel, $labelWithTooltip) and $data, $device, --}}
-{{-- $selectedDisk, $linkArray from the parent smart.blade.php. --}}
+{{-- $selectedDisk, $smartUrl from the parent smart.blade.php. --}}
 @php
     $disk = $data->disk($selectedDisk);
     $idx  = $disk['idx'];

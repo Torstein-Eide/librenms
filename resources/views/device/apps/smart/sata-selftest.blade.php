@@ -1,7 +1,7 @@
 {{-- SATA/SAS per-disk "Self-test" view — self-test log, selective spans, offline --}}
 {{-- data collection and the related capabilities. Inherits closures ($panelStart, --}}
 {{-- $panelEnd, $tableRow, $tooltipForLabel, $labelWithTooltip, $formatHoursAgo, --}}
-{{-- $stateBadge) and $data, $device, $selectedDisk, $linkArray from smart.blade.php. --}}
+{{-- $stateBadge) and $data, $device, $selectedDisk, $smartUrl from smart.blade.php. --}}
 @php
     $disk    = $data->disk($selectedDisk);
     $idx     = $disk['idx'];

@@ -1,6 +1,6 @@
 {{-- SATA/SAS per-disk "Graphs" view: full graph set with jump nav. --}}
 {{-- Inherits closures ($panelStart, $panelEnd) and $data, $device, $selectedDisk, --}}
-{{-- $linkArray from the parent smart.blade.php. --}}
+{{-- $smartUrl from the parent smart.blade.php. --}}
 @php
     $disk = $data->disk($selectedDisk);
     $idx  = $disk['idx'];
@@ -14,7 +14,7 @@
     $specs        = $data->attributeGraphSpecs($selectedDisk);
     $hasBig5      = $data->hasBig5Rrd($selectedDisk);
     $hasOther     = $data->hasOtherRrd($selectedDisk);
-    $graphBase    = \LibreNMS\Util\Url::generate($linkArray + ['disk' => (string) $selectedDisk]);
+    $graphBase    = $smartUrl((string) $selectedDisk);
 
     $diskSensors  = $data->diskSensors($selectedDisk);
     $wearSensor   = $diskSensors[$idx . '_wear'] ?? null;
