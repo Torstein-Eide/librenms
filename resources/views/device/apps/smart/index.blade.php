@@ -596,6 +596,134 @@ SCRIPT;
             }
         @endphp
 
+        {{-- All-disk Device Statistics cross-table (SATA/SAS disks only), with a page selector --}}
+        @php
+            if ($sataKeys !== []) {
+                $devStatSkipPages = \LibreNMS\Agent\Unix\Smart\HtmlData::DEV_STAT_SKIP_PAGES;
+                $devStatSkipRows  = \LibreNMS\Agent\Unix\Smart\HtmlData::DEV_STAT_SKIP_ROWS;
+                $devStatMetaPages = ['FARM Drive Information', 'FARM Log Header'];
+
+                $fmtDevStatVal = static function ($v): string {
+                    if ($v === null) {
+                        return '<span class="text-muted">-</span>';
+                    }
+                    if (is_numeric($v) && abs((float) $v) >= 1000000) {
+                        return htmlspecialchars(Number::formatSi((float) $v, 2, 0, ''));
+                    }
+
+                    return htmlspecialchars((string) $v);
+                };
+
+                // page_name => [disk_key => [stat_name => value]]
+                $pageDiskStats = [];
+                foreach ($sataKeys as $k) {
+                    foreach ($data->disk($k)['dev_stats'] ?? [] as $page) {
+                        $pn = $page['page_name'] ?: $data->decode('dev_stat_page', $page['page_num']);
+                        if (in_array($pn, $devStatSkipPages, true) || in_array($pn, $devStatMetaPages, true)) {
+                            continue;
+                        }
+                        $isFarmPage = str_starts_with($pn, 'FARM ');
+
+                        // Per-head FARM stats (e.g. reallocated_sectors_by_head_0/_1/...) get
+                        // merged into a single "base name" column showing the low-high range
+                        // across heads, instead of one column per head.
+                        $headGroups = [];
+                        foreach ($page['rows'] as $r) {
+                            $statName = (string) ($r['stat_name'] ?? '');
+                            if ($statName === '' || in_array($statName, $devStatSkipRows, true)) {
+                                continue;
+                            }
+                            if (! $isFarmPage && ($r['valid'] ?? 1) == 0) {
+                                continue;
+                            }
+                            if ($isFarmPage && preg_match('/^(.+)_(?:by|from)_head_(\d+)$/', $statName, $m)) {
+                                $headGroups[$m[1]][(int) $m[2]] = $r['value'] ?? null;
+                                continue;
+                            }
+                            $pageDiskStats[$pn][$k][$statName] = $r['value'] ?? null;
+                        }
+                        foreach ($headGroups as $base => $heads) {
+                            $vals = array_filter($heads, static fn ($v) => $v !== null);
+                            if ($vals === []) {
+                                continue;
+                            }
+                            $low  = min($vals);
+                            $high = max($vals);
+                            $pageDiskStats[$pn][$k][$base] = $low === $high ? $low : "{$low} - {$high}";
+                        }
+                    }
+                }
+                ksort($pageDiskStats);
+
+                if ($pageDiskStats !== []) {
+                    $dsId = 'smart-devstats-' . $deviceId;
+                    $panelStart('Device Statistics — All Disks');
+
+                    $pageOptions = '';
+                    foreach (array_keys($pageDiskStats) as $i => $pn) {
+                        $sel = $i === 0 ? ' selected' : '';
+                        $pageOptions .= '<option value="' . htmlspecialchars($pn, ENT_QUOTES) . '"' . $sel . '>' . htmlspecialchars($pn) . '</option>';
+                    }
+                    echo '<div style="margin-bottom:10px;display:flex;gap:10px;align-items:center">'
+                        . '<strong style="white-space:nowrap">Page:</strong>'
+                        . '<select class="form-control input-sm" style="display:inline-block;width:auto" onchange="smartDevStatPage(\'' . $dsId . '\', this.value)">'
+                        . $pageOptions . '</select>'
+                        . '<span class="text-muted" style="font-size:12px">SATA/SAS only.</span>'
+                        . '</div>';
+
+                    echo '<div id="' . $dsId . '">';
+                    foreach ($pageDiskStats as $pn => $diskStats) {
+                        $statNames = [];
+                        foreach ($diskStats as $stats) {
+                            foreach (array_keys($stats) as $sn) {
+                                if (! in_array($sn, $statNames, true)) {
+                                    $statNames[] = $sn;
+                                }
+                            }
+                        }
+
+                        $hidden = $pn !== array_key_first($pageDiskStats) ? ' style="display:none"' : '';
+                        echo '<div class="smart-devstat-page" data-page="' . htmlspecialchars($pn, ENT_QUOTES) . '"' . $hidden . '>';
+                        echo '<div class="table-responsive"><table class="table table-condensed table-hover" style="white-space:nowrap">';
+                        echo '<thead><tr><th>Disk</th>';
+                        foreach ($statNames as $sn) {
+                            $tip = $tooltipForLabel($sn);
+                            $hdr = $tip !== ''
+                                ? '<abbr style="cursor:help;text-decoration:underline dotted;white-space:normal" title="'
+                                    . htmlspecialchars($tip, ENT_QUOTES) . '">' . htmlspecialchars($sn) . '</abbr>'
+                                : htmlspecialchars($sn);
+                            echo '<th style="text-align:center;min-width:70px;font-weight:normal">' . $hdr . '</th>';
+                        }
+                        echo '</tr></thead><tbody>';
+                        foreach ($sataKeys as $k) {
+                            if (! isset($diskStats[$k])) {
+                                continue;
+                            }
+                            $devLink = '<a href="' . htmlspecialchars($smartUrl($k), ENT_QUOTES) . '">' . htmlspecialchars($data->deviceLabel($data->disk($k))) . '</a>';
+                            echo '<tr><td style="white-space:nowrap">' . $devLink . '</td>';
+                            foreach ($statNames as $sn) {
+                                echo '<td style="text-align:center">' . $fmtDevStatVal($diskStats[$k][$sn] ?? null) . '</td>';
+                            }
+                            echo '</tr>';
+                        }
+                        echo '</tbody></table></div></div>';
+                    }
+                    echo '</div>';
+
+                    echo <<<'SCRIPT'
+<script>
+function smartDevStatPage(id,page){
+    var c=document.getElementById(id); if(!c)return;
+    c.querySelectorAll(".smart-devstat-page").forEach(function(el){el.style.display=(el.dataset.page===page)?"":"none";});
+}
+</script>
+SCRIPT;
+
+                    $panelEnd();
+                }
+            }
+        @endphp
+
 @elseif($selectedDisk === null || $data->disk($selectedDisk) === null)
     {{-- ================================================================== --}}
     {{-- Overview                                                            --}}
