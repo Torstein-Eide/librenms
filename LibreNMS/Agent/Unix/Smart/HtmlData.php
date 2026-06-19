@@ -123,6 +123,34 @@ class HtmlData
         return $this->disks[$diskKey] ?? null;
     }
 
+    /**
+     * Resolve a URL disk identifier to its canonical disk_key. Accepts either the disk_key
+     * itself (old links/bookmarks) or the disk's device_name (e.g. "sda", "nvme0"), which is
+     * what diskUrlId() now hands out for new links.
+     */
+    public function resolveDiskKey(string $id): ?string
+    {
+        if (isset($this->disks[$id])) {
+            return $id;
+        }
+
+        foreach ($this->disks as $key => $disk) {
+            if (strcasecmp((string) ($disk['device_name'] ?? ''), $id) === 0) {
+                return $key;
+            }
+        }
+
+        return null;
+    }
+
+    /** Canonical URL identifier for a disk: its device_name (e.g. "sda") if known, else the disk_key. */
+    public function diskUrlId(string $diskKey): string
+    {
+        $name = trim((string) ($this->disks[$diskKey]['device_name'] ?? ''));
+
+        return $name !== '' ? $name : $diskKey;
+    }
+
     /** Stable sensor/RRD index for a disk key — must match Common::mibDiskIndex(). */
     public function diskIndex(string $diskKey): string
     {

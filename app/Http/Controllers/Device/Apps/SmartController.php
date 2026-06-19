@@ -47,11 +47,17 @@ class SmartController
         require_once base_path('includes/html/functions.inc.php');
         require_once base_path('includes/html/pages/device/apps/smart.inc.php');
 
+        $data = HtmlData::forDevice($app, $device->toArray());
+
+        // ?disk= accepts either the disk's device_name (e.g. "sda", "nvme0" — what links on
+        // the page itself now use) or its disk_key (old bookmarked links).
+        $resolvedDisk = $selectedDisk !== null ? $data->resolveDiskKey($selectedDisk) : null;
+
         $tabContent = view('device.apps.smart.index', [
-            'data' => HtmlData::forDevice($app, $device->toArray()),
+            'data' => $data,
             'app' => $app,
             'device' => $device->toArray(),
-            'selectedDisk' => $selectedDisk,
+            'selectedDisk' => $resolvedDisk,
             'smartPage' => $smartPage,
         ])->render();
 

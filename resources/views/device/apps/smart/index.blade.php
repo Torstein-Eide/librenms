@@ -14,9 +14,11 @@
     $smartPage = $smartPage ?? 'overview';
 
     // Builds a URL back to this same SMART app page, optionally for a specific disk.
+    // Disk URLs use the disk's device_name (e.g. "sda", "nvme0") when known, falling back
+    // to its disk_key — see HtmlData::diskUrlId()/resolveDiskKey().
     $smartUrl = static fn (?string $disk = null): string => route(
         'device.apps.smart',
-        $disk !== null ? [$deviceId, 'disk' => $disk] : $deviceId
+        $disk !== null ? [$deviceId, 'disk' => $data->diskUrlId($disk)] : $deviceId
     );
 
     // Persisted display modes (cookie-backed, per device).

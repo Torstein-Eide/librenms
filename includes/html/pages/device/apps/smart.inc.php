@@ -272,9 +272,12 @@ if (! isset($app, $device, $vars)
 
 $htmlData = HtmlData::forDevice($app, $device);
 
+// disk= accepts either the disk's device_name (e.g. "sda", "nvme0") or its disk_key.
+$selectedDisk = isset($vars['disk']) ? $htmlData->resolveDiskKey((string) $vars['disk']) : null;
+
 echo view('device.apps.smart.index', [
     'data'         => $htmlData,
     'app'          => $app,
     'device'       => $device,
-    'selectedDisk' => $vars['disk'] ?? null,
+    'selectedDisk' => $selectedDisk,
 ])->render();
