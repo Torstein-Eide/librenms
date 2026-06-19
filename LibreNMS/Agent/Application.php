@@ -229,7 +229,7 @@ abstract class Application
 
             $prevValue = $sensor->sensor_current;
 
-            Log::info("$value $unit");
+            #Log::info("$value $unit");
 
             app('Datastore')->put($device, 'sensor', [
                 'sensor_class' => $sensor->sensor_class,
