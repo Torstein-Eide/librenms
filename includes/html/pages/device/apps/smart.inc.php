@@ -74,7 +74,7 @@ function smart_debug_rrd_entries(HtmlData $data): array
  */
 function smart_debug_db_panels(HtmlData $data, ?string $selectedDisk): array
 {
-    $appId  = (int) $data->app->app_id;
+    $appId = (int) $data->app->app_id;
     $diskKey = $selectedDisk !== null && $data->disk($selectedDisk) !== null
         ? $selectedDisk : null;
 
@@ -136,7 +136,7 @@ function smart_debug_db_panels(HtmlData $data, ?string $selectedDisk): array
         }
         $rows = $query->get()->map(fn ($r) => (array) $r)->all();
 
-        $title  = $diskKey !== null ? "{$table} ({$diskKey})" : $table;
+        $title = $diskKey !== null ? "{$table} ({$diskKey})" : $table;
         $csvFile = $diskKey !== null
             ? "{$table}-{$appId}-" . substr($diskKey, 0, 40) . '.csv'
             : "{$table}-{$appId}.csv";
@@ -272,7 +272,7 @@ if (! isset($app, $device, $vars)
 
 $htmlData = HtmlData::forDevice($app, $device);
 
-echo view('device.apps.smart', [
+echo view('device.apps.smart.index', [
     'data'         => $htmlData,
     'app'          => $app,
     'device'       => $device,

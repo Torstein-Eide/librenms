@@ -124,6 +124,14 @@ class Common extends Application
         251 => 'NAND_Writes',
     ];
 
+    // Rate-of-change lookback windows (column suffix => seconds).
+    private const RATE_WINDOWS = [
+        '8h' => 28800,
+        '24h' => 86400,
+        '168h' => 604800,
+        '672h' => 2419200,
+    ];
+
     private const HANDLER_MIB = 'mib'; // SMARTMON-*-MIB
     private const HANDLER_V1 = 'v1';  // Json
 
@@ -382,6 +390,7 @@ class Common extends Application
             }
             if (isset($this->sataAttributes[$devIdx])) {
                 $this->syncSataAttributeRows($dev, $this->sataAttributes[$devIdx]);
+                $this->syncSataAttributeRates($dev, $this->sataAttributes[$devIdx]);
             }
         }
 
@@ -436,8 +445,9 @@ class Common extends Application
                     StateTranslation::define('OK', 1, Severity::Ok),
                     StateTranslation::define('Warning', 2, Severity::Warning),
                     StateTranslation::define('Warning: Attr Failed', 3, Severity::Warning),
-                    StateTranslation::define('Error: Attr Failing', 4, Severity::Error),
-                    StateTranslation::define('Unavailable', 5, Severity::Warning),
+                    StateTranslation::define('Warning: Attr Rate', 4, Severity::Warning),
+                    StateTranslation::define('Error: Attr Failing', 5, Severity::Error),
+                    StateTranslation::define('Unavailable', 6, Severity::Warning),
                 ]);
         }
 
@@ -915,7 +925,8 @@ class Common extends Application
                     continue;
                 }
                 $rawType = $rrdTypes[$id]
-                    ?? (isset(self::ATA_COUNTER_ATTRS[$id]) ? 'COUNTER' : 'GAUGE');
+                    ?? ($this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(self::ATA_COUNTER_ATTRS[$id])
+                        ? 'COUNTER' : 'GAUGE');
                 $rrd_def->addDataset($dsRaw, $rawType, 0);
                 $rrd_def->addDataset($dsNorm, 'GAUGE', 0);
                 $fields[$dsRaw] = $row['smartmonSataAttrRawValue'] ?? null;
@@ -1629,13 +1640,154 @@ class Common extends Application
                     : null,
                 'status'           => $row['smartmonSataAttrStatus'] ?? null,
                 'flags'            => $this->parseAttrFlags($row['smartmonSataAttrFlags'] ?? null),
-                'rrd_type'         => in_array($row['smartmonSataAttrName'] ?? null, self::ATA_COUNTER_ATTRS, true)
+                'rrd_type'         => $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null)
                     ? 'COUNTER' : 'GAUGE',
             ], ['app_id', 'disk_key', 'attribute_id'], [
                 'name', 'value_norm', 'value_worst',
                 'value_threshold', 'value_raw', 'value_raw_string', 'status', 'flags', 'rrd_type',
             ]);
         }
+    }
+
+    /**
+     * Compute average raw-value change per hour over the 8h/24h/168h/672h
+     * lookback windows from RRD history, persist into smart_sata_attributes,
+     * and escalate status from ok(1) to rate-warning(4) when a configured
+     * threshold is exceeded. Runs at discovery time only (RRD history accrues
+     * via polling; discovery is the natural cadence to re-evaluate trends).
+     */
+    private function syncSataAttributeRates(array $dev, array $attrRows): void
+    {
+        $diskKey = $dev['disk_key'];
+        $idx = $this->mibDiskIndex($diskKey);
+        $rrd = app(Rrd::class);
+        $rrdFilename = $rrd->name($this->device['hostname'], ['app', 'smart', $this->appId, $idx]);
+        $now = time();
+
+        $rrdTypes = DB::table('smart_sata_attributes')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->pluck('rrd_type', 'attribute_id');
+
+        $counterDs = [];
+        $gaugeDs = [];
+        foreach ($attrRows as $attrId => $row) {
+            $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
+            $ds = 'id' . $id;
+            if (($rrdTypes[$id] ?? null) === 'COUNTER') {
+                $counterDs[] = $ds;
+            } else {
+                $gaugeDs[] = $ds;
+            }
+        }
+
+        $ratesByDs = $this->fetchAttributeRates($rrd, $rrdFilename, $counterDs, $gaugeDs, $now);
+
+        foreach ($attrRows as $attrId => $row) {
+            $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
+            $ds = 'id' . $id;
+            $rates = [
+                '8h' => $ratesByDs[$ds]['8h'] ?? null,
+                '24h' => $ratesByDs[$ds]['24h'] ?? null,
+                '168h' => $ratesByDs[$ds]['168h'] ?? null,
+                '672h' => $ratesByDs[$ds]['672h'] ?? null,
+            ];
+
+            $status = $row['smartmonSataAttrStatus'] ?? null;
+            if ($this->intValue($status) === 1 && $this->rateExceedsThreshold($diskKey, $id, $rates)) {
+                $status = 4;
+            }
+
+            DB::table('smart_sata_attributes')->upsert([
+                'app_id'       => $this->appId,
+                'device_id'    => $this->deviceId,
+                'disk_key'     => $diskKey,
+                'attribute_id' => $id,
+                'rate_8h'      => $rates['8h'],
+                'rate_24h'     => $rates['24h'],
+                'rate_168h'    => $rates['168h'],
+                'rate_672h'    => $rates['672h'],
+                'status'       => $status,
+            ], ['app_id', 'disk_key', 'attribute_id'], [
+                'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h', 'status',
+            ]);
+        }
+    }
+
+    /**
+     * Average change per hour, per RRD dataset, for every lookback window.
+     *
+     * Every dataset for a given window is fetched in ONE batched rrdtool call
+     * (Rrd::getWindowAverages() takes the whole dataset list) — each call
+     * spawns a separate rrdtool subprocess, so this is 4 calls for all COUNTER
+     * datasets plus 8 for all GAUGE datasets (2 boundary probes x 4 windows),
+     * regardless of how many SMART attributes the disk has. Looping a single
+     * dataset per call here previously spawned one subprocess per attribute
+     * per window, which exhausted the open-file limit on disks with 30+
+     * attributes.
+     *
+     * @param  array<string>  $counterDs
+     * @param  array<string>  $gaugeDs
+     * @return array<string, array<string, float>> dataset => window suffix => rate
+     */
+    private function fetchAttributeRates(Rrd $rrd, string $filename, array $counterDs, array $gaugeDs, int $now): array
+    {
+        $ratesByDs = [];
+        $probe = 600; // 10 minutes, well above the default 5-minute poll step
+
+        foreach (self::RATE_WINDOWS as $suffix => $seconds) {
+            $start = $now - $seconds;
+            $hours = $seconds / 3600;
+
+            if ($counterDs !== []) {
+                foreach ($rrd->getWindowAverages($filename, $counterDs, $start, $now) as $ds => $perSecond) {
+                    $ratesByDs[$ds][$suffix] = $perSecond * 3600;
+                }
+            }
+
+            if ($gaugeDs !== []) {
+                $startVals = $rrd->getWindowAverages($filename, $gaugeDs, $start, min($start + $probe, $now));
+                $endVals = $rrd->getWindowAverages($filename, $gaugeDs, max($now - $probe, $start), $now);
+                foreach ($gaugeDs as $ds) {
+                    if (isset($startVals[$ds], $endVals[$ds])) {
+                        $ratesByDs[$ds][$suffix] = ($endVals[$ds] - $startVals[$ds]) / $hours;
+                    }
+                }
+            }
+        }
+
+        return $ratesByDs;
+    }
+
+    /** True if any rate window exceeds the effective (per-disk override, else global default) threshold. */
+    private function rateExceedsThreshold(string $diskKey, int $attrId, array $rates): bool
+    {
+        $threshold = DB::table('smart_attribute_thresholds')
+            ->where('attribute_id', $attrId)
+            ->where(function ($q) use ($diskKey) {
+                $q->where(['app_id' => $this->appId, 'disk_key' => $diskKey])
+                    ->orWhere(['app_id' => 0, 'disk_key' => '']);
+            })
+            ->orderByRaw("disk_key = '' asc")
+            ->first();
+
+        if ($threshold === null) {
+            return false;
+        }
+
+        $columns = [
+            '8h' => 'warn_rate_8h', '24h' => 'warn_rate_24h',
+            '168h' => 'warn_rate_168h', '672h' => 'warn_rate_672h',
+        ];
+        foreach ($columns as $suffix => $column) {
+            $limit = $threshold->$column ?? null;
+            $rate = $rates[$suffix] ?? null;
+            if ($limit !== null && $rate !== null && abs($rate) > (float) $limit) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Update only the four poll-relevant attribute columns; discovery keeps the rest. */
@@ -2503,15 +2655,16 @@ class Common extends Application
     }
 
     /**
-     * Map an overall SMART status plus all attribute statuses to a 1–5 health value.
+     * Map an overall SMART status plus all attribute statuses to a 1–6 health value.
      * Values are coerced through intValue() so the strict comparisons hold whether
      * SNMP/DB hand back ints or enum strings ("failingNow(2)").
      *
      *  1 = OK
      *  2 = Warning  (SMART overall test not passed)
      *  3 = Warning  (an attribute has failed in the past)
-     *  4 = Error    (an attribute is currently failing)
-     *  5 = Unavailable
+     *  4 = Warning  (an attribute's rate of change exceeded a configured threshold)
+     *  5 = Error    (an attribute is currently failing)
+     *  6 = Unavailable
      *
      * @param iterable<mixed> $attrStatuses raw smartmonSataAttrStatus values
      */
@@ -2519,7 +2672,7 @@ class Common extends Application
     {
         $overall = $this->intValue($overall);
         if ($overall === 4) {
-            return 5; // unavailable
+            return 6; // unavailable
         }
 
         $level = ($overall !== null && $overall !== 1) ? 2 : 1;
@@ -2528,8 +2681,10 @@ class Common extends Application
             $status = $this->intValue($status);
             if ($status === 3) {       // failedInPast
                 $level = max($level, 3);
-            } elseif ($status === 2) { // failingNow
+            } elseif ($status === 4) { // rate warning (synthesized, not device-reported)
                 $level = max($level, 4);
+            } elseif ($status === 2) { // failingNow
+                $level = max($level, 5);
             }
         }
 
@@ -2874,5 +3029,15 @@ class Common extends Application
         }
 
         return null;
+    }
+
+    /** True if $name should be treated as a COUNTER-type ATA attribute (legacy list or "Count" in the name). */
+    private function isCounterAttrName(?string $name): bool
+    {
+        if ($name === null) {
+            return false;
+        }
+
+        return in_array($name, self::ATA_COUNTER_ATTRS, true) || stripos($name, 'count') !== false;
     }
 }

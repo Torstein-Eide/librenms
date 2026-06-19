@@ -364,7 +364,7 @@
 
     $attrAppId = $data->app->app_id;
     $attrNow   = \App\Facades\LibrenmsConfig::get('time.now');
-    $attrFrom  = \App\Facades\LibrenmsConfig::get('time.day');
+    $attrFrom  = \App\Facades\LibrenmsConfig::get('time.week');
     $tblId     = 'smart-attr-tbl-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $idx);
 
     // Toolbar: text filter + failing-only toggle.
@@ -391,6 +391,10 @@
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Worst</th>'
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Thresh</th>'
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Raw</th>'
+        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer" title="Average raw value change per hour over the last 8 hours">&Delta;/h 8h</th>'
+        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer" title="Average raw value change per hour over the last 24 hours">&Delta;/h 24h</th>'
+        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer" title="Average raw value change per hour over the last 168 hours (1 week)">&Delta;/h 1w</th>'
+        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer" title="Average raw value change per hour over the last 672 hours (1 month)">&Delta;/h 1mo</th>'
         . '</tr></thead><tbody>';
 
     $dark = session('applied_site_style') === 'dark';
@@ -399,10 +403,11 @@
         $status = (int) ($attr['status'] ?? 0);
         $statusLabel = $status === -1 ? 'NA' : $data->decode('attr_status', $attr['status'] ?? null);
 
-        // Row shading by status (dark-mode aware): 2 red, 3 light red, -1 muted.
+        // Row shading by status (dark-mode aware): 2 red, 3 light red, 4 amber (rate warning), -1 muted.
         $rowStyle = match ($status) {
             2  => $dark ? 'background-color:#5a2a2a' : 'background-color:#f2a8a8',
             3  => $dark ? 'background-color:#3f2a2c' : 'background-color:#fbdede',
+            4  => $dark ? 'background-color:#4a3a1a' : 'background-color:#fbeccb',
             -1 => $dark ? 'background-color:#15171a' : 'background-color:#f4f4f4',
             default => '',
         };
@@ -443,8 +448,17 @@
             1  => '<span class="label label-default">' . htmlspecialchars($statusLabel) . '</span>',
             2  => '<span class="label label-danger">' . htmlspecialchars($statusLabel) . '</span>',
             3  => '<span class="label" style="background-color:#e8857f">' . htmlspecialchars($statusLabel) . '</span>',
+            4  => '<span class="label label-warning">' . htmlspecialchars($statusLabel) . '</span>',
             default => '<span class="text-muted">' . htmlspecialchars($statusLabel) . '</span>',
         };
+
+        $fmtRate = static function ($v) {
+            return is_numeric($v) ? number_format((float) $v, 2) : '-';
+        };
+        $rate8h   = $attr['rate_8h'] ?? null;
+        $rate24h  = $attr['rate_24h'] ?? null;
+        $rate168h = $attr['rate_168h'] ?? null;
+        $rate672h = $attr['rate_672h'] ?? null;
 
         // In-row mini graph: the same smart_v2_attributes graph, 60x15.
         // Click → graphs page, hover → day/week/month/year popup (as on device overview).
@@ -457,6 +471,7 @@
                 'attr_id'     => $attrId,
                 'has_raw'     => 1,
                 'has_norm'    => 1,
+                'rate_unit'   => $attr['rate_unit'] ?? '',
                 'from'        => $attrFrom,
                 'to'          => $attrNow,
                 'width'       => 60,
@@ -476,6 +491,10 @@
             . '<td data-sort="' . htmlspecialchars((string) ($worst ?? ''), ENT_QUOTES) . '">' . $worstCell . '</td>'
             . '<td data-sort="' . htmlspecialchars((string) ($thresh ?? ''), ENT_QUOTES) . '">' . $threshCell . '</td>'
             . '<td data-sort="' . $rawNum . '">' . $rawCell . '</td>'
+            . '<td data-sort="' . htmlspecialchars((string) ($rate8h ?? ''), ENT_QUOTES) . '">' . $fmtRate($rate8h) . '</td>'
+            . '<td data-sort="' . htmlspecialchars((string) ($rate24h ?? ''), ENT_QUOTES) . '">' . $fmtRate($rate24h) . '</td>'
+            . '<td data-sort="' . htmlspecialchars((string) ($rate168h ?? ''), ENT_QUOTES) . '">' . $fmtRate($rate168h) . '</td>'
+            . '<td data-sort="' . htmlspecialchars((string) ($rate672h ?? ''), ENT_QUOTES) . '">' . $fmtRate($rate672h) . '</td>'
             . '</tr>';
     }
     echo '</tbody></table></div>';

@@ -401,6 +401,44 @@ class Rrd extends BaseDatastore
     }
 
     /**
+     * Get a single AVERAGE-consolidated value for one or more datasets over an
+     * arbitrary [start, end] window (one xport bucket spanning the whole
+     * window, all requested datasets in a single rrdtool invocation).
+     *
+     * Always batch every dataset you need for the same window into one call:
+     * each call spawns a separate rrdtool subprocess (see runXportRates()),
+     * so looping this per-dataset instead of passing the full list multiplies
+     * subprocess (and file descriptor) usage for no benefit.
+     *
+     * For a COUNTER-type dataset, rrdtool auto-derives the stored counter to a
+     * per-second rate of change on read, so the returned value is already a
+     * rate (changes/second) — callers multiply by 3600 for changes/hour. For a
+     * GAUGE-type dataset this is simply the average value over the window, not
+     * a rate; callers wanting a rate of change for a GAUGE should difference
+     * two narrow boundary calls instead.
+     *
+     * @param  string  $filename  Full path to the rrd file
+     * @param  array<string>  $datasets  Dataset names to export
+     * @param  int  $start  Unix timestamp, window start
+     * @param  int  $end  Unix timestamp, window end
+     * @return array<string, float>
+     */
+    public function getWindowAverages(string $filename, array $datasets, int $start, int $end): array
+    {
+        $datasets = array_values(array_filter(array_unique($datasets), fn ($dataset): bool => is_string($dataset) && $dataset !== ''));
+        if (empty($datasets) || $end <= $start) {
+            return [];
+        }
+
+        $xportOutput = $this->runXportRates($filename, $datasets, 'AVERAGE', $start, $end, $end - $start);
+        if ($xportOutput === null) {
+            return [];
+        }
+
+        return $this->parseXportRates($xportOutput, $datasets);
+    }
+
+    /**
      * @return array{start: int, end: int, step: int}|null
      */
     private function getLastRateWindow(string $filename): ?array
@@ -647,7 +685,7 @@ class Rrd extends BaseDatastore
         }
 
         $existing = array_flip($this->listDatasets($filename));
-        $options  = [];
+        $options = [];
 
         foreach ($renames as $old => $new) {
             if (isset($existing[$old]) && ! isset($existing[$new])) {
@@ -685,8 +723,8 @@ class Rrd extends BaseDatastore
             return true;
         }
 
-        $existing  = $this->listDatasets($filename);
-        $toRemove  = array_values(array_intersect($existing, $dsNames));
+        $existing = $this->listDatasets($filename);
+        $toRemove = array_values(array_intersect($existing, $dsNames));
 
         if (empty($toRemove)) {
             return true;
@@ -695,7 +733,7 @@ class Rrd extends BaseDatastore
         // Build a map of DS name → 0-based index so we know which positional
         // slots to strip from cdp_prep and row elements.
         $indexByName = array_flip($existing);
-        $removeIdx   = array_map(fn ($ds) => $indexByName[$ds], $toRemove);
+        $removeIdx = array_map(fn ($ds) => $indexByName[$ds], $toRemove);
         rsort($removeIdx); // descending so later removals don't shift earlier positions
 
         // Dump the RRD to XML using a one-shot process (avoids pipe truncation).
@@ -762,7 +800,7 @@ class Rrd extends BaseDatastore
             return false;
         }
 
-        Log::info("RRD: discarded DS [" . implode(', ', $toRemove) . "] from $filename");
+        Log::info('RRD: discarded DS [' . implode(', ', $toRemove) . "] from $filename");
 
         return true;
     }

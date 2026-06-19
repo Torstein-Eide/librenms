@@ -108,6 +108,7 @@
             'attr_thresh' => $powerSpec['thresh'] !== null ? (string) $powerSpec['thresh'] : '',
             'has_raw'     => $powerSpec['has_raw'] ? '1' : '0',
             'has_norm'    => $powerSpec['has_norm'] ? '1' : '0',
+            'rate_unit'   => $powerSpec['rate_unit'] ?? '',
         ]);
     }
     if ($hasBig5) {
@@ -143,6 +144,7 @@ function smartAttrScaleToggle(cb, wrapperId) {
                 'attr_thresh' => $spec['thresh'] !== null ? (string) $spec['thresh'] : '',
                 'has_raw'     => $spec['has_raw'] ? '1' : '0',
                 'has_norm'    => $spec['has_norm'] ? '1' : '0',
+                'rate_unit'   => $spec['rate_unit'] ?? '',
             ]);
         }
         echo '</div>';

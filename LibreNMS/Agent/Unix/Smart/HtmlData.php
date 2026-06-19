@@ -36,6 +36,19 @@ class HtmlData
     /** ATA SMART attribute IDs that carry SSD wear-remaining as the normalised value. */
     private const WEAR_ATTR_IDS = [173, 177, 202, 231, 233];
 
+    /**
+     * Legacy fixed-list COUNTER attribute names (must mirror
+     * {@see \LibreNMS\Agent\Module\Smart\Common::ATA_COUNTER_ATTRS} values) —
+     * these graph in changes/second; any other COUNTER attribute (detected by
+     * "Count" in the name) graphs in changes/hour. See attributeRateUnit().
+     */
+    private const LEGACY_PERSEC_COUNTER_NAMES = [
+        'Used_Rsvd_Blk_Cnt_Tot', 'Unused_Rsvd_Blk_Cnt_Tot',
+        'Total_LBAs_Written', 'Total_LBAs_Read',
+        'Timed_Workld_Media_Wear', 'Timed_Workld_RdWr_Ratio',
+        'Timed_Workld_Timer', 'NAND_Writes',
+    ];
+
     /** System PCI ID database candidates (pciutils / hwdata). */
     private const PCI_IDS_PATHS = ['/usr/share/misc/pci.ids', '/usr/share/hwdata/pci.ids'];
 
@@ -218,10 +231,16 @@ class HtmlData
                 continue;
             }
 
+            $diskAttributes = $rowsToArrays($attributes[$key] ?? []);
+            foreach ($diskAttributes as &$attrRow) {
+                $attrRow['rate_unit'] = $this->attributeRateUnit($attrRow);
+            }
+            unset($attrRow);
+
             $disks[$key] = $common + [
                 'info'             => isset($info[$key][0]) ? (array) $info[$key][0] : [],
                 'health'           => isset($health[$key][0]) ? (array) $health[$key][0] : [],
-                'attributes'       => $rowsToArrays($attributes[$key] ?? []),
+                'attributes'       => $diskAttributes,
                 'selftests'        => $rowsToArrays($selftests[$key] ?? []),
                 'errors'           => $rowsToArrays($errors[$key] ?? []),
                 'error_cmds'       => $this->indexErrorCmds($errorCmds[$key] ?? []),
@@ -726,6 +745,20 @@ class HtmlData
     }
 
     /**
+     * Which rate unit the attribute's raw RRD series should be graphed in:
+     * 'hour' for newly-detected ("Count" in the name) counters, 'second' for
+     * the original fixed-list counters, null for GAUGE (no rate semantics).
+     */
+    public function attributeRateUnit(array $attr): ?string
+    {
+        if (($attr['rrd_type'] ?? null) !== 'COUNTER') {
+            return null;
+        }
+
+        return in_array($attr['name'] ?? null, self::LEGACY_PERSEC_COUNTER_NAMES, true) ? 'second' : 'hour';
+    }
+
+    /**
      * Human-readable flag lines for an attribute, for the Flags tooltip,
      * derived from the smartmonSataAttrFlags bitmask.
      *
@@ -834,7 +867,7 @@ class HtmlData
      * Per-attribute graph specs for a disk, limited to attributes whose RRD
      * datasets actually exist.
      *
-     * @return array<int, array{id:int, title:string, header:string, thresh:?float, has_raw:bool, has_norm:bool}>
+     * @return array<int, array{id:int, title:string, header:string, thresh:?float, has_raw:bool, has_norm:bool, rate_unit:?string}>
      */
     public function attributeGraphSpecs(string $diskKey): array
     {
@@ -867,6 +900,7 @@ class HtmlData
                 'thresh'   => is_numeric($attr['value_threshold'] ?? null) ? (float) $attr['value_threshold'] : null,
                 'has_raw'  => true,
                 'has_norm' => true,
+                'rate_unit' => $attr['rate_unit'] ?? null,
             ];
         }
 
@@ -901,9 +935,10 @@ class HtmlData
         'attr_type' => [0 => 'Unknown', 1 => 'Pre-fail', 2 => 'Old age'],
         // SmartmonAtaSmartAttrUpdated
         'attr_updated' => [0 => 'Unknown', 1 => 'Always', 2 => 'Offline'],
-        // SmartmonAtaSmartAttrStatus
+        // SmartmonAtaSmartAttrStatus, plus LibreNMS-synthesized 4 = rate warning
         'attr_status' => [
             -1 => '-', 0 => 'Unknown', 1 => 'OK', 2 => 'Failing now', 3 => 'Failed in past',
+            4 => 'Warning (rate)',
         ],
         // SmartmonAtaSelfTestType
         'selftest_type' => [

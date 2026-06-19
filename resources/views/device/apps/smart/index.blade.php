@@ -413,6 +413,10 @@
         echo '<span class="pull-right">' . debug_toggle_button('smart-debug-panels') . '</span>';
     }
 
+    echo '<a class="pull-right btn btn-default btn-sm" style="margin-left:10px" href="'
+        . htmlspecialchars(route('device.apps.smart.settings', $device['device_id']), ENT_QUOTES)
+        . '"><i class="fa fa-cog"></i> Settings</a>';
+
     $ovLabel = $selectedDisk === null ? '<span class="pagemenu-selected">All Drives</span>' : 'All Drives';
     $links = [generate_link($ovLabel, $linkArray)];
     foreach ($data->diskKeys() as $key) {
@@ -656,30 +660,30 @@ SCRIPT;
     {{-- ================================================================== --}}
     @php $detailDisk = $data->disk($selectedDisk); @endphp
     @if($detailDisk !== null && $data->isNvme($detailDisk) && $viewMode === 'basic')
-        @include('device.apps.smart-nvme-basic', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.nvme-basic', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($detailDisk !== null && $data->isNvme($detailDisk) && $viewMode === 'metadata')
         {{-- Static identity/capability metadata, namespaces, and power states (NVMe only). --}}
-        @include('device.apps.smart-nvme-metadata', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.nvme-metadata', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($detailDisk !== null && $data->isNvme($detailDisk) && $viewMode === 'selftest')
         {{-- Self-test log (NVMe only). --}}
-        @include('device.apps.smart-nvme-selftest', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.nvme-selftest', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($detailDisk !== null && $data->isNvme($detailDisk))
         {{-- Graphs (NVMe only; this is the only remaining viewMode that reaches here). --}}
-        @include('device.apps.smart-nvme-graphs', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.nvme-graphs', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($viewMode === 'basic')
         {{-- Identity, health sensors, SMART attributes (SATA/SAS only). --}}
-        @include('device.apps.smart-sata-basic', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.sata-basic', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($viewMode === 'metadata')
         {{-- Static identity/capability metadata + FARM header pages (SATA/SAS only). --}}
-        @include('device.apps.smart-sata-metadata', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.sata-metadata', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($viewMode === 'selftest')
         {{-- Self-test log, selective spans, offline collection and related capabilities. --}}
-        @include('device.apps.smart-sata-selftest', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.sata-selftest', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @elseif($viewMode === 'tables')
         {{-- Device statistics tables (General, Rotating Media, Errors, Transport, FARM*) + PHY counters. --}}
-        @include('device.apps.smart-sata-tables', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.sata-tables', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @else
         {{-- Graphs (SATA/SAS only; this is the only remaining viewMode that reaches here). --}}
-        @include('device.apps.smart-sata-graphs', ['disk' => $detailDisk, 'viewMode' => $viewMode])
+        @include('device.apps.smart.sata-graphs', ['disk' => $detailDisk, 'viewMode' => $viewMode])
     @endif
 @endif
