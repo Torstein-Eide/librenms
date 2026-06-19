@@ -24,6 +24,16 @@ class SmartController
 
     public function index(Device $device, Request $request): View
     {
+        return $this->renderSmartPage($device, $request->query('disk'), 'overview');
+    }
+
+    public function compare(Device $device, Request $request): View
+    {
+        return $this->renderSmartPage($device, null, 'compare');
+    }
+
+    private function renderSmartPage(Device $device, ?string $selectedDisk, string $smartPage): View
+    {
         $this->authorize('view', $device);
 
         $app = Application::where('device_id', $device->device_id)->where('app_type', 'smart')->firstOrFail();
@@ -35,7 +45,8 @@ class SmartController
             'data' => HtmlData::forDevice($app, $device->toArray()),
             'app' => $app,
             'device' => $device->toArray(),
-            'selectedDisk' => $request->query('disk'),
+            'selectedDisk' => $selectedDisk,
+            'smartPage' => $smartPage,
         ])->render();
 
         return view('device.tabs.legacy', [

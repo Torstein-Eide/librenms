@@ -187,6 +187,7 @@ Route::middleware(['auth'])->group(function (): void {
         Route::delete('module/{module}', [Device\Tabs\ModuleController::class, 'delete'])->name('module.delete');
 
         Route::get('apps/smart', [Device\Apps\SmartController::class, 'index'])->name('apps.smart');
+        Route::get('apps/smart/compare', [Device\Apps\SmartController::class, 'compare'])->name('apps.smart.compare');
         Route::get('apps/smart/settings', [Device\Apps\SmartAttributeSettingsController::class, 'index'])->name('apps.smart.settings');
         Route::post('apps/smart/settings', [Device\Apps\SmartAttributeSettingsController::class, 'update'])->name('apps.smart.settings.update');
         Route::post('apps/smart/settings/reset', [Device\Apps\SmartAttributeSettingsController::class, 'reset'])->name('apps.smart.settings.reset');

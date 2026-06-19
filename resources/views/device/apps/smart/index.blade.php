@@ -6,6 +6,7 @@
     /** @var \LibreNMS\Agent\Unix\Smart\HtmlData $data */
 
     $deviceId  = (int) $data->device['device_id'];
+    $smartPage = $smartPage ?? 'overview';
 
     // Builds a URL back to this same SMART app page, optionally for a specific disk.
     $smartUrl = static fn (?string $disk = null): string => route(
@@ -394,7 +395,9 @@
     print_optionbar_start();
 
     // Label-mode selector (right side).
-    $currentUrl = $smartUrl($selectedDisk);
+    $currentUrl = $smartPage === 'compare'
+        ? route('device.apps.smart.compare', $deviceId)
+        : $smartUrl($selectedDisk);
     $modeOptions = '';
     foreach ($labelModes as $mode => $title) {
         $sel = $mode === $labelMode ? ' selected' : '';
@@ -414,8 +417,12 @@
         . htmlspecialchars(route('device.apps.smart.settings', $device['device_id']), ENT_QUOTES)
         . '"><i class="fa fa-cog"></i> Settings</a>';
 
-    $ovLabel = $selectedDisk === null ? '<span class="pagemenu-selected">All Drives</span>' : 'All Drives';
-    $links = ['<a href="' . htmlspecialchars($smartUrl(), ENT_QUOTES) . '">' . $ovLabel . '</a>'];
+    $ovLabel = $selectedDisk === null && $smartPage === 'overview' ? '<span class="pagemenu-selected">All Drives</span>' : 'All Drives';
+    $compareLabel = $smartPage === 'compare' ? '<span class="pagemenu-selected">Compare</span>' : 'Compare';
+    $links = [
+        '<a href="' . htmlspecialchars($smartUrl(), ENT_QUOTES) . '">' . $ovLabel . '</a>',
+        '<a href="' . htmlspecialchars(route('device.apps.smart.compare', $deviceId), ENT_QUOTES) . '">' . $compareLabel . '</a>',
+    ];
     foreach ($data->diskKeys() as $key) {
         $disk  = $data->disk($key);
         $label = htmlspecialchars($data->displayLabel($disk, $labelMode));
@@ -453,55 +460,7 @@
     smart_debug_render($data, $selectedDisk);
 @endphp
 
-@if($selectedDisk === null || $data->disk($selectedDisk) === null)
-    {{-- ================================================================== --}}
-    {{-- Overview                                                            --}}
-    {{-- ================================================================== --}}
-    @if(! $data->hasDisks())
-        <div class="alert alert-info">No SMART devices have been discovered for this application yet.</div>
-    @else
-        @php $panelStart('Drives'); @endphp
-        <div class="table-responsive">
-            <table class="table table-condensed table-striped table-hover">
-                <thead><tr>
-                    <th>Device</th><th>Model</th><th>Serial</th><th>Type</th>
-                    <th>Temp</th><th>Health</th><th>Self-test Status</th><th>Wear</th><th>Available Spare</th>
-                    <th>Last Short Self-test</th><th>Last Long Self-test</th>
-                </tr></thead>
-                <tbody>
-                @foreach($data->diskKeys() as $key)
-                    @php
-                        $disk    = $data->disk($key);
-                        $devName = htmlspecialchars($data->deviceLabel($disk));
-                        $serial  = $data->serial($disk);
-                        $deviceLink = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . $devName . '</a>';
-                        $modelLink  = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . htmlspecialchars($data->model($disk)) . '</a>';
-                        $serialCell = $serial !== ''
-                            ? '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . htmlspecialchars($serial) . '</a>'
-                            : '-';
-                        $isNvmeDisk = $data->isNvme($disk);
-                        $usedSensor = $isNvmeDisk ? $data->percentageUsedSensor($key) : null;
-                        $spareSensor = $data->availableSpareSensor($key);
-                    @endphp
-                    <tr>
-                        <td>{!! $deviceLink !!}</td>
-                        <td>{!! $modelLink !!}</td>
-                        <td>{!! $serialCell !!}</td>
-                        <td>{{ $data->typeLabel($disk) }}</td>
-                        <td>{!! $tempBadge($data->temperatureSensor($key)) !!}</td>
-                        <td>{!! $stateBadge($data->healthSensor($key)) !!}</td>
-                        <td>{!! $stateBadge($data->selftestStatusSensor($key)) !!}</td>
-                        <td>{!! $isNvmeDisk ? $percentBadge($usedSensor) : $wearBadge($data->wearRemaining($disk)) !!}</td>
-                        <td>{!! $percentBadge($spareSensor) !!}</td>
-                        <td>{!! $selftestBadge($data->selftestAgeSensor($key, 'short')) !!}</td>
-                        <td>{!! $selftestBadge($data->selftestAgeSensor($key, 'long')) !!}</td>
-                    </tr>
-                @endforeach
-                </tbody>
-            </table>
-        </div>
-        @php $panelEnd(); @endphp
-
+@if($smartPage === 'compare')
         {{-- All-disk SMART Attributes cross-table (SATA/SAS disks only) --}}
         @php
             $sataKeys = array_values(array_filter($data->diskKeys(), static fn ($k) => ! $data->isNvme($data->disk($k))));
@@ -603,6 +562,55 @@ SCRIPT;
                 }
             }
         @endphp
+
+@elseif($selectedDisk === null || $data->disk($selectedDisk) === null)
+    {{-- ================================================================== --}}
+    {{-- Overview                                                            --}}
+    {{-- ================================================================== --}}
+    @if(! $data->hasDisks())
+        <div class="alert alert-info">No SMART devices have been discovered for this application yet.</div>
+    @else
+        @php $panelStart('Drives'); @endphp
+        <div class="table-responsive">
+            <table class="table table-condensed table-striped table-hover">
+                <thead><tr>
+                    <th>Device</th><th>Model</th><th>Serial</th><th>Type</th>
+                    <th>Temp</th><th>Health</th><th>Self-test Status</th><th>Wear</th><th>Available Spare</th>
+                    <th>Last Short Self-test</th><th>Last Long Self-test</th>
+                </tr></thead>
+                <tbody>
+                @foreach($data->diskKeys() as $key)
+                    @php
+                        $disk    = $data->disk($key);
+                        $devName = htmlspecialchars($data->deviceLabel($disk));
+                        $serial  = $data->serial($disk);
+                        $deviceLink = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . $devName . '</a>';
+                        $modelLink  = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . htmlspecialchars($data->model($disk)) . '</a>';
+                        $serialCell = $serial !== ''
+                            ? '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . htmlspecialchars($serial) . '</a>'
+                            : '-';
+                        $isNvmeDisk = $data->isNvme($disk);
+                        $usedSensor = $isNvmeDisk ? $data->percentageUsedSensor($key) : null;
+                        $spareSensor = $data->availableSpareSensor($key);
+                    @endphp
+                    <tr>
+                        <td>{!! $deviceLink !!}</td>
+                        <td>{!! $modelLink !!}</td>
+                        <td>{!! $serialCell !!}</td>
+                        <td>{{ $data->typeLabel($disk) }}</td>
+                        <td>{!! $tempBadge($data->temperatureSensor($key)) !!}</td>
+                        <td>{!! $stateBadge($data->healthSensor($key)) !!}</td>
+                        <td>{!! $stateBadge($data->selftestStatusSensor($key)) !!}</td>
+                        <td>{!! $isNvmeDisk ? $percentBadge($usedSensor) : $wearBadge($data->wearRemaining($disk)) !!}</td>
+                        <td>{!! $percentBadge($spareSensor) !!}</td>
+                        <td>{!! $selftestBadge($data->selftestAgeSensor($key, 'short')) !!}</td>
+                        <td>{!! $selftestBadge($data->selftestAgeSensor($key, 'long')) !!}</td>
+                    </tr>
+                @endforeach
+                </tbody>
+            </table>
+        </div>
+        @php $panelEnd(); @endphp
 
         {{-- Overview graphs + jump nav --}}
         @php

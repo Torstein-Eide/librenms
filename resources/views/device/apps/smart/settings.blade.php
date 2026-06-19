@@ -36,6 +36,7 @@
         <div class="panel panel-default">
             <div class="panel-heading">
                 <a href="{{ $smartAppHref }}">{{ __('Overview') }}</a>
+                | <a href="{{ route('device.apps.smart.compare', $device) }}">{{ __('Compare') }}</a>
                 | <span class="pagemenu-selected">{{ __('Settings') }}</span>
                 <br>&nbsp;&nbsp; {{ __('Setting') }}: <span class="pagemenu-selected">{{ __('Attribute Warning Thresholds') }}</span> | <span class="text-muted">{{ __('...(more to come)') }}</span>
             </div>
