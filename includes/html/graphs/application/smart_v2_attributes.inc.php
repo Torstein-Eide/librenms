@@ -25,7 +25,7 @@ if (! $hasRaw && ! $hasNormalized) {
 }
 
 $normalizedColor = session('applied_site_style') == 'dark' ? '#f2f2f2' : '#272b30';
-$rawColor = '#ff9a9a';
+$rawColor = '#ff9a9a66';
 $thresh = $vars['attr_thresh'] ?? null;
 $normMax = 255.0;
 
@@ -36,8 +36,8 @@ $normMax = 255.0;
 $rateUnit = $vars['rate_unit'] ?? '';
 $rateMultiplier = $rateUnit === 'hour' ? 3600.0 : 1.0;
 $rawLabelSuffix = match ($rateUnit) {
-    'hour' => ' (chg/hr)',
-    'second' => ' (chg/s)',
+    'hour' => ' (changes/hour)',
+    'second' => ' (changes/secound)',
     default => '',
 };
 
@@ -95,6 +95,9 @@ if ($hasRaw && $hasNormalized) {
     $rrd_options[] = "DEF:raw={$rrd_filename}:{$dsRaw}:AVERAGE";
     $rrd_options[] = "DEF:normalized={$rrd_filename}:{$dsNormalized}:AVERAGE";
     $rrd_options[] = "CDEF:rawDisplay=raw,{$rateMultiplier},*";
+    if ($rateUnit === 'hour') {
+        $rrd_options[] = 'CDEF:p_avg_1h=rawDisplay,3600,TRENDNAN';
+    }
 
     $graph_params->right_axis_label = 'Normalized';
     $graph_params->vertical_label = 'Raw' . $rawLabelSuffix;
@@ -119,6 +122,12 @@ if ($hasRaw && $hasNormalized) {
         $rrd_options[] = 'GPRINT:rawDisplay:LAST:%8.1lf';
         $rrd_options[] = 'GPRINT:rawDisplay:MIN:%8.1lf';
         $rrd_options[] = 'GPRINT:rawDisplay:MAX:%8.1lf\l';
+        if ($rateUnit === 'hour') {
+            $rrd_options[] = 'LINE2:p_avg_1h#ff6600:1h avg      ';
+            $rrd_options[] = 'GPRINT:p_avg_1h:LAST:%8.1lf';
+            $rrd_options[] = 'GPRINT:p_avg_1h:MIN:%8.1lf';
+            $rrd_options[] = 'GPRINT:p_avg_1h:MAX:%8.1lf\l';
+        }
         $rrd_options[] = 'LINE2:norm_display' . $normalizedColor . ':Normalized  ';
         $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
         $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
@@ -137,6 +146,12 @@ if ($hasRaw && $hasNormalized) {
         $rrd_options[] = 'GPRINT:rawDisplay:LAST:%8.1lf';
         $rrd_options[] = 'GPRINT:rawDisplay:MIN:%8.1lf';
         $rrd_options[] = 'GPRINT:rawDisplay:MAX:%8.1lf\l';
+        if ($rateUnit === 'hour') {
+            $rrd_options[] = 'LINE2:p_avg_1h#ff6600:1h avg      ';
+            $rrd_options[] = 'GPRINT:p_avg_1h:LAST:%8.1lf';
+            $rrd_options[] = 'GPRINT:p_avg_1h:MIN:%8.1lf';
+            $rrd_options[] = 'GPRINT:p_avg_1h:MAX:%8.1lf\l';
+        }
         $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized  ';
         $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
         $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
@@ -147,10 +162,19 @@ if ($hasRaw && $hasNormalized) {
 
     $rrd_options[] = "DEF:raw={$rrd_filename}:{$dsRaw}:AVERAGE";
     $rrd_options[] = "CDEF:rawDisplay=raw,{$rateMultiplier},*";
+    if ($rateUnit === 'hour') {
+        $rrd_options[] = 'CDEF:p_avg_1h=rawDisplay,3600,TRENDNAN';
+    }
     $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
     $rrd_options[] = 'GPRINT:rawDisplay:LAST:%8.1lf';
     $rrd_options[] = 'GPRINT:rawDisplay:MIN:%8.1lf';
     $rrd_options[] = 'GPRINT:rawDisplay:MAX:%8.1lf\l';
+    if ($rateUnit === 'hour') {
+        $rrd_options[] = 'LINE2:p_avg_1h#ff6600:1h avg      ';
+        $rrd_options[] = 'GPRINT:p_avg_1h:LAST:%8.1lf';
+        $rrd_options[] = 'GPRINT:p_avg_1h:MIN:%8.1lf';
+        $rrd_options[] = 'GPRINT:p_avg_1h:MAX:%8.1lf\l';
+    }
 } else {
     $graph_params->vertical_label = 'Normalized';
 
