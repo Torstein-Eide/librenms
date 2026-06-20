@@ -431,7 +431,7 @@ class Common extends Application
 
         // Health: synthesised from overall status + attribute statuses
         if (isset($health['smartmonSataHealthOverallStatus'])) {
-            $synthesized = $this->synthesizeHealthStatus($health, $attrRows);
+            $synthesized = $this->synthesizeHealthStatus($health, $attrRows, $diskKey);
             $this->discoverSensor(
                 class: 'state',
                 type: 'smart_mib_health',
@@ -1652,9 +1652,9 @@ class Common extends Application
     /**
      * Compute average raw-value change per hour over the 8h/24h/168h/672h
      * lookback windows from RRD history, persist into smart_sata_attributes,
-     * and escalate status from ok(1) to rate-warning(4) when a configured
-     * threshold is exceeded. Runs at discovery time only (RRD history accrues
-     * via polling; discovery is the natural cadence to re-evaluate trends).
+     * and resolve rate_status (-1/1/2) against the configured rate-of-change
+     * threshold. Runs at discovery time only (RRD history accrues via polling;
+     * discovery is the natural cadence to re-evaluate trends).
      */
     private function syncSataAttributeRates(array $dev, array $attrRows): void
     {
@@ -1682,6 +1682,7 @@ class Common extends Application
         }
 
         $ratesByDs = $this->fetchAttributeRates($rrd, $rrdFilename, $counterDs, $gaugeDs, $now);
+        $thresholdRows = $this->loadThresholdRows($diskKey);
 
         foreach ($attrRows as $attrId => $row) {
             $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
@@ -1692,11 +1693,8 @@ class Common extends Application
                 '168h' => $ratesByDs[$ds]['168h'] ?? null,
                 '672h' => $ratesByDs[$ds]['672h'] ?? null,
             ];
-
-            $status = $row['smartmonSataAttrStatus'] ?? null;
-            if ($this->intValue($status) === 1 && $this->rateExceedsThreshold($diskKey, $id, $rates)) {
-                $status = 4;
-            }
+            $rawStatus = $this->intValue($row['smartmonSataAttrStatus'] ?? null);
+            $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
 
             DB::table('smart_sata_attributes')->upsert([
                 'app_id'       => $this->appId,
@@ -1707,9 +1705,10 @@ class Common extends Application
                 'rate_24h'     => $rates['24h'],
                 'rate_168h'    => $rates['168h'],
                 'rate_672h'    => $rates['672h'],
-                'status'       => $status,
+                'status'       => $this->combineStatus($rawStatus, $rateStatus),
+                'rate_status'  => $rateStatus,
             ], ['app_id', 'disk_key', 'attribute_id'], [
-                'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h', 'status',
+                'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h', 'status', 'rate_status',
             ]);
         }
     }
@@ -1759,30 +1758,101 @@ class Common extends Application
         return $ratesByDs;
     }
 
-    /** True if any rate window exceeds the effective (per-disk override, else global default) threshold. */
-    private function rateExceedsThreshold(string $diskKey, int $attrId, array $rates): bool
+    /**
+     * Resolve smart_sata_attributes.rate_status for one attribute: -1 (no rate-of-change
+     * threshold enabled for this disk/attribute), 1 (enabled, no window exceeds it), or
+     * 2 (enabled, at least one window exceeds it). Independent of the device-reported
+     * `status` column, so polling and discovery never fight over the same field.
+     *
+     * @param  \Illuminate\Support\Collection<int, object>  $thresholdRows  this disk's rows, from loadThresholdRows()
+     */
+    /**
+     * Fold rate_status into the displayed `status`: a rate-of-change breach (rate_status=2)
+     * escalates status to 3 (failedInPast) even if the device itself reports the attribute
+     * fine, and a device-reported notRelevant(-1) — meaning the disk has no failure threshold
+     * for this attribute — is treated as ok(1) once a rate-of-change threshold is enabled and
+     * not breached, since the rate threshold then stands in for the missing device one.
+     */
+    private function combineStatus(?int $rawStatus, int $rateStatus): ?int
     {
-        $threshold = DB::table('smart_attribute_thresholds')
-            ->where('attribute_id', $attrId)
+        if ($rateStatus === 2) {
+            return 3;
+        }
+
+        if ($rawStatus === -1 && $rateStatus === 1) {
+            return 1;
+        }
+
+        return $rawStatus;
+    }
+
+    private function resolveRateStatus(\Illuminate\Support\Collection $thresholdRows, int $attrId, array $rates): int
+    {
+        $limits = $this->effectiveLimits($thresholdRows, $attrId);
+        if (! $this->hasEnabledThreshold($limits)) {
+            return -1;
+        }
+
+        return $this->rateExceedsThreshold($limits, $rates) ? 2 : 1;
+    }
+
+    /**
+     * Every smart_attribute_thresholds row that can apply to this disk: its own per-disk
+     * overrides plus every global-default row (app_id=0, disk_key=''). Fetched once per
+     * disk so effectiveLimits() can look up a given attribute_id in memory rather than
+     * re-querying per attribute — this runs in the poller hot path.
+     */
+    private function loadThresholdRows(string $diskKey): \Illuminate\Support\Collection
+    {
+        return DB::table('smart_attribute_thresholds')
             ->where(function ($q) use ($diskKey) {
                 $q->where(['app_id' => $this->appId, 'disk_key' => $diskKey])
                     ->orWhere(['app_id' => 0, 'disk_key' => '']);
             })
-            ->orderByRaw("disk_key = '' asc")
-            ->first();
+            ->get();
+    }
 
-        if ($threshold === null) {
-            return false;
+    /**
+     * Effective rate-of-change limit per window, merged column-by-column: the per-disk
+     * override wins for a given window only when it's actually enabled there; otherwise
+     * that window falls back to the global default. A single ::first() pick between the
+     * two rows would let an override with no enabled windows fully shadow a configured
+     * global default, instead of falling back to it.
+     *
+     * @param  \Illuminate\Support\Collection<int, object>  $thresholdRows  this disk's rows, from loadThresholdRows()
+     * @return array<string, float|null> window suffix (8h/24h/168h/672h) => limit
+     */
+    private function effectiveLimits(\Illuminate\Support\Collection $thresholdRows, int $attrId): array
+    {
+        $rows = $thresholdRows->where('attribute_id', $attrId);
+        $diskRow = $rows->firstWhere('disk_key', '!=', '');
+        $globalRow = $rows->firstWhere('disk_key', '');
+
+        $limits = [];
+        foreach (['8h' => 'warn_rate_8h', '24h' => 'warn_rate_24h', '168h' => 'warn_rate_168h', '672h' => 'warn_rate_672h'] as $suffix => $column) {
+            $limits[$suffix] = ($diskRow !== null ? $this->thresholdLimit($diskRow, $column) : null)
+                ?? ($globalRow !== null ? $this->thresholdLimit($globalRow, $column) : null);
         }
 
-        $columns = [
-            '8h' => 'warn_rate_8h', '24h' => 'warn_rate_24h',
-            '168h' => 'warn_rate_168h', '672h' => 'warn_rate_672h',
-        ];
-        foreach ($columns as $suffix => $column) {
-            $limit = $threshold->$column ?? null;
-            $rate = $rates[$suffix] ?? null;
-            if ($limit !== null && $rate !== null && abs($rate) > (float) $limit) {
+        return $limits;
+    }
+
+    /**
+     * A configured warn_rate_* limit, or null if unset/0 — 0 means "no limit" (disabled),
+     * not "warn on any change", so it must not be treated as an active threshold.
+     */
+    private function thresholdLimit(object $threshold, string $column): ?float
+    {
+        $value = $threshold->$column ?? null;
+
+        return $value !== null && (float) $value > 0 ? (float) $value : null;
+    }
+
+    /** True if any window has an enabled rate-of-change limit. */
+    private function hasEnabledThreshold(array $limits): bool
+    {
+        foreach ($limits as $limit) {
+            if ($limit !== null) {
                 return true;
             }
         }
@@ -1790,23 +1860,65 @@ class Common extends Application
         return false;
     }
 
-    /** Update only the four poll-relevant attribute columns; discovery keeps the rest. */
+    /** True if any rate window exceeds its effective limit. */
+    private function rateExceedsThreshold(array $limits, array $rates): bool
+    {
+        foreach ($limits as $suffix => $limit) {
+            $rate = $rates[$suffix] ?? null;
+            if ($limit !== null && $rate !== null && abs($rate) > $limit) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Update the poll-relevant attribute columns; discovery keeps the rest (the rate_*
+     * columns themselves, which need a fresh RRD fetch to recompute).
+     *
+     * rate_status is still re-evaluated on every poll: it's cheap (just a comparison
+     * against the rate_8h/24h/168h/672h values discovery already persisted) and keeps
+     * an attribute's rate-warning verdict current between discovery runs, e.g. once
+     * thresholds are edited via the settings page.
+     */
     private function syncSataAttributeRowsPoll(array $dev, array $attrRows): void
     {
+        $diskKey = $dev['disk_key'];
+
+        $existingRates = DB::table('smart_sata_attributes')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->get(['attribute_id', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'])
+            ->keyBy('attribute_id');
+        $thresholdRows = $this->loadThresholdRows($diskKey);
+
         foreach ($attrRows as $attrId => $row) {
+            $id = (int) $attrId;
+            $existing = $existingRates->get($id);
+            $rates = [
+                '8h' => $existing->rate_8h ?? null,
+                '24h' => $existing->rate_24h ?? null,
+                '168h' => $existing->rate_168h ?? null,
+                '672h' => $existing->rate_672h ?? null,
+            ];
+            $rawStatus = $this->intValue($row['smartmonSataAttrStatus'] ?? null);
+            $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
+
             DB::table('smart_sata_attributes')->upsert([
                 'app_id'           => $this->appId,
                 'device_id'        => $this->deviceId,
-                'disk_key'         => $dev['disk_key'],
-                'attribute_id'     => (int) $attrId,
+                'disk_key'         => $diskKey,
+                'attribute_id'     => $id,
                 'value_norm'       => $row['smartmonSataAttrValue'] ?? null,
                 'value_raw'        => $row['smartmonSataAttrRawValue'] ?? null,
                 'value_raw_string' => isset($row['smartmonSataAttrRawString'])
                     ? substr((string) $row['smartmonSataAttrRawString'], 0, 32)
                     : null,
-                'status'           => $row['smartmonSataAttrStatus'] ?? null,
+                'status'           => $this->combineStatus($rawStatus, $rateStatus),
+                'rate_status'      => $rateStatus,
             ], ['app_id', 'disk_key', 'attribute_id'], [
-                'value_norm', 'value_raw', 'value_raw_string', 'status',
+                'value_norm', 'value_raw', 'value_raw_string', 'status', 'rate_status',
             ]);
         }
     }
@@ -2667,8 +2779,9 @@ class Common extends Application
      *  6 = Unavailable
      *
      * @param iterable<mixed> $attrStatuses raw smartmonSataAttrStatus values
+     * @param iterable<mixed> $rateStatuses smart_sata_attributes.rate_status values
      */
-    private function healthLevel(mixed $overall, iterable $attrStatuses): int
+    private function healthLevel(mixed $overall, iterable $attrStatuses, iterable $rateStatuses = []): int
     {
         $overall = $this->intValue($overall);
         if ($overall === 4) {
@@ -2681,18 +2794,29 @@ class Common extends Application
             $status = $this->intValue($status);
             if ($status === 3) {       // failedInPast
                 $level = max($level, 3);
-            } elseif ($status === 4) { // rate warning (synthesized, not device-reported)
-                $level = max($level, 4);
             } elseif ($status === 2) { // failingNow
                 $level = max($level, 5);
+            }
+        }
+
+        foreach ($rateStatuses as $rateStatus) {
+            if ($this->intValue($rateStatus) === 2) { // rate-of-change threshold exceeded
+                $level = max($level, 4);
             }
         }
 
         return $level;
     }
 
-    /** Synthesize the 1–5 health value from a discovery-time health row + attribute rows. */
-    private function synthesizeHealthStatus(array $health, array $attrs): int
+    /**
+     * Synthesize the 1–5 health value from a discovery-time health row + attribute rows.
+     *
+     * rate_status isn't known yet for this discovery cycle (syncSataAttributeRates(),
+     * which computes it from a fresh RRD fetch, runs later in the same disk loop) — so
+     * this reads the rate_status persisted by the previous discovery/poll instead, same
+     * as synthesizeHealthFromDb() does for the ongoing poll path.
+     */
+    private function synthesizeHealthStatus(array $health, array $attrs, string $diskKey): int
     {
         $statuses = [];
         foreach ($attrs as $row) {
@@ -2701,9 +2825,15 @@ class Common extends Application
             }
         }
 
+        $rateStatuses = DB::table('smart_sata_attributes')
+            ->where('app_id', $this->appId)
+            ->where('disk_key', $diskKey)
+            ->pluck('rate_status');
+
         return $this->healthLevel(
             $health['smartmonSataHealthOverallStatus'] ?? null,
-            $statuses
+            $statuses,
+            $rateStatuses
         );
     }
 
@@ -2719,12 +2849,12 @@ class Common extends Application
             return null;
         }
 
-        $statuses = DB::table('smart_sata_attributes')
+        $attrs = DB::table('smart_sata_attributes')
             ->where('app_id', $this->appId)
             ->where('disk_key', $diskKey)
-            ->pluck('status');
+            ->get(['status', 'rate_status']);
 
-        return $this->healthLevel($health->overall_status, $statuses);
+        return $this->healthLevel($health->overall_status, $attrs->pluck('status'), $attrs->pluck('rate_status'));
     }
 
     /** Human-readable sensor label: "Model Serial (name)" or graceful fallbacks. */

@@ -963,10 +963,9 @@ class HtmlData
         'attr_type' => [0 => 'Unknown', 1 => 'Pre-fail', 2 => 'Old age'],
         // SmartmonAtaSmartAttrUpdated
         'attr_updated' => [0 => 'Unknown', 1 => 'Always', 2 => 'Offline'],
-        // SmartmonAtaSmartAttrStatus, plus LibreNMS-synthesized 4 = rate warning
+        // SmartmonAtaSmartAttrStatus (device-reported)
         'attr_status' => [
             -1 => '-', 0 => 'Unknown', 1 => 'OK', 2 => 'Failing now', 3 => 'Failed in past',
-            4 => 'Warning (rate)',
         ],
         // SmartmonAtaSelfTestType
         'selftest_type' => [

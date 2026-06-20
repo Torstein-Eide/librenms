@@ -100,6 +100,20 @@ function smart_debug_db_panels(HtmlData $data, ?string $selectedDisk): array
     $changes = $changeQuery->orderBy('device_idx')->orderBy('table_id')->get()->map(fn ($r) => (array) $r)->all();
     $panels[] = $wrap('sata', debug_db_table_panel('smart_sata_change', $changes, "smart_sata_change-{$appId}.csv"));
 
+    // smart_attribute_thresholds rows are keyed by (app_id, disk_key, attribute_id), but
+    // a global-default row always has app_id=0/disk_key='' (not this app's app_id) — so
+    // it must be pulled in via an explicit OR rather than the plain app_id filter below.
+    $thresholdQuery = DB::table('smart_attribute_thresholds')
+        ->where(function ($q) use ($appId, $diskKey) {
+            $q->where('app_id', $appId);
+            if ($diskKey !== null) {
+                $q->where('disk_key', $diskKey);
+            }
+        })
+        ->orWhere(['app_id' => 0, 'disk_key' => '']);
+    $thresholds = $thresholdQuery->orderBy('attribute_id')->get()->map(fn ($r) => (array) $r)->all();
+    $panels[] = $wrap('sata', debug_db_table_panel('smart_attribute_thresholds', $thresholds, "smart_attribute_thresholds-{$appId}.csv"));
+
     // ── Per-disk tables (shared query builder) ──────────────────────────────
 
     $diskTables = [
