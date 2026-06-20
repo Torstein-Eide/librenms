@@ -391,10 +391,10 @@
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Worst</th>'
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Thresh</th>'
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer">Raw</th>'
-        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change per hour over the last 8 hours">&Delta;/h 8h</th>'
-        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change per hour over the last 24 hours">&Delta;/h 24h</th>'
-        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change per hour over the last 168 hours (1 week)">&Delta;/h 1w</th>'
-        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change per hour over the last 672 hours (1 month)">&Delta;/h 1mo</th>'
+        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change over the last 8 hours (per-second for high-volume counters, per-hour otherwise)">&Delta; 8h</th>'
+        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change over the last 24 hours (per-second for high-volume counters, per-hour otherwise)">&Delta; 24h</th>'
+        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change over the last 168 hours / 1 week (per-second for high-volume counters, per-hour otherwise)">&Delta; 1w</th>'
+        . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change over the last 672 hours / 1 month (per-second for high-volume counters, per-hour otherwise)">&Delta; 1mo</th>'
         . '</tr></thead><tbody>';
 
     $dark = session('applied_site_style') === 'dark';
@@ -450,19 +450,33 @@
             default => '<span class="text-muted">' . htmlspecialchars($statusLabel) . '</span>',
         };
 
-        $fmtRate = static function ($v) {
+        // rate_8h/24h/168h/672h are persisted in raw-units-per-hour. High-volume legacy
+        // counters (Total_LBAs_Written etc.) read as a more sensible per-second figure;
+        // attributeRateUnit() is the same lookup the mini-graph uses to pick its DS unit.
+        $rateUnit    = $data->attributeRateUnit($attr);
+        $rateDivisor = $rateUnit === 'second' ? 3600.0 : 1.0;
+        $rateSuffix  = $rateUnit === 'second' ? '/s' : ($rateUnit === 'hour' ? '/h' : '');
+
+        $fmtRate = static function ($v) use ($rateDivisor, $rateSuffix) {
             if (! is_numeric($v)) {
                 return '-';
             }
-            $v = (float) $v;
+            $v = (float) $v / $rateDivisor;
 
-            return abs($v) >= 1000
+            $num = abs($v) >= 1000
                 ? str_replace(' ', '', \LibreNMS\Util\Number::formatSi($v, 1, 0, ''))
                 : number_format($v, $v == (int) $v ? 0 : 1);
+
+            return $num . $rateSuffix;
         };
         $rateCellStyle = 'max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-        $rateTitle = static function ($v) {
-            return is_numeric($v) && abs((float) $v) >= 1000 ? 'Raw: ' . number_format((float) $v, 2) : '';
+        $rateTitle = static function ($v) use ($rateDivisor, $rateSuffix) {
+            if (! is_numeric($v)) {
+                return '';
+            }
+            $v = (float) $v / $rateDivisor;
+
+            return abs($v) >= 1000 ? 'Raw: ' . number_format($v, 2) . $rateSuffix : '';
         };
         $rate8h   = $attr['rate_8h'] ?? null;
         $rate24h  = $attr['rate_24h'] ?? null;
