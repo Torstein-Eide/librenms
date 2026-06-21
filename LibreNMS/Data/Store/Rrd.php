@@ -444,7 +444,12 @@ class Rrd extends BaseDatastore
     private function getLastRateWindow(string $filename): ?array
     {
         // Align to the latest full PDP interval using configured rrd.step.
-        $output = $this->command('last', $filename);
+        try {
+            $output = $this->command('last', $filename);
+        } catch (RrdNotFoundException) {
+            return null;
+        }
+
         if (! preg_match('/^\s*(\d+)/m', $output, $matches)) {
             return null;
         }
