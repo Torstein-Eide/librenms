@@ -278,6 +278,20 @@
                     . '<td colspan="2" style="text-align:right">' . htmlspecialchars(number_format((int) $health['power_cycles'], 0, '.', ' ')) . '</td></tr>';
             }
 
+            // Estimated Lifetime / DWPD summary rows.
+            $lifetimeYears = $data->estimatedLifetimeYears($disk);
+            if ($lifetimeYears !== null) {
+                echo '<tr><td style="white-space:nowrap"><i class="fa fa-hourglass-half text-muted" style="margin-right:6px"></i>'
+                    . $labelWithTooltip('Estimated Lifetime', $tooltipForLabel('Estimated Lifetime')) . '</td>'
+                    . '<td colspan="2" style="text-align:right">' . htmlspecialchars(number_format($lifetimeYears, 1)) . ' years</td></tr>';
+            }
+            $dwpd = $data->dwpd($disk);
+            if ($dwpd !== null) {
+                echo '<tr><td style="white-space:nowrap"><i class="fa fa-database text-muted" style="margin-right:6px"></i>'
+                    . $labelWithTooltip('DWPD', $tooltipForLabel('DWPD')) . '</td>'
+                    . '<td colspan="2" style="text-align:right">' . htmlspecialchars(number_format($dwpd, 3)) . '</td></tr>';
+            }
+
             // Offline Data Collection summary row.
             $odcStatus = $health['offline_collection_status'] ?? null;
             if ($odcStatus !== null && is_numeric($odcStatus)) {

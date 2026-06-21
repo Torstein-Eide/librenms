@@ -700,6 +700,101 @@ class HtmlData
             : null;
     }
 
+    /**
+     * Estimated total service life in years, extrapolated from wear consumed so far
+     * against power-on age (assumes a constant wear rate). SATA is gated to attribute
+     * 177 "Wear_Leveling_Count" specifically — its normalised value (100 = new, falling
+     * to the failure threshold as the drive wears) is a reliable remaining-life percentage,
+     * unlike some of the other vendor-specific attributes in self::WEAR_ATTR_IDS. NVMe uses
+     * the spec-defined "Percentage Used" sensor directly. Returns null when the required
+     * attribute/sensor is absent or power-on hours are unknown/zero.
+     */
+    public function estimatedLifetimeYears(array $disk): ?float
+    {
+        $hours = $this->powerOnHours($disk);
+        if ($hours === null || $hours <= 0) {
+            return null;
+        }
+
+        $wearRemaining = $this->isNvme($disk)
+            ? $this->nvmePercentageUsedRemaining((string) $disk['disk_key'])
+            : $this->wearLevelingCountRemaining($disk);
+
+        if ($wearRemaining === null) {
+            return null;
+        }
+
+        $wearUsed = 100.0 - $wearRemaining;
+        if ($wearUsed <= 0) {
+            return null;
+        }
+
+        return ($hours / 8760) * (100.0 / $wearUsed);
+    }
+
+    /** SATA attribute 177 "Wear_Leveling_Count" normalised value (remaining-life %), or null. */
+    private function wearLevelingCountRemaining(array $disk): ?float
+    {
+        foreach ($disk['attributes'] as $attr) {
+            if ((int) ($attr['attribute_id'] ?? 0) === 177
+                && ($attr['name'] ?? null) === 'Wear_Leveling_Count'
+                && is_numeric($attr['value_norm'] ?? null)) {
+                return (float) $attr['value_norm'];
+            }
+        }
+
+        return null;
+    }
+
+    /** NVMe remaining-life % derived from the "Percentage Used" SENSOR-MIB sensor, or null. */
+    private function nvmePercentageUsedRemaining(string $diskKey): ?float
+    {
+        $sensor = $this->percentageUsedSensor($diskKey);
+
+        return $sensor && is_numeric($sensor->sensor_current)
+            ? 100.0 - max(0.0, min(100.0, (float) $sensor->sensor_current))
+            : null;
+    }
+
+    /**
+     * Drive Writes Per Day: average bytes written per day (since first power-on) divided
+     * by the drive's own measured capacity. SATA uses attribute 241 (Total_LBAs_Written);
+     * NVMe uses data_units_written (1 unit = 512,000 bytes per NVMe spec). Returns null
+     * when capacity, power-on hours, or the write counter are missing/zero.
+     */
+    public function dwpd(array $disk): ?float
+    {
+        $hours = $this->powerOnHours($disk);
+        if ($hours === null || $hours <= 0) {
+            return null;
+        }
+        $days = $hours / 24;
+
+        if ($this->isNvme($disk)) {
+            $unitsWritten = $disk['health']['data_units_written'] ?? null;
+            $capacityBytes = $disk['info']['total_nvm_capacity_bytes'] ?? null;
+            if (! is_numeric($unitsWritten) || ! is_numeric($capacityBytes) || (float) $capacityBytes <= 0) {
+                return null;
+            }
+
+            return ((float) $unitsWritten * 512000) / (float) $capacityBytes / $days;
+        }
+
+        $bytesWritten = null;
+        foreach ($disk['attributes'] as $attr) {
+            if ((int) ($attr['attribute_id'] ?? 0) === 241 && is_numeric($attr['value_raw'] ?? null)) {
+                $bytesWritten = (float) $attr['value_raw'] * 512;
+                break;
+            }
+        }
+        $capacityBytes = $disk['info']['user_capacity_bytes'] ?? null;
+        if ($bytesWritten === null || ! is_numeric($capacityBytes) || (float) $capacityBytes <= 0) {
+            return null;
+        }
+
+        return $bytesWritten / (float) $capacityBytes / $days;
+    }
+
     public function powerOnHours(array $disk): ?int
     {
         $hours = $disk['health']['power_on_hours'] ?? null;
