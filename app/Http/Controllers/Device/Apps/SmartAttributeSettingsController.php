@@ -41,7 +41,7 @@ class SmartAttributeSettingsController
             ->where('app_id', $appId)
             ->where('rrd_type', 'COUNTER')
             ->whereRaw('LOWER(name) LIKE ?', ['%count%'])
-            ->select('disk_key', 'attribute_id', 'name')
+            ->select('disk_key', 'attribute_id', 'name', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h')
             ->distinct()
             ->orderBy('disk_key')
             ->orderBy('attribute_id')
@@ -61,6 +61,10 @@ class SmartAttributeSettingsController
                 'attribute_id' => $row->attribute_id,
                 'name' => $row->name,
                 'is_override' => $override !== null,
+                'rate_8h' => $row->rate_8h,
+                'rate_24h' => $row->rate_24h,
+                'rate_168h' => $row->rate_168h,
+                'rate_672h' => $row->rate_672h,
                 'warn_rate_8h' => $effective->warn_rate_8h ?? null,
                 'warn_rate_24h' => $effective->warn_rate_24h ?? null,
                 'warn_rate_168h' => $effective->warn_rate_168h ?? null,

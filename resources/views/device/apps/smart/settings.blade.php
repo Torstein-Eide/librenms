@@ -44,7 +44,7 @@
         @endphp
 
         <p class="text-muted">
-            {{ __('Rate-of-change thresholds (raw value change per hour) used to flag an attribute with a rate warning. A row with no per-disk value falls back to the global default for that attribute.') }}
+            {{ __('Rate-of-change thresholds (raw value change per hour) used to flag an attribute with a rate warning. A row with no per-disk value falls back to the global default for that attribute. "Avg" columns show the attribute\'s current measured rate over each window, for reference when picking a threshold.') }}
         </p>
 
         @if ($appId === null || empty($diskKeys))
@@ -81,22 +81,35 @@
                                         <th></th>
                                         <th>{{ __('ID') }}</th>
                                         <th>{{ __('Name') }}</th>
+                                        <th>{{ __('Avg 8h') }}</th>
                                         <th>{{ __('Warn 8h') }}</th>
+                                        <th>{{ __('Avg 24h') }}</th>
                                         <th>{{ __('Warn 24h') }}</th>
+                                        <th>{{ __('Avg 1wk') }}</th>
                                         <th>{{ __('Warn 1wk') }}</th>
+                                        <th>{{ __('Avg 1mo') }}</th>
                                         <th>{{ __('Warn 1mo') }}</th>
                                         <th>{{ __('Source') }}</th>
                                     </tr>
                                     </thead>
                                     <tbody>
+                                    @php
+                                        $fmtAvg = static function ($v) {
+                                            return is_numeric($v) ? number_format((float) $v, 1) : '-';
+                                        };
+                                    @endphp
                                     @foreach ($items as $item)
                                         <tr data-attribute_id="{{ $item['attribute_id'] }}">
                                             <td><input type="checkbox" class="smart-thresh-row"></td>
                                             <td>{{ $item['attribute_id'] }}</td>
                                             <td>{{ str_replace('_', ' ', (string) $item['name']) }}</td>
+                                            <td class="text-muted">{{ $fmtAvg($item['rate_8h']) }}</td>
                                             <td>{{ $item['warn_rate_8h'] ?? '-' }}</td>
+                                            <td class="text-muted">{{ $fmtAvg($item['rate_24h']) }}</td>
                                             <td>{{ $item['warn_rate_24h'] ?? '-' }}</td>
+                                            <td class="text-muted">{{ $fmtAvg($item['rate_168h']) }}</td>
                                             <td>{{ $item['warn_rate_168h'] ?? '-' }}</td>
+                                            <td class="text-muted">{{ $fmtAvg($item['rate_672h']) }}</td>
                                             <td>{{ $item['warn_rate_672h'] ?? '-' }}</td>
                                             <td>{{ $item['is_override'] ? __('This disk') : __('Global default') }}</td>
                                         </tr>
