@@ -2,6 +2,7 @@
 
 namespace LibreNMS\Agent\Module\Smart;
 
+use App\Facades\LibrenmsConfig;
 use App\Models\Device;
 use App\Models\Sensor;
 use App\Models\StateTranslation;
@@ -268,6 +269,9 @@ class Common extends Application
 
         // One-shot V1→V2 RRD migration (no-op once all devices are marked done).
         $this->migrateV1Rrds();
+
+        // Retrofit any DS missing from pre-existing RRD files (idempotent; no-op once present).
+        $this->reconcileCommonDeviceRrds();
 
         // SENSOR-MIB is common to all device types; walk once before type discovery.
         $this->sensorTable();
@@ -679,6 +683,7 @@ class Common extends Application
         $rows = SnmpQuery::mibs(self::COMMON_MIBS)->hideMib()->walk([
             'SMARTMON-COMMON-MIB::smartmonDeviceLastPollResult',
             'SMARTMON-COMMON-MIB::smartmonDeviceLastPollTime',
+            'SMARTMON-COMMON-MIB::smartmonDevicePowerState',
         ])->table(1);
 
         foreach ($rows as $snmpIndex => $row) {
@@ -688,6 +693,7 @@ class Common extends Application
                 ->update([
                     'last_poll_result' => $this->intValue($row['smartmonDeviceLastPollResult'] ?? null),
                     'last_poll_time'   => $this->parseDateAndTime($row['smartmonDeviceLastPollTime'] ?? null),
+                    'power_state'      => $this->intValue($row['smartmonDevicePowerState'] ?? null),
                 ]);
         }
 
@@ -907,16 +913,18 @@ class Common extends Application
         $diskKey = $dev['disk_key'];
         $idx = $this->mibDiskIndex($diskKey);
 
-        // Attribute RRD
-        // V2 uses ['app','smart',app_id,idx] with DS id{N} / id{N}Normalized.
+        // Attribute RRD + power state. Keep power_state last because rrdtool tune
+        // appends new DS to existing files; keyed updates below tolerate missing
+        // source fields while preserving DS order for newly-created RRDs.
+        $rrd_def = RrdDefinition::make();
+        $fields = [];
+
         if (! empty($attrRows)) {
             $rrdTypes = DB::table('smart_sata_attributes')
                 ->where('app_id', $this->appId)
                 ->where('disk_key', $diskKey)
                 ->pluck('rrd_type', 'attribute_id');
 
-            $rrd_def = RrdDefinition::make();
-            $fields = [];
             foreach ($attrRows as $attrId => $row) {
                 $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
                 $dsRaw = 'id' . $id;
@@ -932,15 +940,27 @@ class Common extends Application
                 $fields[$dsRaw] = $row['smartmonSataAttrRawValue'] ?? null;
                 $fields[$dsNorm] = $row['smartmonSataAttrValue'] ?? null;
             }
-            if (! empty($fields)) {
-                app('Datastore')->put($device, 'app', [
-                    'name'     => 'smart',
-                    'app_id'   => $this->appId,
-                    'rrd_def'  => $rrd_def,
-                    'rrd_name' => ['app', 'smart', $this->appId, $idx],
-                ], $fields);
-            }
         }
+
+        $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
+        $fields['power_state'] = $this->intValue($dev['power_state'] ?? null);
+
+        $rrdName = ['app', 'smart', $this->appId, $idx];
+        $rrd = app(Rrd::class);
+        $rrdFile = $rrd->name($device->hostname, $rrdName);
+        $hasRrd = $rrd->checkRrdExists($rrdFile);
+        if (count($fields) === 1 && ! $hasRrd) {
+            return;
+        }
+        $this->addDatasets($rrdFile, $this->commonDeviceRrdDatasets());
+
+        app('Datastore')->put($device, 'app', [
+            'name'                => 'smart',
+            'app_id'              => $this->appId,
+            'rrd_def'             => $rrd_def,
+            'rrd_name'            => $rrdName,
+            'rrd_update_template' => true,
+        ], $fields);
     }
 
     // ── NVMe ──────────────────────────────────────────────────────────────────
@@ -1224,12 +1244,20 @@ class Common extends Application
             $fields[$ds] = $value;
         }
 
-        // NVME_HEALTH_RRD is a fixed set, so $fields always carries every DS.
+        $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
+        $fields['power_state'] = $this->intValue($dev['power_state'] ?? null);
+
+        $rrdName = ['app', 'smart_nvme', $this->appId, $idx];
+        $rrd = app(Rrd::class);
+        $this->addDatasets($rrd->name($this->device->hostname, $rrdName), $this->commonDeviceRrdDatasets());
+
+        // NVME_HEALTH_RRD is a fixed set, plus power_state, so $fields always carries every DS.
         app('Datastore')->put($this->device, 'app', [
-            'name'     => 'smart_nvme',
-            'app_id'   => $this->appId,
-            'rrd_def'  => $rrd_def,
-            'rrd_name' => ['app', 'smart_nvme', $this->appId, $idx],
+            'name'                => 'smart_nvme',
+            'app_id'              => $this->appId,
+            'rrd_def'             => $rrd_def,
+            'rrd_name'            => $rrdName,
+            'rrd_update_template' => true,
         ], $fields);
     }
 
@@ -1260,25 +1288,31 @@ class Common extends Application
 
     private function commonDeviceTable(): void
     {
-        $table = SnmpQuery::mibs(self::COMMON_MIBS)
+        $metaTable = SnmpQuery::mibs(self::COMMON_MIBS)
             ->hideMib()
-            ->walk('SMARTMON-COMMON-MIB::smartmonDeviceTable')
+            ->walk('SMARTMON-COMMON-MIB::smartmonDeviceMetadataTable')
+            ->table(1);
+        $statusTable = SnmpQuery::mibs(self::COMMON_MIBS)
+            ->hideMib()
+            ->walk('SMARTMON-COMMON-MIB::smartmonDeviceStatusTable')
             ->table(1);
 
         $this->commonDevices = [];
-        foreach ($table as $index => $row) {
+        foreach ($metaTable as $index => $row) {
             if (! is_array($row)) {
                 continue;
             }
+            $statusRow = $statusTable[$index] ?? [];
             $this->commonDevices[(string) $index] = [
                 'snmp_index'           => (string) $index,
                 'disk_key'             => $this->diskKey($row, (string) $index),
                 'device_name'          => $row['smartmonDeviceName'] ?? null,
                 'device_path'          => $row['smartmonDevicePath'] ?? null,
                 'device_type'          => $this->intValue($row['smartmonDeviceType'] ?? null),
-                'last_poll_time'       => $row['smartmonDeviceLastPollTime'] ?? null,
-                'last_poll_result'     => $this->intValue($row['smartmonDeviceLastPollResult'] ?? null),
-                'last_poll_exit_status'=> $this->intValue($row['smartmonDeviceLastPollExitStatus'] ?? null),
+                'last_poll_time'       => $statusRow['smartmonDeviceLastPollTime'] ?? null,
+                'last_poll_result'     => $this->intValue($statusRow['smartmonDeviceLastPollResult'] ?? null),
+                'last_poll_exit_status'=> $this->intValue($statusRow['smartmonDeviceLastPollExitStatus'] ?? null),
+                'power_state'          => $this->intValue($statusRow['smartmonDevicePowerState'] ?? null),
                 'physical_index'       => $this->intValue($row['smartmonDevicePhysicalIndex'] ?? null),
                 'uris'                 => $row['smartmonDeviceUris'] ?? null,
                 'model_family'         => $row['smartmonDeviceModelFamily'] ?? null,
@@ -1477,12 +1511,13 @@ class Common extends Application
                 'last_poll_time'   => $this->parseDateAndTime($dev['last_poll_time']),
                 'last_poll_result' => $dev['last_poll_result'],
                 'last_poll_exit'   => $dev['last_poll_exit_status'],
+                'power_state'      => $dev['power_state'],
                 'physical_index'   => $dev['physical_index'] ?? 0,
                 'uris'             => $dev['uris'],
             ], ['app_id', 'disk_key'], [
                 'snmp_index', 'device_name', 'device_path', 'protocol_type', 'model_family',
                 'model_name', 'serial_number', 'firmware_version', 'wwn',
-                'last_poll_time', 'last_poll_result', 'last_poll_exit',
+                'last_poll_time', 'last_poll_result', 'last_poll_exit', 'power_state',
                 'physical_index', 'uris',
             ]);
         }
@@ -2653,6 +2688,60 @@ class Common extends Application
         }
     }
 
+    // ── RRD dataset reconciliation ───────────────────────────────────────────
+
+    /**
+     * Reconcile an existing RRD file's datasets against a statically defined
+     * set, adding whatever's missing. Used at discovery time to retrofit new
+     * DS onto RRD files created by an older version of this module — e.g.
+     * power_state didn't exist as a DS before this was added, so disks
+     * polled by a prior version have files missing it.
+     *
+     * Skipped if the file doesn't exist yet: a brand-new device gets every
+     * currently-defined DS the first time poll() writes to it, since the
+     * write path always builds its RrdDefinition from the same static set.
+     *
+     * @param array<int, array{name:string,type:string,heartbeat:int,min?:int|float|string|null,max?:int|float|string|null}> $datasets
+     */
+    private function addDatasets(string $rrdFile, array $datasets): void
+    {
+        $rrd = app(Rrd::class);
+        if (! $rrd->checkRrdExists($rrdFile)) {
+            return;
+        }
+        $rrd->addDatasets($rrdFile, $datasets);
+    }
+
+    /** Statically defined DS that the per-device RRD families must always carry. */
+    private function commonDeviceRrdDatasets(): array
+    {
+        return [
+            ['name' => 'power_state', 'type' => 'GAUGE', 'heartbeat' => LibrenmsConfig::get('rrd.heartbeat'), 'min' => 0, 'max' => 8],
+        ];
+    }
+
+    /** Retrofit commonDeviceRrdDatasets() onto every existing SATA and NVMe per-disk RRD file. */
+    private function reconcileCommonDeviceRrds(): void
+    {
+        $deviceModel = Device::find($this->deviceId);
+        if ($deviceModel === null) {
+            return;
+        }
+
+        $rrd = app(Rrd::class);
+        $datasets = $this->commonDeviceRrdDatasets();
+
+        foreach ($this->sataDevices() as $dev) {
+            $idx = $this->mibDiskIndex($dev['disk_key']);
+            $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart', $this->appId, $idx]), $datasets);
+        }
+
+        foreach ($this->nvmeDevices() as $dev) {
+            $idx = $this->mibDiskIndex($dev['disk_key']);
+            $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart_nvme', $this->appId, $idx]), $datasets);
+        }
+    }
+
     // ── Handler detection ─────────────────────────────────────────────────────
 
     /** Detect handler type on first run and persist it; return stored value otherwise. */
@@ -2780,12 +2869,13 @@ class Common extends Application
             ->where('app_id', $this->appId)
             ->whereIn('protocol_type', $protocolTypes)
             ->whereNotNull('snmp_index')
-            ->get(['snmp_index', 'disk_key']);
+            ->get(['snmp_index', 'disk_key', 'power_state']);
 
         $devices = [];
         foreach ($rows as $row) {
             $devices[(string) $row->snmp_index] = [
-                'disk_key' => $row->disk_key,
+                'disk_key'    => $row->disk_key,
+                'power_state' => $row->power_state !== null ? (int) $row->power_state : null,
             ];
         }
 

@@ -248,6 +248,7 @@ class HtmlData
                 'wwn'              => $dev->wwn,
                 'last_poll_time'   => $dev->last_poll_time,
                 'last_poll_result' => $dev->last_poll_result !== null ? (int) $dev->last_poll_result : null,
+                'power_state'      => $dev->power_state !== null ? (int) $dev->power_state : null,
             ];
 
             if ($isNvme) {
@@ -980,19 +981,26 @@ class HtmlData
     // -------------------------------------------------------------------------
 
     /** Datasets present in the per-disk attribute RRD (['app','smart',app_id,idx]). */
-    private function rrdDatasets(string $diskKey): array
+    private function rrdDatasets(string $diskKey, string $rrdName = 'smart'): array
     {
-        $rrdFile = Rrd::name((string) ($this->device['hostname'] ?? ''), ['app', 'smart', $this->app->app_id, $this->diskIndex($diskKey)]);
+        $rrdFile = Rrd::name((string) ($this->device['hostname'] ?? ''), ['app', $rrdName, $this->app->app_id, $this->diskIndex($diskKey)]);
         if (! Rrd::checkRrdExists($rrdFile)) {
             return [];
         }
 
-        $point = Rrd::lastUpdate($rrdFile);
-        if ($point === null || ! is_array($point->data ?? null)) {
-            return [];
-        }
+        // listDatasets() reads the file header via a one-shot process; lastUpdate()
+        // goes through the persistent pipe, which can truncate its output for files
+        // with many DS (this RRD can carry 50+ SATA attribute DS), making a present
+        // dataset look missing.
+        return Rrd::listDatasets($rrdFile);
+    }
 
-        return array_keys($point->data);
+    public function hasPowerStateRrd(string $diskKey): bool
+    {
+        $disk = $this->disks[$diskKey] ?? null;
+        $rrdName = $disk !== null && $this->isNvme($disk) ? 'smart_nvme' : 'smart';
+
+        return in_array('power_state', $this->rrdDatasets($diskKey, $rrdName), true);
     }
 
     public function hasBig5Rrd(string $diskKey): bool
@@ -1139,6 +1147,11 @@ class HtmlData
         'offline_status' => [
             0 => 'Never started', 2 => 'Completed', 3 => 'In progress',
             4 => 'Suspended', 5 => 'Aborted', 6 => 'Aborted (fatal)',
+        ],
+        // SmartmonDevicePowerState
+        'power_state' => [
+            0 => 'Unknown', 1 => 'Active', 2 => 'Idle (A)', 3 => 'Idle (B)', 4 => 'Idle (C)',
+            5 => 'Standby (Y)', 6 => 'Standby (Z)', 7 => 'Sleeping', 8 => 'Standby',
         ],
     ];
 

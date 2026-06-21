@@ -154,12 +154,18 @@
                     'from' => $hFrom, 'to' => $hNow, 'page' => 'graphs',
                 ]);
             };
-            $sensorMini = static function ($s) use ($hNow, $hFrom, $device, $sensorLink): string {
+            // Wraps $content (label text, value badge, or the mini graph image) in
+            // the same hover-preview link that points at the sensor's graph.
+            $sensorGraphLink = static function ($s, string $content) use ($hNow, $hFrom, $device, $sensorLink): string {
                 $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 210, 'height' => 100];
                 $overlib = generate_overlib_content($g, $device['hostname'] . ' - ' . $s->sensor_descr);
-                $link = $sensorLink($s);
-                $g['width'] = 100; $g['height'] = 20; $g['bg'] = 'ffffff00';
-                return \LibreNMS\Util\Url::overlibLink($link, \LibreNMS\Util\Url::lazyGraphTag($g), $overlib);
+
+                return \LibreNMS\Util\Url::overlibLink($sensorLink($s), $content, $overlib);
+            };
+            $sensorMini = static function ($s) use ($sensorGraphLink, $hNow, $hFrom): string {
+                $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 100, 'height' => 20, 'bg' => 'ffffff00'];
+
+                return $sensorGraphLink($s, \LibreNMS\Util\Url::lazyGraphTag($g));
             };
             $rowOpenTag = static function (string $link): string {
                 return $link !== ''
@@ -194,9 +200,11 @@
                     'page' => 'graphs',
                 ]);
             };
-            $nvMetricGraph = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $device, $dsToType, $statLink): string {
+            // Wraps $content (label text, value badge, or the mini graph image) in
+            // the same hover-preview link that points at the stat's graph.
+            $statGraphLink = static function (string $ds, string $content) use ($hNow, $hFrom, $data, $disk, $device, $dsToType, $statLink): string {
                 $type = $dsToType[$ds] ?? null;
-                if ($type === null) { return ''; }
+                if ($type === null) { return $content; }
                 $g = [
                     'id'     => $data->app->app_id,
                     'type'   => 'application_' . $type,
@@ -208,9 +216,25 @@
                     'height' => 100,
                 ];
                 $overlib = generate_overlib_content($g, $device['hostname'] . ' - ' . $ds);
-                $link = $statLink($ds);
-                $g['width'] = 100; $g['height'] = 20; $g['bg'] = 'ffffff00';
-                return \LibreNMS\Util\Url::overlibLink($link, \LibreNMS\Util\Url::lazyGraphTag($g), $overlib);
+
+                return \LibreNMS\Util\Url::overlibLink($statLink($ds), $content, $overlib);
+            };
+            $nvMetricGraph = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $dsToType, $statGraphLink): string {
+                $type = $dsToType[$ds] ?? null;
+                if ($type === null) { return ''; }
+                $g = [
+                    'id'     => $data->app->app_id,
+                    'type'   => 'application_' . $type,
+                    'disk'   => $disk['idx'],
+                    'from'   => $hFrom,
+                    'to'     => $hNow,
+                    'legend' => 'no',
+                    'width'  => 100,
+                    'height' => 20,
+                    'bg'     => 'ffffff00',
+                ];
+
+                return $statGraphLink($ds, \LibreNMS\Util\Url::lazyGraphTag($g));
             };
 
             $nvTips = [
@@ -235,11 +259,12 @@
             $panelStart($healthHeader);
             echo '<table class="table table-condensed table-hover" style="width:100%">';
             foreach ($healthSensors as $s) {
-                $nm = $data->shortSensorName($s, $disk);
+                $nm = $sensorGraphLink($s, htmlspecialchars($data->shortSensorName($s, $disk)));
+                $badge = $sensorGraphLink($s, $sensorBadge($s));
                 echo $rowOpenTag($sensorLink($s))
-                    . '<td style="white-space:nowrap"><i class="fa ' . $sensorIcon($s->sensor_class) . ' text-muted" style="margin-right:6px"></i>' . htmlspecialchars($nm) . '</td>'
+                    . '<td style="white-space:nowrap"><i class="fa ' . $sensorIcon($s->sensor_class) . ' text-muted" style="margin-right:6px"></i>' . $nm . '</td>'
                     . '<td style="width:110px">' . $sensorMini($s) . '</td>'
-                    . '<td style="text-align:right">' . $sensorBadge($s) . '</td>'
+                    . '<td style="text-align:right">' . $badge . '</td>'
                     . '</tr>';
             }
             foreach ($statRows as [$label, $value, $ds]) {
@@ -248,11 +273,16 @@
                 $nameCell = $tip !== ''
                     ? '<abbr style="cursor:help;text-decoration:underline dotted" title="' . htmlspecialchars($tip, ENT_QUOTES) . '">' . htmlspecialchars($label) . '</abbr>'
                     : htmlspecialchars($label);
+                $valueCell = '<span class="label label-default">' . htmlspecialchars($value) . '</span>';
+                if ($ds !== null) {
+                    $nameCell = $statGraphLink($ds, $nameCell);
+                    $valueCell = $statGraphLink($ds, $valueCell);
+                }
                 $graphCell = $ds !== null ? $nvMetricGraph($ds) : '';
                 echo $rowOpenTag($ds !== null ? $statLink($ds) : '')
                     . '<td style="white-space:nowrap"><i class="fa fa-line-chart text-muted" style="margin-right:6px"></i>' . $nameCell . '</td>'
                     . '<td style="width:110px">' . $graphCell . '</td>'
-                    . '<td style="text-align:right"><span class="label label-default">' . htmlspecialchars($value) . '</span></td>'
+                    . '<td style="text-align:right">' . $valueCell . '</td>'
                     . '</tr>';
             }
 

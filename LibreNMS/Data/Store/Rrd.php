@@ -155,11 +155,11 @@ class Rrd extends BaseDatastore
 
         try {
             try {
-                $this->update($rrd, $fields);
+                $this->update($rrd, $fields, ! empty($meta['rrd_update_template']) ? array_keys($fields) : null);
             } catch (RrdNotFoundException) {
                 if (isset($rrd_def)) {
                     $this->command('create', $rrd, ['--step', $step, ...$rrd_def->getArguments(), ...$this->rra]);
-                    $this->update($rrd, $fields);
+                    $this->update($rrd, $fields, ! empty($meta['rrd_update_template']) ? array_keys($fields) : null);
                 }
             }
         } catch (RrdStoreException $e) {
@@ -296,7 +296,13 @@ class Rrd extends BaseDatastore
             return true;
         }
 
-        $output = $this->command('tune', $filename, $options);
+        try {
+            $output = $this->command('tune', $filename, $options);
+        } catch (RrdException $e) {
+            Log::debug('RRD addDatasets failed: ' . $e->getMessage());
+
+            return false;
+        }
 
         return ! str_contains($output, 'ERROR');
     }
@@ -576,16 +582,18 @@ class Rrd extends BaseDatastore
      *
      * @param  string  $filename
      * @param  array  $data
+     * @param  array<string>|null  $template
      *
      * @throws RrdException
      *
      * @internal
      */
-    public function update(string $filename, array $data): void
+    public function update(string $filename, array $data, ?array $template = null): void
     {
-        $data = 'N:' . implode(':', array_map(fn ($v) => is_numeric($v) ? $v : 'U', $data));
+        $values = 'N:' . implode(':', array_map(fn ($v) => is_numeric($v) ? $v : 'U', $data));
+        $options = $template === null ? [$values] : ['--template', implode(':', $template), $values];
 
-        $this->command('update', $filename, [$data]);
+        $this->command('update', $filename, $options);
     }
 
     // rrdtool_update

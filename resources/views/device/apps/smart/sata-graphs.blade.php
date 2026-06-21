@@ -14,6 +14,7 @@
     $specs        = $data->attributeGraphSpecs($selectedDisk);
     $hasBig5      = $data->hasBig5Rrd($selectedDisk);
     $hasOther     = $data->hasOtherRrd($selectedDisk);
+    $hasPowerState = $data->hasPowerStateRrd($selectedDisk);
     $graphBase    = $smartUrl((string) $selectedDisk);
 
     $diskSensors  = $data->diskSensors($selectedDisk);
@@ -33,6 +34,7 @@
     if ($wearSensor)   { $sections[] = [$anchorPrefix . 'wear', 'Wear Remaining']; }
     if ($statusSensor) { $sections[] = [$anchorPrefix . 'selftest-status', 'Self-test Status']; }
     if ($hasSelftest)  { $sections[] = [$anchorPrefix . 'selftest', 'Self-test Age']; }
+    if ($hasPowerState) { $sections[] = [$anchorPrefix . 'power-state', 'Power State']; }
     if ($powerSpec)    { $sections[] = [$anchorPrefix . 'power', 'Power-on Hours']; }
     if ($hasBig5)  { $sections[] = [$anchorPrefix . 'big5', 'Reliability / Age (Big 5 ATA Attributes)']; }
     if ($hasOther) { $sections[] = [$anchorPrefix . 'other', 'Other']; }
@@ -101,6 +103,11 @@
         if ($shortSensor) { $stParts[] = 'Short: ' . $shortSensor->formatValue(); }
         if ($longSensor)  { $stParts[] = 'Long: '  . $longSensor->formatValue(); }
         $appGraph('smart_v2_selftest', 'Self-test Age', $anchorPrefix . 'selftest', $stParts !== [] ? implode(' | ', $stParts) : '');
+    }
+    if ($hasPowerState) {
+        $powerState = $disk['power_state'] ?? null;
+        $powerStateBadge = $powerState !== null ? $data->decode('power_state', $powerState) : '';
+        $appGraph('smart_v2_powerState', 'Power State', $anchorPrefix . 'power-state', $powerStateBadge);
     }
     if ($powerSpec) {
         $appGraph('smart_v2_attributes', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk), [

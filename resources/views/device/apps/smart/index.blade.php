@@ -128,6 +128,7 @@
         'commands by disk radius' => 'Read and write command counts grouped by their approximate disk-radius location.',
         'estimated lifetime' => 'Projected total service life, extrapolated from the wear consumed so far against the drive\'s power-on age. Assumes a constant wear rate; actual results vary with workload.',
         'dwpd' => 'Drive Writes Per Day: average bytes written per day, divided by the drive\'s capacity, since it was first powered on.',
+        'power state' => 'The drive\'s live power-saving state as of the agent\'s last poll. Only probed for ATA/SATA/SCSI/SAS in collect mode with standby checking enabled; otherwise reports Unknown or Active rather than a genuine reading.',
     ];
     $tooltipForLabel = static function (string $label) use ($smartTooltips): string {
         $key = strtolower(trim(preg_replace('/[^a-z0-9]+/i', ' ', html_entity_decode($label, ENT_QUOTES))));

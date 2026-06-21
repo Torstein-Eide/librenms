@@ -239,13 +239,20 @@
 
             $hNow  = \App\Facades\LibrenmsConfig::get('time.now');
             $hFrom = \App\Facades\LibrenmsConfig::get('time.day');
-            $sensorMini = static function ($s) use ($hNow, $hFrom, $device): string {
+            // Wraps $content (label text, value badge, or the mini graph image) in
+            // the same hover-preview link that points at the sensor's graph.
+            $sensorGraphLink = static function ($s, string $content) use ($hNow, $hFrom, $device): string {
                 $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 210, 'height' => 100];
                 $overlib = generate_overlib_content($g, $device['hostname'] . ' - ' . $s->sensor_descr);
                 $linkArr = $g; $linkArr['page'] = 'graphs'; unset($linkArr['width'], $linkArr['height'], $linkArr['legend']);
                 $link = \LibreNMS\Util\Url::generate($linkArr);
-                $g['width'] = 100; $g['height'] = 20; $g['bg'] = 'ffffff00';
-                return \LibreNMS\Util\Url::overlibLink($link, \LibreNMS\Util\Url::lazyGraphTag($g), $overlib);
+
+                return \LibreNMS\Util\Url::overlibLink($link, $content, $overlib);
+            };
+            $sensorMini = static function ($s) use ($sensorGraphLink, $hNow, $hFrom): string {
+                $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 100, 'height' => 20, 'bg' => 'ffffff00'];
+
+                return $sensorGraphLink($s, \LibreNMS\Util\Url::lazyGraphTag($g));
             };
 
             // All disk sensors, status (state) sensors first.
@@ -259,14 +266,39 @@
                 $isSelftestAge = $s->sensor_class === 'runtime'
                     && (str_ends_with((string) $s->sensor_index, '_selftest_short')
                         || str_ends_with((string) $s->sensor_index, '_selftest_long'));
+                $label = htmlspecialchars($data->shortSensorName($s, $disk));
+                $badge = $sensorBadge($s);
+                // Self-test age rows already navigate elsewhere on row click — don't
+                // also wrap their label/value in the (different) graph link.
                 echo ($isSelftestAge ? $gotoRowOpen('selftest') : '<tr>')
-                    . '<td style="white-space:nowrap"><i class="fa ' . $sensorIcon($s->sensor_class) . ' text-muted" style="margin-right:6px"></i>' . htmlspecialchars($data->shortSensorName($s, $disk)) . '</td>'
+                    . '<td style="white-space:nowrap"><i class="fa ' . $sensorIcon($s->sensor_class) . ' text-muted" style="margin-right:6px"></i>' . ($isSelftestAge ? $label : $sensorGraphLink($s, $label)) . '</td>'
                     . '<td style="width:110px">' . $sensorMini($s) . '</td>'
-                    . '<td style="text-align:right">' . $sensorBadge($s) . '</td>'
+                    . '<td style="text-align:right">' . ($isSelftestAge ? $badge : $sensorGraphLink($s, $badge)) . '</td>'
                     . '</tr>';
             }
 
-            // Power On / Power Cycles summary rows.
+            // Live power state and power lifetime summary rows.
+            if (($disk['power_state'] ?? null) !== null) {
+                $powerState = $data->decode('power_state', $disk['power_state']);
+                $powerStateGraphArgs = [
+                    'id'          => $data->app->app_id,
+                    'type'        => 'application_smart_v2_powerState',
+                    'disk'        => $idx,
+                    'from'        => $hFrom,
+                    'to'          => $hNow,
+                    'width'       => 100,
+                    'height'      => 20,
+                    'legend'      => 'no',
+                    'popup_title' => htmlspecialchars($device['hostname'] . ' - Power State'),
+                ];
+                $powerStateLabel = \LibreNMS\Util\Url::graphPopup($powerStateGraphArgs, $labelWithTooltip('Power State', $tooltipForLabel('Power State')));
+                $powerStateMini = \LibreNMS\Util\Url::graphPopup($powerStateGraphArgs);
+                $powerStateValue = \LibreNMS\Util\Url::graphPopup($powerStateGraphArgs, htmlspecialchars($powerState));
+                echo '<tr><td style="white-space:nowrap"><i class="fa fa-plug text-muted" style="margin-right:6px"></i>'
+                    . $powerStateLabel . '</td>'
+                    . '<td style="width:110px">' . $powerStateMini . '</td>'
+                    . '<td style="text-align:right">' . $powerStateValue . '</td></tr>';
+            }
             if ($powerOnHours !== null) {
                 echo '<tr><td style="white-space:nowrap"><i class="fa fa-power-off text-muted" style="margin-right:6px"></i>'
                     . $labelWithTooltip('Power On', $tooltipForLabel('Power On Hours')) . '</td>'
