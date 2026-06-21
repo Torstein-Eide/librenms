@@ -29,10 +29,11 @@ $rawColor = '#ff9a9a66';
 $thresh = $vars['attr_thresh'] ?? null;
 $normMax = 255.0;
 
-// rate_unit: 'hour' for newly-detected ("Count" in the name) counters, graphed
-// in changes/hour; 'second' for the original fixed-list counters (unchanged
-// behaviour — rrdtool already auto-rates COUNTER DS to per-second on read);
-// '' / unset for GAUGE attributes, which carry no rate semantics.
+// rate_unit: 'second' for COUNTER attributes whose average rate exceeds
+// 3600 raw-units/hour (i.e. >1/s on average — rrdtool already auto-rates
+// COUNTER DS to per-second on read), 'hour' for slower COUNTER attributes;
+// '' / unset for GAUGE attributes, which carry no rate semantics. See
+// HtmlData::attributeRateUnit().
 $rateUnit = $vars['rate_unit'] ?? '';
 $rateMultiplier = $rateUnit === 'hour' ? 3600.0 : 1.0;
 $rawLabelSuffix = match ($rateUnit) {

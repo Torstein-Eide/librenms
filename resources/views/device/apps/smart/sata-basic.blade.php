@@ -450,9 +450,9 @@
             default => '<span class="text-muted">' . htmlspecialchars($statusLabel) . '</span>',
         };
 
-        // rate_8h/24h/168h/672h are persisted in raw-units-per-hour. High-volume legacy
-        // counters (Total_LBAs_Written etc.) read as a more sensible per-second figure;
-        // attributeRateUnit() is the same lookup the mini-graph uses to pick its DS unit.
+        // rate_8h/24h/168h/672h are persisted in raw-units-per-hour. attributeRateUnit()
+        // switches high-volume counters (avg > 3600/h, i.e. >1/s) to a per-second display;
+        // it's the same lookup the mini-graph uses to pick its DS unit.
         $rateUnit    = $data->attributeRateUnit($attr);
         $rateDivisor = $rateUnit === 'second' ? 3600.0 : 1.0;
         $rateSuffix  = $rateUnit === 'second' ? '/s' : ($rateUnit === 'hour' ? '/h' : '');

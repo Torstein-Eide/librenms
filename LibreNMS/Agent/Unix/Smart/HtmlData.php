@@ -37,10 +37,10 @@ class HtmlData
     private const WEAR_ATTR_IDS = [173, 177, 202, 231, 233];
 
     /**
-     * Legacy fixed-list COUNTER attribute names (must mirror
-     * {@see \LibreNMS\Agent\Module\Smart\Common::ATA_COUNTER_ATTRS} values) —
-     * these graph in changes/second; any other COUNTER attribute (detected by
-     * "Count" in the name) graphs in changes/hour. See attributeRateUnit().
+     * Fallback COUNTER attribute names used to pick a rate unit only before any
+     * rate history exists (fresh attribute, no rate_8h/24h/168h/672h yet). Once
+     * rate history is available, attributeRateUnit() picks the unit from the
+     * actual average rate instead. See attributeRateUnit().
      */
     private const LEGACY_PERSEC_COUNTER_NAMES = [
         'Used_Rsvd_Blk_Cnt_Tot', 'Unused_Rsvd_Blk_Cnt_Tot',
@@ -48,6 +48,13 @@ class HtmlData
         'Timed_Workld_Media_Wear', 'Timed_Workld_RdWr_Ratio',
         'Timed_Workld_Timer', 'NAND_Writes',
     ];
+
+    /**
+     * Average raw-units-per-hour rate above which attributeRateUnit() switches
+     * a COUNTER attribute's display unit from changes/hour to changes/second
+     * (3600 changes/hour == 1 change/second on average).
+     */
+    private const RATE_UNIT_PERSEC_THRESHOLD = 3600.0;
 
     /** System PCI ID database candidates (pciutils / hwdata). */
     private const PCI_IDS_PATHS = ['/usr/share/misc/pci.ids', '/usr/share/hwdata/pci.ids'];
@@ -783,7 +790,19 @@ class HtmlData
             return null;
         }
 
-        return in_array($attr['name'] ?? null, self::LEGACY_PERSEC_COUNTER_NAMES, true) ? 'second' : 'hour';
+        $rates = array_filter(
+            [$attr['rate_8h'] ?? null, $attr['rate_24h'] ?? null, $attr['rate_168h'] ?? null, $attr['rate_672h'] ?? null],
+            static fn ($rate): bool => is_numeric($rate)
+        );
+
+        if (empty($rates)) {
+            // No rate history yet (e.g. just discovered) — fall back to the legacy name list.
+            return in_array($attr['name'] ?? null, self::LEGACY_PERSEC_COUNTER_NAMES, true) ? 'second' : 'hour';
+        }
+
+        $avgRate = array_sum($rates) / count($rates);
+
+        return $avgRate > self::RATE_UNIT_PERSEC_THRESHOLD ? 'second' : 'hour';
     }
 
     /**
