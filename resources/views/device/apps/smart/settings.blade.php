@@ -117,7 +117,7 @@
                                                            data-field="warn_rate_{{ $window }}"
                                                            data-update-url="{{ route('device.apps.smart.settings.field', $device) }}"
                                                            placeholder="{{ ! $isDefaultTab && is_numeric($item['default_warn_rate_' . $window]) ? number_format((float) $item['default_warn_rate_' . $window], 1) : '' }}"
-                                                           value="{{ $item['warn_rate_' . $window] }}">
+                                                           @if ($item['has_row'] && is_numeric($item['warn_rate_' . $window])) value="{{ $item['warn_rate_' . $window] }}" @endif>
                                                 </div>
                                             </td>
                                         @endforeach
