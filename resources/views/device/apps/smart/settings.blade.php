@@ -116,6 +116,7 @@
                                                            data-attribute_id="{{ $item['attribute_id'] }}"
                                                            data-field="warn_rate_{{ $window }}"
                                                            data-update-url="{{ route('device.apps.smart.settings.field', $device) }}"
+                                                           placeholder="{{ ! $isDefaultTab && is_numeric($item['default_warn_rate_' . $window]) ? number_format((float) $item['default_warn_rate_' . $window], 1) : '' }}"
                                                            value="{{ $item['warn_rate_' . $window] }}">
                                                 </div>
                                             </td>

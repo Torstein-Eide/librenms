@@ -78,6 +78,10 @@ class SmartAttributeSettingsController
                 'warn_rate_24h' => $effective->warn_rate_24h ?? null,
                 'warn_rate_168h' => $effective->warn_rate_168h ?? null,
                 'warn_rate_672h' => $effective->warn_rate_672h ?? null,
+                'default_warn_rate_8h' => $global->warn_rate_8h ?? null,
+                'default_warn_rate_24h' => $global->warn_rate_24h ?? null,
+                'default_warn_rate_168h' => $global->warn_rate_168h ?? null,
+                'default_warn_rate_672h' => $global->warn_rate_672h ?? null,
             ];
         })->values();
 
