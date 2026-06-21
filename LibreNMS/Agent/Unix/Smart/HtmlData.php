@@ -783,31 +783,6 @@ class HtmlData
     }
 
     /**
-     * Hours since the most recent self-test of a given type (1 = short, 2 = extended),
-     * or null when unknown.
-     */
-    public function selftestAgeHours(array $disk, int $testType): ?int
-    {
-        $current = $this->powerOnHours($disk);
-        if ($current === null) {
-            return null;
-        }
-
-        $best = null;
-        foreach ($disk['selftests'] as $entry) {
-            if ((int) ($entry['test_type'] ?? -1) !== $testType) {
-                continue;
-            }
-            $hours = $entry['power_on_hours'] ?? null;
-            if (is_numeric($hours)) {
-                $best = $best === null ? (int) $hours : max($best, (int) $hours);
-            }
-        }
-
-        return $best === null ? null : max(0, $current - $best);
-    }
-
-    /**
      * Distinct ATA attribute IDs across all disks, for the overview multi-disk
      * attribute graphs. Returns [id => display name] sorted by id.
      *
