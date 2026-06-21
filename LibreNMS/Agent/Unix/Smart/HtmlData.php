@@ -359,12 +359,7 @@ class HtmlData
     /** @return array<int|string, array<string,mixed>> */
     private function indexByColumn(array $rows, string $column): array
     {
-        $out = [];
-        foreach ($rows as $row) {
-            $out[$row->{$column}] = (array) $row;
-        }
-
-        return $out;
+        return collect($rows)->keyBy($column)->map(static fn ($row) => (array) $row)->all();
     }
 
     // -------------------------------------------------------------------------
@@ -446,23 +441,15 @@ class HtmlData
         }
 
         $hex = sprintf('%04x', $id);
-        $name = null;
-        if (($path = $this->firstReadable(self::PCI_IDS_PATHS)) !== null && ($fh = fopen($path, 'r')) !== false) {
-            try {
-                while (($line = fgets($fh)) !== false) {
-                    // Skip device (tab-indented) and comment lines; match vendor id.
-                    if ($line[0] !== "\t" && $line[0] !== '#'
-                        && strncmp($line, $hex, 4) === 0 && ($line[4] ?? '') === ' ') {
-                        $name = trim(substr($line, 4));
-                        break;
-                    }
-                }
-            } finally {
-                fclose($fh);
-            }
-        }
 
-        return $this->pciVendorCache[$id] = $name;
+        return $this->pciVendorCache[$id] = $this->lookupInIdsFile(
+            self::PCI_IDS_PATHS,
+            // Skip device (tab-indented) and comment lines; match vendor id.
+            static fn (string $line): ?string => $line[0] !== "\t" && $line[0] !== '#'
+                && strncmp($line, $hex, 4) === 0 && ($line[4] ?? '') === ' '
+                ? trim(substr($line, 4))
+                : null
+        );
     }
 
     /** Whether the PCI ID database is installed (for surfacing a missing-dependency hint). */
@@ -490,6 +477,33 @@ class HtmlData
     }
 
     /**
+     * Scan the first readable file from $paths line by line, returning the
+     * first non-null result of $lineMatcher, or null if the file is missing
+     * or no line matches.
+     *
+     * @param  array<int,string>  $paths
+     * @param  callable(string): ?string  $lineMatcher
+     */
+    private function lookupInIdsFile(array $paths, callable $lineMatcher): ?string
+    {
+        if (($path = $this->firstReadable($paths)) === null || ($fh = fopen($path, 'r')) === false) {
+            return null;
+        }
+
+        try {
+            while (($line = fgets($fh)) !== false) {
+                if (($match = $lineMatcher($line)) !== null) {
+                    return $match;
+                }
+            }
+        } finally {
+            fclose($fh);
+        }
+
+        return null;
+    }
+
+    /**
      * Resolve an IEEE OUI (24-bit) to its organisation name via the system
      * oui.txt database. Lines are "<6-HEX-OUI>     (base 16)<tabs>Org Name".
      * Cached per request; returns null when the file is missing or OUI unknown.
@@ -501,21 +515,13 @@ class HtmlData
         }
 
         $hex = sprintf('%06X', $oui);
-        $name = null;
-        if (($path = $this->firstReadable(self::OUI_PATHS)) !== null && ($fh = fopen($path, 'r')) !== false) {
-            try {
-                while (($line = fgets($fh)) !== false) {
-                    if (strncmp($line, $hex, 6) === 0 && ($pos = strpos($line, '(base 16)')) !== false) {
-                        $name = trim(substr($line, $pos + strlen('(base 16)')));
-                        break;
-                    }
-                }
-            } finally {
-                fclose($fh);
-            }
-        }
 
-        return $this->ouiVendorCache[$oui] = $name;
+        return $this->ouiVendorCache[$oui] = $this->lookupInIdsFile(
+            self::OUI_PATHS,
+            static fn (string $line): ?string => strncmp($line, $hex, 6) === 0 && ($pos = strpos($line, '(base 16)')) !== false
+                ? trim(substr($line, $pos + strlen('(base 16)')))
+                : null
+        );
     }
 
     /** Reconstruct the disk label used in sensor descriptions: "model serial (device)". */
