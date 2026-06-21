@@ -1681,17 +1681,29 @@ class Common extends Application
             }
         }
 
-        $ratesByDs = $this->fetchAttributeRates($rrd, $rrdFilename, $counterDs, $gaugeDs, $now);
+        [$ratesByDs, $failedWindows] = $this->fetchAttributeRates($rrd, $rrdFilename, $counterDs, $gaugeDs, $now);
         $thresholdRows = $this->loadThresholdRows($diskKey);
+
+        // A window whose rrdtool fetch failed outright (timeout, process error) keeps
+        // whatever rate was last persisted for it instead of being nulled out — a
+        // transient fetch failure must not be indistinguishable from "no data".
+        $previousRates = $failedWindows !== []
+            ? DB::table('smart_sata_attributes')
+                ->where('app_id', $this->appId)
+                ->where('disk_key', $diskKey)
+                ->get(['attribute_id', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'])
+                ->keyBy('attribute_id')
+            : collect();
 
         foreach ($attrRows as $attrId => $row) {
             $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
             $ds = 'id' . $id;
+            $previous = $previousRates->get($id);
             $rates = [
-                '8h' => $ratesByDs[$ds]['8h'] ?? null,
-                '24h' => $ratesByDs[$ds]['24h'] ?? null,
-                '168h' => $ratesByDs[$ds]['168h'] ?? null,
-                '672h' => $ratesByDs[$ds]['672h'] ?? null,
+                '8h' => $ratesByDs[$ds]['8h'] ?? ($failedWindows['8h'] ?? false ? $previous?->rate_8h : null),
+                '24h' => $ratesByDs[$ds]['24h'] ?? ($failedWindows['24h'] ?? false ? $previous?->rate_24h : null),
+                '168h' => $ratesByDs[$ds]['168h'] ?? ($failedWindows['168h'] ?? false ? $previous?->rate_168h : null),
+                '672h' => $ratesByDs[$ds]['672h'] ?? ($failedWindows['672h'] ?? false ? $previous?->rate_672h : null),
             ];
             $rawStatus = $this->intValue($row['smartmonSataAttrStatus'] ?? null);
             $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
@@ -1727,11 +1739,12 @@ class Common extends Application
      *
      * @param  array<string>  $counterDs
      * @param  array<string>  $gaugeDs
-     * @return array<string, array<string, float>> dataset => window suffix => rate
+     * @return array{0: array<string, array<string, float>>, 1: array<string, bool>} [dataset => window suffix => rate, window suffix => fetch failed]
      */
     private function fetchAttributeRates(Rrd $rrd, string $filename, array $counterDs, array $gaugeDs, int $now): array
     {
         $ratesByDs = [];
+        $failedWindows = [];
         $probe = 600; // 10 minutes, well above the default 5-minute poll step
 
         foreach (self::RATE_WINDOWS as $suffix => $seconds) {
@@ -1739,23 +1752,34 @@ class Common extends Application
             $hours = $seconds / 3600;
 
             if ($counterDs !== []) {
-                foreach ($rrd->getWindowAverages($filename, $counterDs, $start, $now) as $ds => $perSecond) {
-                    $ratesByDs[$ds][$suffix] = $perSecond * 3600;
+                $counterRates = $rrd->getWindowAverages($filename, $counterDs, $start, $now);
+                if ($counterRates === null) {
+                    $failedWindows[$suffix] = true;
+                    $this->vlog("fetchAttributeRates: counter fetch FAILED for window={$suffix} file={$filename} — keeping previously persisted rates for this window");
+                } else {
+                    foreach ($counterRates as $ds => $perSecond) {
+                        $ratesByDs[$ds][$suffix] = $perSecond * 3600;
+                    }
                 }
             }
 
             if ($gaugeDs !== []) {
                 $startVals = $rrd->getWindowAverages($filename, $gaugeDs, $start, min($start + $probe, $now));
                 $endVals = $rrd->getWindowAverages($filename, $gaugeDs, max($now - $probe, $start), $now);
-                foreach ($gaugeDs as $ds) {
-                    if (isset($startVals[$ds], $endVals[$ds])) {
-                        $ratesByDs[$ds][$suffix] = ($endVals[$ds] - $startVals[$ds]) / $hours;
+                if ($startVals === null || $endVals === null) {
+                    $failedWindows[$suffix] = true;
+                    $this->vlog("fetchAttributeRates: gauge fetch FAILED for window={$suffix} file={$filename} — keeping previously persisted rates for this window");
+                } else {
+                    foreach ($gaugeDs as $ds) {
+                        if (isset($startVals[$ds], $endVals[$ds])) {
+                            $ratesByDs[$ds][$suffix] = ($endVals[$ds] - $startVals[$ds]) / $hours;
+                        }
                     }
                 }
             }
         }
 
-        return $ratesByDs;
+        return [$ratesByDs, $failedWindows];
     }
 
     /**

@@ -421,9 +421,13 @@ class Rrd extends BaseDatastore
      * @param  array<string>  $datasets  Dataset names to export
      * @param  int  $start  Unix timestamp, window start
      * @param  int  $end  Unix timestamp, window end
-     * @return array<string, float>
+     * @return array<string, float>|null null means the rrdtool call itself failed
+     *         (timeout, process error) — distinct from an empty array, which means
+     *         the call succeeded but had no data for any requested dataset. Callers
+     *         should not treat the two the same: a hard failure shouldn't be used to
+     *         overwrite previously-persisted values with "no data".
      */
-    public function getWindowAverages(string $filename, array $datasets, int $start, int $end): array
+    public function getWindowAverages(string $filename, array $datasets, int $start, int $end): ?array
     {
         $datasets = array_values(array_filter(array_unique($datasets), fn ($dataset): bool => is_string($dataset) && $dataset !== ''));
         if (empty($datasets) || $end <= $start) {
@@ -432,7 +436,7 @@ class Rrd extends BaseDatastore
 
         $xportOutput = $this->runXportRates($filename, $datasets, 'AVERAGE', $start, $end, $end - $start);
         if ($xportOutput === null) {
-            return [];
+            return null;
         }
 
         return $this->parseXportRates($xportOutput, $datasets);
