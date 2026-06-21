@@ -14,12 +14,19 @@ use LibreNMS\Agent\Unix\Smart\HtmlData;
 /**
  * Per-attribute rate-of-change warning thresholds for the SMART app's SATA
  * attributes: a global default per attribute_id, optionally overridden per
- * disk, editable here with filtering, mass-update of selected rows, and
- * copying one disk's thresholds to every other disk on the device.
+ * disk. Each row is edited inline (save-on-change, no submit button), with
+ * per-row controls to mute/unmute alerting, reset a disk override back to
+ * the global default, or copy the global default's values down into a disk
+ * override — mirroring the device health-sensors edit page.
  */
 class SmartAttributeSettingsController
 {
     use AuthorizesRequests;
+
+    private const WARN_FIELDS = ['warn_rate_8h', 'warn_rate_24h', 'warn_rate_168h', 'warn_rate_672h'];
+
+    /** Sentinel disk_key for the synthetic "Global Defaults" tab. */
+    private const GLOBAL_DISK_KEY = '';
 
     public function index(Device $device, Request $request): View
     {
@@ -61,6 +68,8 @@ class SmartAttributeSettingsController
                 'attribute_id' => $row->attribute_id,
                 'name' => $row->name,
                 'is_override' => $override !== null,
+                'has_row' => $override !== null,
+                'alert_enabled' => (bool) (($effective->alert_enabled ?? null) ?? true),
                 'rate_8h' => $row->rate_8h,
                 'rate_24h' => $row->rate_24h,
                 'rate_168h' => $row->rate_168h,
@@ -72,7 +81,7 @@ class SmartAttributeSettingsController
             ];
         })->values();
 
-        $itemsByDisk = $items->groupBy('disk_key');
+        $itemsByDisk = $items->groupBy('disk_key')->all();
 
         // Disk order + display label match the same tabs used in the SMART
         // app's own heading (smart.blade.php), including the label-mode cookie.
@@ -94,6 +103,37 @@ class SmartAttributeSettingsController
             }
         }
 
+        // Synthetic "Global Defaults" tab: one row per attribute_id (named from
+        // whichever disk row first carried that attribute), editing the
+        // app_id=0/disk_key='' global-default row directly.
+        $attributeNames = $rows->unique('attribute_id')->pluck('name', 'attribute_id');
+        $defaultItems = $attributeNames->map(function ($name, $attributeId) use ($globals) {
+            $global = $globals[$attributeId] ?? null;
+
+            return [
+                'disk_key' => self::GLOBAL_DISK_KEY,
+                'attribute_id' => $attributeId,
+                'name' => $name,
+                'is_override' => false,
+                'has_row' => $global !== null,
+                'alert_enabled' => (bool) (($global->alert_enabled ?? null) ?? true),
+                'rate_8h' => null,
+                'rate_24h' => null,
+                'rate_168h' => null,
+                'rate_672h' => null,
+                'warn_rate_8h' => $global->warn_rate_8h ?? null,
+                'warn_rate_24h' => $global->warn_rate_24h ?? null,
+                'warn_rate_168h' => $global->warn_rate_168h ?? null,
+                'warn_rate_672h' => $global->warn_rate_672h ?? null,
+            ];
+        })->values()->sortBy('attribute_id')->values();
+
+        if ($defaultItems->isNotEmpty()) {
+            $diskKeys[] = self::GLOBAL_DISK_KEY;
+            $diskLabels[self::GLOBAL_DISK_KEY] = __('Global Defaults');
+            $itemsByDisk[self::GLOBAL_DISK_KEY] = $defaultItems;
+        }
+
         return view('device.apps.smart.settings', [
             'device' => $device,
             'appId' => $appId,
@@ -103,20 +143,18 @@ class SmartAttributeSettingsController
         ]);
     }
 
-    public function update(Device $device, Request $request): JsonResponse
+    /** Inline single-field save (one warn_rate_* window for one row), fired on blur/Enter — no submit button. */
+    public function updateField(Device $device, Request $request): JsonResponse
     {
         $this->authorize('update', $device);
 
         $validated = $request->validate([
             'app_id' => 'required|integer',
             'scope' => 'required|in:disk,global',
-            'rows' => 'required|array|min:1',
-            'rows.*.disk_key' => 'required|string',
-            'rows.*.attribute_id' => 'required|integer',
-            'warn_rate_8h' => 'nullable|numeric',
-            'warn_rate_24h' => 'nullable|numeric',
-            'warn_rate_168h' => 'nullable|numeric',
-            'warn_rate_672h' => 'nullable|numeric',
+            'disk_key' => 'required_if:scope,disk|string|nullable',
+            'attribute_id' => 'required|integer',
+            'field' => 'required|in:' . implode(',', self::WARN_FIELDS),
+            'value' => 'nullable|numeric',
         ]);
 
         $appId = $this->ownedAppId($device, (int) $validated['app_id']);
@@ -124,39 +162,53 @@ class SmartAttributeSettingsController
             return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
         }
 
-        $values = [
-            'warn_rate_8h' => $validated['warn_rate_8h'] ?? null,
-            'warn_rate_24h' => $validated['warn_rate_24h'] ?? null,
-            'warn_rate_168h' => $validated['warn_rate_168h'] ?? null,
-            'warn_rate_672h' => $validated['warn_rate_672h'] ?? null,
-        ];
+        [$rowAppId, $diskKey] = $validated['scope'] === 'global' ? [0, ''] : [$appId, (string) $validated['disk_key']];
 
-        // Global scope: one row per distinct attribute_id, not tied to a disk.
-        $attributeIds = $validated['scope'] === 'global'
-            ? array_unique(array_column($validated['rows'], 'attribute_id'))
-            : null;
+        $this->upsertThreshold($rowAppId, $diskKey, (int) $validated['attribute_id'], [
+            $validated['field'] => $validated['value'] ?? null,
+        ]);
 
-        if ($attributeIds !== null) {
-            foreach ($attributeIds as $attributeId) {
-                $this->upsertThreshold(0, '', (int) $attributeId, $values);
-            }
-        } else {
-            foreach ($validated['rows'] as $row) {
-                $this->upsertThreshold($appId, (string) $row['disk_key'], (int) $row['attribute_id'], $values);
-            }
+        return response()->json(['status' => 'ok', 'message' => 'Threshold updated']);
+    }
+
+    /** Per-row mute/unmute: alerting stays off even if a warn_rate_* limit is configured. */
+    public function alertToggle(Device $device, Request $request): JsonResponse
+    {
+        $this->authorize('update', $device);
+
+        $validated = $request->validate([
+            'app_id' => 'required|integer',
+            'scope' => 'required|in:disk,global',
+            'disk_key' => 'required_if:scope,disk|string|nullable',
+            'attribute_id' => 'required|integer',
+            'state' => 'required|boolean',
+        ]);
+
+        $appId = $this->ownedAppId($device, (int) $validated['app_id']);
+        if ($appId === null) {
+            return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
         }
 
-        return response()->json(['status' => 'ok', 'message' => 'Thresholds updated']);
+        [$rowAppId, $diskKey] = $validated['scope'] === 'global' ? [0, ''] : [$appId, (string) $validated['disk_key']];
+
+        $this->upsertThreshold($rowAppId, $diskKey, (int) $validated['attribute_id'], [
+            'alert_enabled' => (bool) $validated['state'],
+        ]);
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => $validated['state'] ? 'Alerting enabled' : 'Alerting muted',
+        ]);
     }
 
     /**
-     * Reset selected rows to "default": deletes the threshold row outright
-     * rather than setting its columns to null. Setting columns to null via
-     * update() still leaves a per-disk override row in place, which keeps
-     * winning over the global default (it's just an override with no active
-     * limits) — deleting the row is what actually makes a disk fall back to
-     * inheriting the global default again. For scope=global this deletes the
-     * global default itself, so nothing is configured for that attribute at all.
+     * Reset one row to "default": deletes the threshold row outright rather
+     * than setting its columns to null. Setting columns to null still leaves
+     * a per-disk override row in place, which keeps winning over the global
+     * default (it's just an override with no active limits) — deleting the
+     * row is what actually makes a disk fall back to inheriting the global
+     * default again. For scope=global this deletes the global default
+     * itself, so nothing is configured for that attribute at all.
      */
     public function reset(Device $device, Request $request): JsonResponse
     {
@@ -165,9 +217,8 @@ class SmartAttributeSettingsController
         $validated = $request->validate([
             'app_id' => 'required|integer',
             'scope' => 'required|in:disk,global',
-            'rows' => 'required|array|min:1',
-            'rows.*.disk_key' => 'required|string',
-            'rows.*.attribute_id' => 'required|integer',
+            'disk_key' => 'required_if:scope,disk|string|nullable',
+            'attribute_id' => 'required|integer',
         ]);
 
         $appId = $this->ownedAppId($device, (int) $validated['app_id']);
@@ -175,24 +226,57 @@ class SmartAttributeSettingsController
             return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
         }
 
-        $deleted = 0;
-        if ($validated['scope'] === 'global') {
-            $attributeIds = array_unique(array_column($validated['rows'], 'attribute_id'));
-            $deleted = DB::table('smart_attribute_thresholds')
+        $deleted = $validated['scope'] === 'global'
+            ? DB::table('smart_attribute_thresholds')
                 ->where('app_id', 0)->where('disk_key', '')
-                ->whereIn('attribute_id', $attributeIds)
+                ->where('attribute_id', (int) $validated['attribute_id'])
+                ->delete()
+            : DB::table('smart_attribute_thresholds')
+                ->where('app_id', $appId)
+                ->where('disk_key', (string) $validated['disk_key'])
+                ->where('attribute_id', (int) $validated['attribute_id'])
                 ->delete();
-        } else {
-            foreach ($validated['rows'] as $row) {
-                $deleted += DB::table('smart_attribute_thresholds')
-                    ->where('app_id', $appId)
-                    ->where('disk_key', (string) $row['disk_key'])
-                    ->where('attribute_id', (int) $row['attribute_id'])
-                    ->delete();
-            }
+
+        return response()->json(['status' => 'ok', 'message' => $deleted > 0 ? 'Reset to default' : 'Already at default']);
+    }
+
+    /**
+     * Copy the global default's warn_rate_* limits and alert_enabled down
+     * into a per-disk override row, as an editable starting point — unlike
+     * reset(), the row keeps these as an explicit override afterwards, so it
+     * won't drift if the global default later changes.
+     */
+    public function copyRowToDefault(Device $device, Request $request): JsonResponse
+    {
+        $this->authorize('update', $device);
+
+        $validated = $request->validate([
+            'app_id' => 'required|integer',
+            'disk_key' => 'required|string',
+            'attribute_id' => 'required|integer',
+        ]);
+
+        $appId = $this->ownedAppId($device, (int) $validated['app_id']);
+        if ($appId === null) {
+            return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
         }
 
-        return response()->json(['status' => 'ok', 'message' => "Reset {$deleted} row(s) to default"]);
+        $global = DB::table('smart_attribute_thresholds')
+            ->where('app_id', 0)->where('disk_key', '')
+            ->where('attribute_id', (int) $validated['attribute_id'])
+            ->first();
+
+        $values = [
+            'warn_rate_8h' => $global->warn_rate_8h ?? null,
+            'warn_rate_24h' => $global->warn_rate_24h ?? null,
+            'warn_rate_168h' => $global->warn_rate_168h ?? null,
+            'warn_rate_672h' => $global->warn_rate_672h ?? null,
+            'alert_enabled' => (bool) (($global->alert_enabled ?? null) ?? true),
+        ];
+
+        $this->upsertThreshold($appId, (string) $validated['disk_key'], (int) $validated['attribute_id'], $values);
+
+        return response()->json(['status' => 'ok', 'message' => 'Copied from global default', 'values' => $values]);
     }
 
     public function copyToAllDisks(Device $device, Request $request): JsonResponse

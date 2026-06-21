@@ -1776,7 +1776,7 @@ class Common extends Application
     private function combineStatus(?int $rawStatus, int $rateStatus): ?int
     {
         if ($rateStatus === 2) {
-            return 3;
+            return 4;
         }
 
         if ($rawStatus === -1 && $rateStatus === 1) {
@@ -1788,6 +1788,18 @@ class Common extends Application
 
     private function resolveRateStatus(\Illuminate\Support\Collection $thresholdRows, int $attrId, array $rates): int
     {
+        $rows = $thresholdRows->where('attribute_id', $attrId);
+        $diskRow = $rows->firstWhere('disk_key', '!=', '');
+        $globalRow = $rows->firstWhere('disk_key', '');
+
+        // Per-disk override decides alerting on/off when present; otherwise the global
+        // default's switch applies. Muting here short-circuits before any limit check,
+        // so a configured warn_rate_* never alerts while its row is switched off.
+        $alertEnabled = (bool) (($diskRow->alert_enabled ?? null) ?? ($globalRow->alert_enabled ?? null) ?? true);
+        if (! $alertEnabled) {
+            return -1;
+        }
+
         $limits = $this->effectiveLimits($thresholdRows, $attrId);
         if (! $this->hasEnabledThreshold($limits)) {
             return -1;

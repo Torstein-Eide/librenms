@@ -44,7 +44,7 @@
         @endphp
 
         <p class="text-muted">
-            {{ __('Rate-of-change thresholds (raw value change per hour) used to flag an attribute with a rate warning. A row with no per-disk value falls back to the global default for that attribute. "Avg" columns show the attribute\'s current measured rate over each window, for reference when picking a threshold.') }}
+            {{ __('Rate-of-change thresholds (raw value change per hour) used to flag an attribute with a rate warning. Edits save immediately. A disk row with no override falls back to the "Global Defaults" tab. "Avg" columns show the attribute\'s current measured rate, for reference when picking a threshold.') }}
         </p>
 
         @if ($appId === null || empty($diskKeys))
@@ -52,7 +52,7 @@
         @else
             <ul class="nav nav-tabs" role="tablist">
                 @foreach ($diskKeys as $i => $diskKey)
-                    @php $tabId = 'smart-thresh-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey); @endphp
+                    @php $tabId = 'smart-thresh-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey ?: 'default'); @endphp
                     <li role="presentation" class="{{ $i === 0 ? 'active' : '' }}">
                         <a href="#{{ $tabId }}" aria-controls="{{ $tabId }}" role="tab" data-toggle="tab">{{ $diskLabels[$diskKey] ?? $diskKey }}</a>
                     </li>
@@ -62,93 +62,96 @@
             <div class="tab-content" style="margin-top:12px">
                 @foreach ($diskKeys as $i => $diskKey)
                     @php
-                        $tabId = 'smart-thresh-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey);
-                        $tblId = $tabId . '-tbl';
+                        $tabId = 'smart-thresh-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey ?: 'default');
                         $items = $itemsByDisk[$diskKey] ?? collect();
+                        $isDefaultTab = $diskKey === '';
+                        $scope = $isDefaultTab ? 'global' : 'disk';
+                        $fmtAvg = static function ($v) {
+                            return is_numeric($v) ? number_format((float) $v, 1) : '-';
+                        };
                     @endphp
                     <div role="tabpanel" class="tab-pane {{ $i === 0 ? 'active' : '' }}" id="{{ $tabId }}">
-                        <form class="smart-threshold-form" data-disk_key="{{ $diskKey }}">
-                            @csrf
-                            <div style="margin-bottom:8px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-                                <input type="text" class="form-control input-sm smart-thresh-q" style="width:240px" placeholder="{{ __('Filter by attribute name…') }}" data-table="{{ $tblId }}">
-                                <label style="font-weight:normal;margin:0"><input type="checkbox" class="smart-thresh-select-all" data-table="{{ $tblId }}"> {{ __('Select all visible') }}</label>
-                            </div>
-
-                            <div class="table-responsive">
-                                <table id="{{ $tblId }}" class="table table-condensed table-hover">
-                                    <thead>
-                                    <tr>
-                                        <th></th>
-                                        <th>{{ __('ID') }}</th>
-                                        <th>{{ __('Name') }}</th>
+                        <div class="table-responsive">
+                            <table class="table table-condensed table-hover">
+                                <thead>
+                                <tr>
+                                    <th>{{ __('ID') }}</th>
+                                    <th>{{ __('Name') }}</th>
+                                    @if (! $isDefaultTab)
                                         <th>{{ __('Avg 8h') }}</th>
-                                        <th>{{ __('Warn 8h') }}</th>
+                                    @endif
+                                    <th class="col-sm-1">{{ __('Warn 8h') }}</th>
+                                    @if (! $isDefaultTab)
                                         <th>{{ __('Avg 24h') }}</th>
-                                        <th>{{ __('Warn 24h') }}</th>
+                                    @endif
+                                    <th class="col-sm-1">{{ __('Warn 24h') }}</th>
+                                    @if (! $isDefaultTab)
                                         <th>{{ __('Avg 1wk') }}</th>
-                                        <th>{{ __('Warn 1wk') }}</th>
+                                    @endif
+                                    <th class="col-sm-1">{{ __('Warn 1wk') }}</th>
+                                    @if (! $isDefaultTab)
                                         <th>{{ __('Avg 1mo') }}</th>
-                                        <th>{{ __('Warn 1mo') }}</th>
-                                        <th>{{ __('Source') }}</th>
+                                    @endif
+                                    <th class="col-sm-1">{{ __('Warn 1mo') }}</th>
+                                    <th>{{ __('Alert') }}</th>
+                                    <th></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                @foreach ($items as $item)
+                                    <tr data-attribute_id="{{ $item['attribute_id'] }}" data-disk_key="{{ $diskKey }}">
+                                        <td>{{ $item['attribute_id'] }}</td>
+                                        <td>{{ str_replace('_', ' ', (string) $item['name']) }}</td>
+                                        @foreach (['8h', '24h', '168h', '672h'] as $window)
+                                            @if (! $isDefaultTab)
+                                                <td class="text-muted">{{ $fmtAvg($item['rate_' . $window]) }}</td>
+                                            @endif
+                                            <td>
+                                                <div class="form-group has-feedback" style="margin:0">
+                                                    <input type="text"
+                                                           class="form-control input-sm smart-thresh-field"
+                                                           style="width:90px"
+                                                           data-scope="{{ $scope }}"
+                                                           data-disk_key="{{ $diskKey }}"
+                                                           data-attribute_id="{{ $item['attribute_id'] }}"
+                                                           data-field="warn_rate_{{ $window }}"
+                                                           data-update-url="{{ route('device.apps.smart.settings.field', $device) }}"
+                                                           value="{{ $item['warn_rate_' . $window] }}">
+                                                </div>
+                                            </td>
+                                        @endforeach
+                                        <td>
+                                            <input type="checkbox"
+                                                   class="smart-thresh-alert"
+                                                   data-scope="{{ $scope }}"
+                                                   data-disk_key="{{ $diskKey }}"
+                                                   data-attribute_id="{{ $item['attribute_id'] }}"
+                                                   data-attribute_name="{{ $item['name'] }}"
+                                                   data-alert-url="{{ route('device.apps.smart.settings.alert', $device) }}"
+                                                   {{ $item['alert_enabled'] ? 'checked' : '' }}>
+                                        </td>
+                                        <td style="white-space:nowrap">
+                                            <a type="button"
+                                               class="btn btn-default btn-sm smart-thresh-reset {{ $item['has_row'] ? '' : 'disabled' }}"
+                                               data-scope="{{ $scope }}"
+                                               data-disk_key="{{ $diskKey }}"
+                                               data-attribute_id="{{ $item['attribute_id'] }}"
+                                               data-reset-url="{{ route('device.apps.smart.settings.reset', $device) }}"
+                                               title="{{ $isDefaultTab ? __('Delete the global default for this attribute') : __('Delete this override so it inherits the global default again') }}">{{ __('Reset') }}</a>
+                                            @if (! $isDefaultTab)
+                                                <a type="button"
+                                                   class="btn btn-default btn-sm smart-thresh-copy-default"
+                                                   data-disk_key="{{ $diskKey }}"
+                                                   data-attribute_id="{{ $item['attribute_id'] }}"
+                                                   data-copy-url="{{ route('device.apps.smart.settings.copy_default', $device) }}"
+                                                   title="{{ __('Copy the global default\'s values into this disk as an editable override') }}">{{ __('Copy to default') }}</a>
+                                            @endif
+                                        </td>
                                     </tr>
-                                    </thead>
-                                    <tbody>
-                                    @php
-                                        $fmtAvg = static function ($v) {
-                                            return is_numeric($v) ? number_format((float) $v, 1) : '-';
-                                        };
-                                    @endphp
-                                    @foreach ($items as $item)
-                                        <tr data-attribute_id="{{ $item['attribute_id'] }}">
-                                            <td><input type="checkbox" class="smart-thresh-row"></td>
-                                            <td>{{ $item['attribute_id'] }}</td>
-                                            <td>{{ str_replace('_', ' ', (string) $item['name']) }}</td>
-                                            <td class="text-muted">{{ $fmtAvg($item['rate_8h']) }}</td>
-                                            <td>{{ $item['warn_rate_8h'] ?? '-' }}</td>
-                                            <td class="text-muted">{{ $fmtAvg($item['rate_24h']) }}</td>
-                                            <td>{{ $item['warn_rate_24h'] ?? '-' }}</td>
-                                            <td class="text-muted">{{ $fmtAvg($item['rate_168h']) }}</td>
-                                            <td>{{ $item['warn_rate_168h'] ?? '-' }}</td>
-                                            <td class="text-muted">{{ $fmtAvg($item['rate_672h']) }}</td>
-                                            <td>{{ $item['warn_rate_672h'] ?? '-' }}</td>
-                                            <td>{{ $item['is_override'] ? __('This disk') : __('Global default') }}</td>
-                                        </tr>
-                                    @endforeach
-                                    </tbody>
-                                </table>
-                            </div>
-
-                            <div class="panel panel-default" style="margin-top:12px">
-                                <div class="panel-heading">{{ __('Apply to selected rows') }}</div>
-                                <div class="panel-body" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-                                    <div class="form-group" style="margin:0">
-                                        <label>{{ __('Warn 8h') }}</label>
-                                        <input type="number" step="any" class="form-control input-sm smart-thresh-8h" style="width:110px">
-                                    </div>
-                                    <div class="form-group" style="margin:0">
-                                        <label>{{ __('Warn 24h') }}</label>
-                                        <input type="number" step="any" class="form-control input-sm smart-thresh-24h" style="width:110px">
-                                    </div>
-                                    <div class="form-group" style="margin:0">
-                                        <label>{{ __('Warn 1wk') }}</label>
-                                        <input type="number" step="any" class="form-control input-sm smart-thresh-168h" style="width:110px">
-                                    </div>
-                                    <div class="form-group" style="margin:0">
-                                        <label>{{ __('Warn 1mo') }}</label>
-                                        <input type="number" step="any" class="form-control input-sm smart-thresh-672h" style="width:110px">
-                                    </div>
-                                    <div class="form-group" style="margin:0">
-                                        <label>{{ __('Scope') }}</label>
-                                        <select class="form-control input-sm smart-thresh-scope">
-                                            <option value="disk">{{ __('This disk only') }}</option>
-                                            <option value="global">{{ __('Global default (all devices)') }}</option>
-                                        </select>
-                                    </div>
-                                    <button type="button" class="btn btn-primary btn-sm smart-thresh-apply" data-table="{{ $tblId }}">{{ __('Apply to selected') }}</button>
-                                    <button type="button" class="btn btn-default btn-sm smart-thresh-reset" data-table="{{ $tblId }}" title="{{ __('Delete the threshold row(s) so they inherit the global default again') }}">{{ __('Reset selected to default') }}</button>
-                                </div>
-                            </div>
-                        </form>
+                                @endforeach
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 @endforeach
             </div>
@@ -160,7 +163,9 @@
                         <label>{{ __('Source disk') }}</label>
                         <select id="smart-thresh-source-disk" class="form-control input-sm" style="min-width:220px">
                             @foreach ($diskKeys as $diskKey)
-                                <option value="{{ $diskKey }}">{{ $diskLabels[$diskKey] ?? $diskKey }}</option>
+                                @if ($diskKey !== '')
+                                    <option value="{{ $diskKey }}">{{ $diskLabels[$diskKey] ?? $diskKey }}</option>
+                                @endif
                             @endforeach
                         </select>
                     </div>
@@ -175,120 +180,116 @@
     <script>
         (function () {
             var appId = {{ (int) ($appId ?? 0) }};
-            var updateUrl = '{{ $appId !== null ? route('device.apps.smart.settings.update', $device) : '' }}';
             var resetUrl = '{{ $appId !== null ? route('device.apps.smart.settings.reset', $device) : '' }}';
             var copyUrl = '{{ $appId !== null ? route('device.apps.smart.settings.copy', $device) : '' }}';
             var token = '{{ csrf_token() }}';
 
-            var selectedRows = function (form, tbl) {
-                var diskKey = form.dataset.disk_key;
-                var rows = [];
-                tbl.querySelectorAll('tbody tr').forEach(function (row) {
-                    var cb = row.querySelector('.smart-thresh-row');
-                    if (cb && cb.checked) {
-                        rows.push({ disk_key: diskKey, attribute_id: parseInt(row.dataset.attribute_id, 10) });
-                    }
-                });
-                return rows;
-            };
-
-            document.querySelectorAll('.smart-thresh-q').forEach(function (input) {
-                input.addEventListener('input', function () {
-                    var q = this.value.toLowerCase();
-                    var tbl = document.getElementById(this.dataset.table);
-                    if (!tbl) return;
-                    tbl.querySelectorAll('tbody tr').forEach(function (row) {
-                        row.style.display = !q || row.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
-                    });
-                });
+            // Inline edit, save on blur or Enter — no save button.
+            $('.smart-thresh-field').on('focusin', function () {
+                $(this).data('val', $(this).val());
             });
 
-            document.querySelectorAll('.smart-thresh-select-all').forEach(function (cb) {
-                cb.addEventListener('change', function () {
-                    var checked = this.checked;
-                    var tbl = document.getElementById(this.dataset.table);
-                    if (!tbl) return;
-                    tbl.querySelectorAll('tbody tr').forEach(function (row) {
-                        if (row.style.display !== 'none') {
-                            var rowCb = row.querySelector('.smart-thresh-row');
-                            if (rowCb) rowCb.checked = checked;
+            $('.smart-thresh-field').on('blur keyup', function (e) {
+                if (e.type === 'keyup' && e.keyCode !== 13) return;
+                var prev = $(this).data('val');
+                var value = $(this).val();
+                if (prev === value) return;
+
+                var $this = $(this);
+                $.ajax({
+                    type: 'POST',
+                    url: $(this).data('update-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        scope: $(this).data('scope'),
+                        disk_key: $(this).data('disk_key'),
+                        attribute_id: $(this).data('attribute_id'),
+                        field: $(this).data('field'),
+                        value: value === '' ? null : value,
+                    },
+                    success: function (data) {
+                        if (data.status === 'ok') {
+                            $this.data('val', value);
+                            toastr.success(data.message);
+                            $this.closest('tr').find('.smart-thresh-reset').removeClass('disabled');
+                        } else {
+                            toastr.error(data.message);
                         }
-                    });
+                    },
+                    error: function () { toastr.error('{{ __('Could not update threshold') }}'); },
                 });
             });
 
-            document.querySelectorAll('.smart-thresh-apply').forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    var form = this.closest('.smart-threshold-form');
-                    var tbl = document.getElementById(this.dataset.table);
-                    var rows = selectedRows(form, tbl);
-                    if (rows.length === 0) {
-                        toastr.error('{{ __('Select at least one row') }}');
-                        return;
-                    }
-
-                    var numOrNull = function (el) {
-                        var v = el.value;
-                        return v === '' ? null : parseFloat(v);
-                    };
-
-                    $.ajax({
-                        type: 'POST',
-                        url: updateUrl,
-                        dataType: 'json',
-                        data: {
-                            _token: token,
-                            app_id: appId,
-                            scope: form.querySelector('.smart-thresh-scope').value,
-                            rows: rows,
-                            warn_rate_8h: numOrNull(form.querySelector('.smart-thresh-8h')),
-                            warn_rate_24h: numOrNull(form.querySelector('.smart-thresh-24h')),
-                            warn_rate_168h: numOrNull(form.querySelector('.smart-thresh-168h')),
-                            warn_rate_672h: numOrNull(form.querySelector('.smart-thresh-672h')),
-                        },
-                        success: function (data) {
-                            if (data.status === 'ok') {
-                                toastr.success(data.message);
-                                setTimeout(function () { location.reload(true); }, 1200);
-                            } else {
-                                toastr.error(data.message);
-                            }
-                        },
-                        error: function () { toastr.error('{{ __('Could not update thresholds') }}'); },
-                    });
+            $('.smart-thresh-alert').bootstrapSwitch('offColor', 'danger');
+            $('.smart-thresh-alert').on('switchChange.bootstrapSwitch', function (event, state) {
+                event.preventDefault();
+                var $this = $(this);
+                $.ajax({
+                    type: 'POST',
+                    url: $(this).data('alert-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        scope: $(this).data('scope'),
+                        disk_key: $(this).data('disk_key'),
+                        attribute_id: $(this).data('attribute_id'),
+                        state: state ? 1 : 0,
+                    },
+                    success: function (data) {
+                        if (data.status === 'ok') {
+                            toastr.success(data.message);
+                            $this.closest('tr').find('.smart-thresh-reset').removeClass('disabled');
+                        } else {
+                            toastr.error(data.message);
+                        }
+                    },
+                    error: function () { toastr.error('{{ __('Could not update alerting') }}'); },
                 });
             });
 
-            document.querySelectorAll('.smart-thresh-reset').forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    var form = this.closest('.smart-threshold-form');
-                    var tbl = document.getElementById(this.dataset.table);
-                    var rows = selectedRows(form, tbl);
-                    if (rows.length === 0) {
-                        toastr.error('{{ __('Select at least one row') }}');
-                        return;
-                    }
+            $('.smart-thresh-reset').on('click', function (event) {
+                event.preventDefault();
+                if ($(this).hasClass('disabled')) return;
+                var $this = $(this);
+                $.ajax({
+                    type: 'POST',
+                    url: $(this).data('reset-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        scope: $(this).data('scope'),
+                        disk_key: $(this).data('disk_key'),
+                        attribute_id: $(this).data('attribute_id'),
+                    },
+                    success: function (data) {
+                        toastr.success(data.message);
+                        setTimeout(function () { location.reload(true); }, 1000);
+                    },
+                    error: function () { toastr.error('{{ __('Could not reset threshold') }}'); },
+                });
+            });
 
-                    $.ajax({
-                        type: 'POST',
-                        url: resetUrl,
-                        dataType: 'json',
-                        data: {
-                            _token: token,
-                            app_id: appId,
-                            scope: form.querySelector('.smart-thresh-scope').value,
-                            rows: rows,
-                        },
-                        success: function (data) {
-                            if (data.status === 'ok') {
-                                toastr.success(data.message);
-                                setTimeout(function () { location.reload(true); }, 1200);
-                            } else {
-                                toastr.error(data.message);
-                            }
-                        },
-                        error: function () { toastr.error('{{ __('Could not reset thresholds') }}'); },
-                    });
+            $('.smart-thresh-copy-default').on('click', function (event) {
+                event.preventDefault();
+                $.ajax({
+                    type: 'POST',
+                    url: $(this).data('copy-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        disk_key: $(this).data('disk_key'),
+                        attribute_id: $(this).data('attribute_id'),
+                    },
+                    success: function (data) {
+                        toastr.success(data.message);
+                        setTimeout(function () { location.reload(true); }, 1000);
+                    },
+                    error: function () { toastr.error('{{ __('Could not copy from global default') }}'); },
                 });
             });
 
