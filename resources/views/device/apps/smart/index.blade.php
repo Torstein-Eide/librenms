@@ -352,16 +352,6 @@
         return '<span class="label label-' . $class . '">' . htmlspecialchars($text) . '°C</span>';
     };
 
-    // Wear-remaining percentage (SATA attribute, no sensor limits available) → coloured badge.
-    $wearBadge = static function (?float $wear): string {
-        if ($wear === null) {
-            return '<span class="text-muted">-</span>';
-        }
-        $rounded = (int) round(max(0.0, min(100.0, $wear)));
-        $class = $rounded <= 10 ? 'danger' : ($rounded <= 20 ? 'warning' : 'default');
-        return '<span class="label label-' . $class . '">' . $rounded . '%</span>';
-    };
-
     // Percent sensor (NVMe Available Spare / Percentage Used) → badge coloured from the
     // sensor's own warn/crit limits, whichever direction the device reported them in.
     $percentBadge = static function ($sensor): string {
@@ -755,8 +745,7 @@ SCRIPT;
                         $serialCell = $serial !== ''
                             ? '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . htmlspecialchars($serial) . '</a>'
                             : '-';
-                        $isNvmeDisk = $data->isNvme($disk);
-                        $usedSensor = $isNvmeDisk ? $data->percentageUsedSensor($key) : null;
+                        $usedSensor = $data->percentageUsedSensor($key);
                         $spareSensor = $data->availableSpareSensor($key);
                     @endphp
                     <tr>
@@ -767,7 +756,7 @@ SCRIPT;
                         <td>{!! $tempBadge($data->temperatureSensor($key)) !!}</td>
                         <td>{!! $stateBadge($data->healthSensor($key)) !!}</td>
                         <td>{!! $stateBadge($data->selftestStatusSensor($key)) !!}</td>
-                        <td>{!! $isNvmeDisk ? $percentBadge($usedSensor) : $wearBadge($data->wearRemaining($disk)) !!}</td>
+                        <td>{!! $percentBadge($usedSensor) !!}</td>
                         <td>{!! $percentBadge($spareSensor) !!}</td>
                         <td>{!! $selftestBadge($data->selftestAgeSensor($key, 'short')) !!}</td>
                         <td>{!! $selftestBadge($data->selftestAgeSensor($key, 'long')) !!}</td>
