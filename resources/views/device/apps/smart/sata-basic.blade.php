@@ -461,6 +461,7 @@
             1  => '<span class="label label-default">' . htmlspecialchars($statusLabel) . '</span>',
             2  => '<span class="label label-danger">' . htmlspecialchars($statusLabel) . '</span>',
             3  => '<span class="label" style="background-color:#e8857f">' . htmlspecialchars($statusLabel) . '</span>',
+            4  => '<span class="label label-warning">' . htmlspecialchars($statusLabel) . '</span>',
             default => '<span class="text-muted">' . htmlspecialchars($statusLabel) . '</span>',
         };
 

@@ -1077,9 +1077,10 @@ class HtmlData
         'attr_type' => [0 => 'Unknown', 1 => 'Pre-fail', 2 => 'Old age'],
         // SmartmonAtaSmartAttrUpdated
         'attr_updated' => [0 => 'Unknown', 1 => 'Always', 2 => 'Offline'],
-        // SmartmonAtaSmartAttrStatus (device-reported)
+        // SmartmonAtaSmartAttrStatus (device-reported), plus 4 = rate-of-change
+        // threshold breached, synthesized by Common::combineStatus().
         'attr_status' => [
-            -1 => '-', 0 => 'Unknown', 1 => 'OK', 2 => 'Failing now', 3 => 'Failed in past',
+            -1 => '-', 0 => 'Unknown', 1 => 'OK', 2 => 'Failing now', 3 => 'Failed in past', 4 => 'Rate exceeded',
         ],
         // SmartmonAtaSelfTestType
         'selftest_type' => [
