@@ -877,7 +877,7 @@ class HtmlData
 
     /** Device-statistics pages hidden in the detailed view (shown elsewhere). */
     public const DEV_STAT_SKIP_PAGES = [
-        'Temperature Statistics', 'Vendor Specific Statistics', 'Solid State Device Statistics',
+        'Temperature Statistics', 'Vendor Specific Statistics',
     ];
 
     // -------------------------------------------------------------------------

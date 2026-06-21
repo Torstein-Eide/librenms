@@ -20,6 +20,7 @@
         'General Statistics',
         'Free-Fall Statistics',
         'Rotating Media Statistics',
+        'Solid State Device Statistics',
         'General Errors Statistics',
         'Transport Statistics',
         'FARM Log Header',
