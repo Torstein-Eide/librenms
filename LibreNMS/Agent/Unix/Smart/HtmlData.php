@@ -33,9 +33,6 @@ class HtmlData
     /** NVMe device protocol_type value (SmartmonDeviceType: nvme=5). */
     private const NVME_TYPES = [5];
 
-    /** ATA SMART attribute IDs that carry SSD wear-remaining as the normalised value. */
-    private const WEAR_ATTR_IDS = [173, 177, 202, 231, 233];
-
     /**
      * Fallback COUNTER attribute names used to pick a rate unit only before any
      * rate history exists (fresh attribute, no rate_8h/24h/168h/672h yet). Once
@@ -405,7 +402,7 @@ class HtmlData
         return null;
     }
 
-    /** NVMe "Percentage Used" SENSOR-MIB percent sensor for a disk, or null. */
+    /** "Percentage Used" (NVMe) / "Endurance Used" (SATA) SENSOR-MIB percent sensor for a disk, or null. */
     public function percentageUsedSensor(string $diskKey): ?Sensor
     {
         foreach ($this->diskSensors($diskKey) as $sensor) {
@@ -671,30 +668,12 @@ class HtmlData
     }
 
     /**
-     * SSD wear-remaining percentage. SATA reads the normalised value of the
-     * first attribute matching one of self::WEAR_ATTR_IDS; NVMe derives it
-     * from the "Percentage Used" sensor.
+     * SSD wear-remaining percentage, from the "Percentage Used" (NVMe) /
+     * "Endurance Used" (SATA) SENSOR-MIB sensor.
      */
     public function wearRemaining(array $disk): ?float
     {
-        if ($this->isNvme($disk)) {
-            return $this->nvmeWearRemaining((string) $disk['disk_key']);
-        }
-
-        foreach ($disk['attributes'] as $attr) {
-            if (in_array((int) ($attr['attribute_id'] ?? null), self::WEAR_ATTR_IDS, true)
-                && is_numeric($attr['value_norm'] ?? null)) {
-                return (float) $attr['value_norm'];
-            }
-        }
-
-        return null;
-    }
-
-    /** NVMe wear-remaining from the "Percentage Used" SENSOR-MIB sensor, or null. */
-    private function nvmeWearRemaining(string $diskKey): ?float
-    {
-        $sensor = $this->percentageUsedSensor($diskKey);
+        $sensor = $this->percentageUsedSensor((string) $disk['disk_key']);
 
         return $sensor && is_numeric($sensor->sensor_current)
             ? max(0.0, min(100.0, (float) $sensor->sensor_current))
@@ -706,8 +685,8 @@ class HtmlData
      * against power-on age (assumes a constant wear rate). SATA is gated to attribute
      * 177 "Wear_Leveling_Count" specifically — its normalised value (100 = new, falling
      * to the failure threshold as the drive wears) is a reliable remaining-life percentage,
-     * unlike some of the other vendor-specific attributes in self::WEAR_ATTR_IDS. NVMe uses
-     * the spec-defined "Percentage Used" sensor directly. Returns null when the required
+     * unlike some of the other vendor-specific wear attributes. NVMe uses the
+     * spec-defined "Percentage Used" sensor directly. Returns null when the required
      * attribute/sensor is absent or power-on hours are unknown/zero.
      */
     public function estimatedLifetimeYears(array $disk): ?float
@@ -855,9 +834,10 @@ class HtmlData
     public function reliabilityHeader(array $disk): string
     {
         $parts = [];
-        $passed = $disk['health']['sct_smart_status_passed'] ?? $disk['health']['overall_status'] ?? null;
-        if ($passed !== null) {
-            $parts[] = (int) $passed === 1 ? 'OK' : 'FAIL';
+        $healthSensor = $this->healthSensor((string) $disk['disk_key']);
+        if ($healthSensor !== null && $healthSensor->sensor_current !== null && (int) $healthSensor->sensor_current >= 0) {
+            $translation = $healthSensor->currentTranslation();
+            $parts[] = $translation ? $translation->state_descr : (string) (int) $healthSensor->sensor_current;
         }
         $wear = $this->wearRemaining($disk);
         if ($wear !== null) {
