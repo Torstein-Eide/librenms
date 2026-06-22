@@ -40,6 +40,16 @@
                 'Namespaces'    => $fmtInt($info['namespace_count'] ?? null),
                 'Max Transfer'  => isset($info['max_data_transfer_pages']) && is_numeric($info['max_data_transfer_pages'])
                     ? $fmtInt($info['max_data_transfer_pages']) . ' pages' : null,
+                'Link Speed'    => isset($info['current_link_speed']) && is_numeric($info['current_link_speed'])
+                    ? sprintf('%.1f GT/s', $info['current_link_speed'] / 10)
+                        . (isset($info['max_link_speed']) && is_numeric($info['max_link_speed']) && (int) $info['max_link_speed'] !== (int) $info['current_link_speed']
+                            ? sprintf(' (max %.1f GT/s)', $info['max_link_speed'] / 10) : '')
+                    : null,
+                'Link Width'    => isset($info['current_link_width']) && is_numeric($info['current_link_width'])
+                    ? 'x' . (int) $info['current_link_width']
+                        . (isset($info['max_link_width']) && is_numeric($info['max_link_width']) && (int) $info['max_link_width'] !== (int) $info['current_link_width']
+                            ? ' (max x' . (int) $info['max_link_width'] . ')' : '')
+                    : null,
                 'Last Poll Result' => $disk['last_poll_result'] !== null ? $data->decode('poll_result', $disk['last_poll_result']) : null,
             ];
             $rows = array_filter($rows, fn ($v) => $v !== null && $v !== '');
@@ -232,7 +242,13 @@
         {{-- Power States --}}
         @if(! empty($disk['nvme_power_states']))
         @php
-            $panelStart('Power States');
+            $lpsBadge = '';
+            if (isset($info['link_power_state'])) {
+                $lpsBadge = '<span class="label label-default" style="cursor:help;text-decoration:underline dotted" title="'
+                    . htmlspecialchars($tooltipForLabel('Link Power State'), ENT_QUOTES) . '">'
+                    . htmlspecialchars($data->decode('link_power_state', $info['link_power_state'])) . '</span>';
+            }
+            $panelStart('Power States', $lpsBadge);
             echo '<div class="table-responsive"><table class="table table-condensed table-hover"><thead><tr>'
                 . '<th>PS</th><th>Op</th><th>Max</th><th>Active</th><th>Idle</th><th>Entry</th><th>Exit</th></tr></thead><tbody>';
             foreach ($disk['nvme_power_states'] as $ps) {

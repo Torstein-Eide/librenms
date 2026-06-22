@@ -147,6 +147,9 @@
         'estimated lifetime' => 'Projected total service life, extrapolated from the wear consumed so far against the drive\'s power-on age. Assumes a constant wear rate; actual results vary with workload.',
         'dwpd' => 'Drive Writes Per Day: average bytes written per day, divided by the drive\'s capacity, since it was first powered on.',
         'power state' => 'The drive\'s live power-saving state as of the agent\'s last poll. Only probed for ATA/SATA/SCSI/SAS in collect mode with standby checking enabled; otherwise reports Unknown or Active rather than a genuine reading.',
+        'link power state' => 'The PCIe link\'s live power-saving state (D-state), read from sysfs. "D3hot"/"D3cold" mean the kernel has runtime-suspended the controller. Only probed in collect mode; otherwise reports Unknown. Distinct from the drive\'s own NVMe power states shown below.',
+        'link speed' => 'The PCIe link\'s negotiated speed; "max" is shown when the kernel has downclocked the link below its electrical maximum (ASPM or runtime PM).',
+        'link width' => 'The PCIe link\'s negotiated lane width; "max" is shown when the kernel has downclocked the link below its electrical maximum.',
     ];
     $tooltipForLabel = static function (string $label) use ($smartTooltips): string {
         $key = strtolower(trim(preg_replace('/[^a-z0-9]+/i', ' ', html_entity_decode($label, ENT_QUOTES))));

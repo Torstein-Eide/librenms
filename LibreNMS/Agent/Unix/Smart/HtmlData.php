@@ -1189,6 +1189,10 @@ class HtmlData
             0 => 'Unknown', 1 => 'Active', 2 => 'Idle (A)', 3 => 'Idle (B)', 4 => 'Idle (C)',
             5 => 'Standby (Y)', 6 => 'Standby (Z)', 7 => 'Sleeping', 8 => 'Standby',
         ],
+        // SmartmonNvmeLinkPowerState
+        'link_power_state' => [
+            0 => 'Unknown', 1 => 'D0', 2 => 'D1', 3 => 'D2', 4 => 'D3hot', 5 => 'D3cold',
+        ],
     ];
 
     /** Decode a stored integer code to a human label; returns '-' for null/unmapped. */

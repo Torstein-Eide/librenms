@@ -2233,10 +2233,17 @@ class Common extends Application
             'nvme_version'                   => $row['smartmonNvmeVersion'] ?? null,
             'namespace_count'                => $this->intValue($row['smartmonNvmeNamespaceCount'] ?? null),
             'max_data_transfer_pages'        => $this->intValue($row['smartmonNvmeMaximumDataTransferPages'] ?? null),
+            'link_power_state'               => $this->intValue($row['smartmonNvmeLinkPowerState'] ?? null),
+            'max_link_speed'                 => $this->intValue($row['smartmonNvmeMaxLinkSpeed'] ?? null),
+            'max_link_width'                 => $this->intValue($row['smartmonNvmeMaxLinkWidth'] ?? null),
+            'current_link_speed'             => $this->intValue($row['smartmonNvmeCurrentLinkSpeed'] ?? null),
+            'current_link_width'             => $this->intValue($row['smartmonNvmeCurrentLinkWidth'] ?? null),
         ], ['app_id', 'disk_key'], [
             'pci_vendor_id', 'pci_device_id', 'ieee_oui',
             'total_nvm_capacity_bytes', 'unallocated_nvm_capacity_bytes',
             'controller_id', 'nvme_version', 'namespace_count', 'max_data_transfer_pages',
+            'link_power_state', 'max_link_speed', 'max_link_width',
+            'current_link_speed', 'current_link_width',
         ]);
     }
 
