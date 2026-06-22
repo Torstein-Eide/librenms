@@ -846,26 +846,41 @@ class HtmlData
     }
 
     /**
-     * Distinct ATA attribute IDs across all disks, for the overview multi-disk
-     * attribute graphs. Returns [id => display name] sorted by id.
+     * Distinct (ATA attribute ID, name) pairs across all disks, for the overview
+     * multi-disk attribute graphs. Numbered SMART attributes above the
+     * standardized "Big 5" are vendor-defined, so the same numeric ID can mean
+     * a different counter on different disk vendors/models — these are kept as
+     * separate entries (rather than deduped by ID alone) so they're never
+     * graphed together as if they were the same metric. `raw_name` is the
+     * exact smart_sata_attributes.name value (e.g. "Raw_Read_Error_Rate"),
+     * for exact-match DB filtering; `name` is the prettified display form.
      *
-     * @return array<int, string>
+     * @return array<int, array{id:int, name:string, raw_name:string}>
      */
     public function overviewAttributeIds(): array
     {
-        $ids = [];
+        $seen = [];
+        $entries = [];
         foreach ($this->disks as $disk) {
             foreach ($disk['attributes'] as $attr) {
                 $id = (int) ($attr['attribute_id'] ?? 0);
-                if ($id <= 0 || isset($ids[$id])) {
+                if ($id <= 0) {
                     continue;
                 }
-                $ids[$id] = str_replace('_', ' ', trim((string) ($attr['name'] ?? ('Attribute ' . $id))));
+                $rawName = trim((string) ($attr['name'] ?? ('Attribute ' . $id)));
+                $name = str_replace('_', ' ', $rawName);
+                $dedupeKey = $id . '|' . strtolower($rawName);
+                if (isset($seen[$dedupeKey])) {
+                    continue;
+                }
+                $seen[$dedupeKey] = true;
+                $entries[] = ['id' => $id, 'name' => $name, 'raw_name' => $rawName];
             }
         }
-        ksort($ids);
 
-        return $ids;
+        usort($entries, static fn (array $a, array $b): int => $a['id'] <=> $b['id'] ?: strcmp($a['name'], $b['name']));
+
+        return $entries;
     }
 
     /** Header badge value for the reliability (Big 5) graph: SMART pass + wear. */
@@ -1035,7 +1050,7 @@ class HtmlData
      * Per-attribute graph specs for a disk, limited to attributes whose RRD
      * datasets actually exist.
      *
-     * @return array<int, array{id:int, title:string, header:string, thresh:?float, has_raw:bool, has_norm:bool, rate_unit:?string}>
+     * @return array<int, array{id:int, name:string, raw_name:string, title:string, header:string, thresh:?float, has_raw:bool, has_norm:bool, rate_unit:?string}>
      */
     public function attributeGraphSpecs(string $diskKey): array
     {
@@ -1056,13 +1071,16 @@ class HtmlData
                 continue;
             }
 
-            $name = str_replace('_', ' ', trim((string) ($attr['name'] ?? ('Attribute ' . $id))));
+            $rawName = trim((string) ($attr['name'] ?? ('Attribute ' . $id)));
+            $name = str_replace('_', ' ', $rawName);
             $rawValue = $attr['value_raw_string'] ?? $attr['value_raw'] ?? null;
             $header = 'Normalized:' . $this->numericString($attr['value_norm'] ?? null)
                 . ' Raw:' . $this->numericString($rawValue);
 
             $specs[$id] = [
                 'id'       => $id,
+                'name'     => $name,
+                'raw_name' => $rawName,
                 'title'    => 'ID# ' . $id . ', ' . $name,
                 'header'   => $header,
                 'thresh'   => is_numeric($attr['value_threshold'] ?? null) ? (float) $attr['value_threshold'] : null,

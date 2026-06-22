@@ -32,7 +32,15 @@ class SmartController
         return $this->renderSmartPage($device, null, 'compare');
     }
 
-    private function renderSmartPage(Device $device, ?string $selectedDisk, string $smartPage): View
+    public function graphs(Device $device, Request $request): View
+    {
+        return $this->renderSmartPage($device, null, 'graphs', [
+            'selectedGraphView' => $request->query('view'),
+            'graphsDisplayMode' => $request->query('mode') === 'mini' ? 'mini' : 'normal',
+        ]);
+    }
+
+    private function renderSmartPage(Device $device, ?string $selectedDisk, string $smartPage, array $extraViewData = []): View
     {
         $this->authorize('view', $device);
 
@@ -53,13 +61,13 @@ class SmartController
         // the page itself now use) or its disk_key (old bookmarked links).
         $resolvedDisk = $selectedDisk !== null ? $data->resolveDiskKey($selectedDisk) : null;
 
-        $tabContent = view('device.apps.smart.index', [
+        $tabContent = view('device.apps.smart.index', array_merge([
             'data' => $data,
             'app' => $app,
             'device' => $device->toArray(),
             'selectedDisk' => $resolvedDisk,
             'smartPage' => $smartPage,
-        ])->render();
+        ], $extraViewData))->render();
 
         return view('device.tabs.legacy', [
             'device' => $device,

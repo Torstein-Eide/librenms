@@ -9,6 +9,13 @@ if ($attrId <= 0) {
     return;
 }
 
+// Numbered SMART attributes above the standardized "Big 5" are vendor-defined,
+// so the same numeric ID can mean a different counter on different disk
+// vendors/models. When given, attr_name restricts this graph to disks whose
+// smart_sata_attributes.name exactly matches, so mismatched same-ID counters
+// are never plotted together as if they were the same metric.
+$attrName = isset($vars['attr_name']) ? trim((string) $vars['attr_name']) : null;
+
 $dsName = 'id' . $attrId;
 
 $name = 'smart';
@@ -40,12 +47,15 @@ $labelMode = isset($_COOKIE[$labelCookie]) && isset($labelModes[$_COOKIE[$labelC
 $disks = DB::table('smart_devices')
     ->where('smart_devices.app_id', $app->app_id)
     ->whereIn('smart_devices.protocol_type', [1, 2]) // SmartmonDeviceType: ata=1, sat=2
-    ->whereExists(function ($query) use ($attrId, $app) {
+    ->whereExists(function ($query) use ($attrId, $attrName, $app) {
         $query->select(DB::raw(1))
             ->from('smart_sata_attributes')
             ->whereColumn('smart_sata_attributes.disk_key', 'smart_devices.disk_key')
             ->where('smart_sata_attributes.app_id', $app->app_id)
             ->where('smart_sata_attributes.attribute_id', $attrId);
+        if ($attrName !== null && $attrName !== '') {
+            $query->where('smart_sata_attributes.name', $attrName);
+        }
     })
     ->get(['disk_key', 'device_name']);
 

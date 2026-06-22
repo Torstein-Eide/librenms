@@ -21,6 +21,24 @@
         $disk !== null ? [$deviceId, 'disk' => $data->diskUrlId($disk)] : $deviceId
     );
 
+    // Builds a URL to the Graphs page, optionally for a specific graph-type id
+    // (one of $sections[]['id'] in overview-graphs.blade.php, e.g.
+    // "smart-overview-all-temp" or "smart-overview-attr-5") and/or display
+    // mode ('mini' — anything else, including omitted, means normal/full-size).
+    $smartGraphsUrl = static function (?string $view = null, ?string $mode = null) use ($deviceId): string {
+        $params = [$deviceId];
+        if ($view !== null) {
+            $params['view'] = $view;
+        }
+        if ($mode !== null) {
+            $params['mode'] = $mode;
+        }
+
+        return route('device.apps.smart.graphs', $params);
+    };
+    $selectedGraphView = $selectedGraphView ?? null;
+    $graphsDisplayMode = $graphsDisplayMode ?? 'normal';
+
     // Persisted display modes (cookie-backed, per device).
     $labelCookie = 'smart_label_mode_' . $deviceId;
     $labelModes  = $data->labelModes();
@@ -423,9 +441,11 @@
     print_optionbar_start();
 
     // Label-mode selector (right side).
-    $currentUrl = $smartPage === 'compare'
-        ? route('device.apps.smart.compare', $deviceId)
-        : $smartUrl($selectedDisk);
+    $currentUrl = match ($smartPage) {
+        'compare' => route('device.apps.smart.compare', $deviceId),
+        'graphs'  => $smartGraphsUrl($selectedGraphView, $graphsDisplayMode === 'mini' ? 'mini' : null),
+        default   => $smartUrl($selectedDisk),
+    };
     $modeOptions = '';
     foreach ($labelModes as $mode => $title) {
         $sel = $mode === $labelMode ? ' selected' : '';
@@ -447,9 +467,11 @@
 
     $ovLabel = $selectedDisk === null && $smartPage === 'overview' ? '<span class="pagemenu-selected">Overview</span>' : 'Overview';
     $compareLabel = $smartPage === 'compare' ? '<span class="pagemenu-selected">Compare</span>' : 'Compare';
+    $graphsLabel = $smartPage === 'graphs' ? '<span class="pagemenu-selected">Graphs</span>' : 'Graphs';
     $links = [
         '<a href="' . htmlspecialchars($smartUrl(), ENT_QUOTES) . '">' . $ovLabel . '</a>',
         '<a href="' . htmlspecialchars(route('device.apps.smart.compare', $deviceId), ENT_QUOTES) . '">' . $compareLabel . '</a>',
+        '<a href="' . htmlspecialchars(route('device.apps.smart.graphs', $deviceId), ENT_QUOTES) . '">' . $graphsLabel . '</a>',
     ];
     echo implode(' | ', $links);
 
@@ -738,6 +760,16 @@ SCRIPT;
             }
         @endphp
 
+@elseif($smartPage === 'graphs')
+    {{-- ================================================================== --}}
+    {{-- Graphs                                                              --}}
+    {{-- ================================================================== --}}
+    @if(! $data->hasDisks())
+        <div class="alert alert-info">No SMART devices have been discovered for this application yet.</div>
+    @else
+        @include('device.apps.smart.overview-graphs', ['graphsDisplayMode' => $graphsDisplayMode, 'selectedGraphView' => $selectedGraphView])
+    @endif
+
 @elseif($selectedDisk === null || $data->disk($selectedDisk) === null)
     {{-- ================================================================== --}}
     {{-- Overview                                                            --}}
@@ -785,53 +817,6 @@ SCRIPT;
             </table>
         </div>
         @php $panelEnd(); @endphp
-
-        {{-- Overview graphs + jump nav --}}
-        @php
-            $now    = LibrenmsConfig::get('time.now');
-            $from   = LibrenmsConfig::get('time.day');
-            $appId  = $data->app->app_id;
-            $ovBase = $smartUrl();
-
-            $sections = [
-                ['id' => 'smart-overview-all-temp', 'title' => 'All Temperatures', 'type' => 'smart_v2_all_temp'],
-                ['id' => 'smart-overview-all-wear', 'title' => 'Wear Used', 'type' => 'smart_v2_all_wear'],
-                ['id' => 'smart-overview-all-spare', 'title' => 'Available Spare', 'type' => 'smart_v2_all_spare'],
-            ];
-            foreach ($data->overviewAttributeIds() as $id => $aname) {
-                $sections[] = [
-                    'id'    => 'smart-overview-attr-' . $id,
-                    'title' => 'ID# ' . $id . ', ' . $aname,
-                    'type'  => 'smart_v2_attr_multi',
-                    'attr_id' => $id,
-                ];
-            }
-
-            // Jump-to-graph nav.
-            $jumpItems = '';
-            foreach ($sections as $s) {
-                $jumpItems .= '<div style="break-inside:avoid-column;-webkit-column-break-inside:avoid;padding:1px 0">'
-                    . '<a href="' . htmlspecialchars($ovBase . '#' . $s['id'], ENT_QUOTES) . '">' . htmlspecialchars($s['title']) . '</a></div>';
-            }
-            echo '<div class="panel panel-default"><div class="panel-body" style="padding:10px 15px">'
-                . '<strong>Jump to graph:</strong><div style="column-width:260px;column-gap:18px;margin-top:6px">'
-                . $jumpItems . '</div></div></div>';
-
-            foreach ($sections as $s) {
-                $graph_array = [
-                    'height' => '100', 'width' => '215', 'from' => $from, 'to' => $now,
-                    'id'     => $appId, 'type' => 'application_' . $s['type'],
-                    'page_title' => 'All Drives — ' . $s['title'],
-                ];
-                if (isset($s['attr_id'])) { $graph_array['attr_id'] = $s['attr_id']; }
-                echo '<a id="' . htmlspecialchars($s['id']) . '" style="position:relative;top:-70px;display:block;visibility:hidden"></a>';
-                $panelStart(htmlspecialchars($s['title']));
-                echo '<div class="row">';
-                include 'includes/html/print-graphrow.inc.php';
-                echo '</div>';
-                $panelEnd();
-            }
-        @endphp
     @endif
 
 @else
