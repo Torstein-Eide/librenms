@@ -451,15 +451,34 @@
         '<a href="' . htmlspecialchars($smartUrl(), ENT_QUOTES) . '">' . $ovLabel . '</a>',
         '<a href="' . htmlspecialchars(route('device.apps.smart.compare', $deviceId), ENT_QUOTES) . '">' . $compareLabel . '</a>',
     ];
-    foreach ($data->diskKeys() as $key) {
-        $disk  = $data->disk($key);
-        $label = htmlspecialchars($data->displayLabel($disk, $labelMode));
-        if ($selectedDisk === $key) {
-            $label = "<span class=\"pagemenu-selected\">{$label}</span>";
-        }
-        $links[] = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . $label . '</a>';
-    }
     echo implode(' | ', $links);
+
+    $diskKeys = $data->diskKeys();
+    if (count($diskKeys) >= 3) {
+        // Dropdown disk selector once there are enough disks that a pipe-separated link list gets unwieldy.
+        $diskOptions = '<option value="">Select a disk&#8230;</option>';
+        foreach ($diskKeys as $key) {
+            $disk = $data->disk($key);
+            $sel  = $selectedDisk === $key ? ' selected' : '';
+            $diskOptions .= '<option value="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '"' . $sel . '>'
+                . htmlspecialchars($data->displayLabel($disk, $labelMode)) . '</option>';
+        }
+        echo ' &nbsp; <select id="smart-disk-select" class="form-control input-sm" style="display:inline-block;width:auto" '
+            . 'onchange="if(this.value)window.location.href=this.value;">' . $diskOptions . '</select>';
+    } else {
+        $diskLinks = [];
+        foreach ($diskKeys as $key) {
+            $disk  = $data->disk($key);
+            $label = htmlspecialchars($data->displayLabel($disk, $labelMode));
+            if ($selectedDisk === $key) {
+                $label = "<span class=\"pagemenu-selected\">{$label}</span>";
+            }
+            $diskLinks[] = '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . $label . '</a>';
+        }
+        if ($diskLinks !== []) {
+            echo ' | ' . implode(' | ', $diskLinks);
+        }
+    }
 
     // Per-disk view-mode sub-nav, filtered to the modes the selected disk's type supports.
     if ($selectedDisk !== null && $data->disk($selectedDisk) !== null) {
