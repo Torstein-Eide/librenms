@@ -30,7 +30,7 @@
     $viewCookie = 'smart_disk_view_mode_' . $deviceId;
     $viewModes  = $data->diskViewModes();
     $viewMode   = (isset($_COOKIE[$viewCookie]) && isset($viewModes[$_COOKIE[$viewCookie]]))
-        ? $_COOKIE[$viewCookie] : 'basic';
+        ? $_COOKIE[$viewCookie] : $data->defaultViewMode();
 
     // -------------------------------------------------------------------------
     // HTML helpers (closures)

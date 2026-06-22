@@ -2,6 +2,7 @@
 
 use App\Facades\Rrd;
 use Illuminate\Support\Facades\DB;
+use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 $attrId = isset($vars['attr_id']) ? (int) $vars['attr_id'] : 0;
 if ($attrId <= 0) {
@@ -24,6 +25,14 @@ $transparency = 15;
 // Mirrors LibreNMS\Agent\Module\Smart\Common::mibDiskIndex() — the disk_key is
 // sanitized into the same safe-character index used everywhere else in the app.
 $mibDiskIndex = static fn (string $key): string => substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
+
+// Disk label, same as the per-disk views: respects the saved naming
+// template / label-mode cookie (including the "Custom" mode) instead of
+// always showing the raw device_name.
+$htmlData = HtmlData::forDevice($app, $device);
+$labelCookie = 'smart_label_mode_' . $device['device_id'];
+$labelModes = $htmlData->labelModes();
+$labelMode = isset($_COOKIE[$labelCookie]) && isset($labelModes[$_COOKIE[$labelCookie]]) ? $_COOKIE[$labelCookie] : 'device';
 
 // Find disks that actually carry this ATA attribute (only SATA/SAT disks have
 // numbered SMART attributes; NVMe never does), straight from the DB rather
@@ -48,7 +57,10 @@ foreach ($disks as $disk) {
         continue;
     }
 
-    $descr = trim((string) $disk->device_name) !== '' ? $disk->device_name : $disk->disk_key;
+    $diskData = $htmlData->disk($disk->disk_key);
+    $descr = $diskData !== null
+        ? $htmlData->displayLabel($diskData, $labelMode)
+        : (trim((string) $disk->device_name) !== '' ? $disk->device_name : $disk->disk_key);
 
     $rrd_list[] = [
         'filename' => $rrd_filename,

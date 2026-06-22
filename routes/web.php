@@ -189,11 +189,14 @@ Route::middleware(['auth'])->group(function (): void {
         Route::get('apps/smart', [Device\Apps\SmartController::class, 'index'])->name('apps.smart');
         Route::get('apps/smart/compare', [Device\Apps\SmartController::class, 'compare'])->name('apps.smart.compare');
         Route::get('apps/smart/settings', [Device\Apps\SmartAttributeSettingsController::class, 'index'])->name('apps.smart.settings');
+        Route::get('apps/smart/settings/naming', [Device\Apps\SmartAttributeSettingsController::class, 'naming'])->name('apps.smart.settings.naming');
         Route::post('apps/smart/settings/field', [Device\Apps\SmartAttributeSettingsController::class, 'updateField'])->name('apps.smart.settings.field');
         Route::post('apps/smart/settings/reset', [Device\Apps\SmartAttributeSettingsController::class, 'reset'])->name('apps.smart.settings.reset');
         Route::post('apps/smart/settings/copy', [Device\Apps\SmartAttributeSettingsController::class, 'copyToAllDisks'])->name('apps.smart.settings.copy');
         Route::post('apps/smart/settings/copy-default', [Device\Apps\SmartAttributeSettingsController::class, 'copyRowToDefault'])->name('apps.smart.settings.copy_default');
         Route::post('apps/smart/settings/alert', [Device\Apps\SmartAttributeSettingsController::class, 'alertToggle'])->name('apps.smart.settings.alert');
+        Route::post('apps/smart/settings/naming-template', [Device\Apps\SmartAttributeSettingsController::class, 'updateNamingTemplate'])->name('apps.smart.settings.naming_template');
+        Route::post('apps/smart/settings/default-view-mode', [Device\Apps\SmartAttributeSettingsController::class, 'updateDefaultViewMode'])->name('apps.smart.settings.default_view_mode');
     });
 
     // fallback device routes

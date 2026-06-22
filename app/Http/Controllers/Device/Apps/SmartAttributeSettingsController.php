@@ -28,6 +28,12 @@ class SmartAttributeSettingsController
     /** Sentinel disk_key for the synthetic "Global Defaults" tab. */
     private const GLOBAL_DISK_KEY = '';
 
+    /** Sentinel app_id for the global naming-template default, shared across every device. */
+    private const GLOBAL_SETTINGS_APP_ID = 0;
+
+    /** Placeholder variables accepted in a naming template; anything else is rejected. */
+    private const NAMING_TEMPLATE_VARS = ['device', 'model', 'serial', 'wwn', 'model_family'];
+
     public function index(Device $device, Request $request): View
     {
         $this->authorize('update', $device);
@@ -145,6 +151,161 @@ class SmartAttributeSettingsController
             'diskLabels' => $diskLabels,
             'itemsByDisk' => $itemsByDisk,
         ]);
+    }
+
+    /** Dedicated sub-page: device-wide + per-disk naming templates, and the default disk-view mode. */
+    public function naming(Device $device, Request $request): View
+    {
+        $this->authorize('update', $device);
+
+        require_once base_path('includes/html/functions.inc.php');
+
+        $app = Application::where('device_id', $device->device_id)->where('app_type', 'smart')->first();
+        $appId = $app?->app_id;
+
+        $diskKeys = [];
+        $diskLabels = [];
+        $diskFields = [];
+        $namingTemplate = null;
+        $perDiskTemplates = [];
+        $defaultViewMode = 'basic';
+        $viewModes = [];
+
+        if ($app !== null) {
+            $htmlData = HtmlData::forDevice($app, $device->toArray());
+            $labelCookie = 'smart_label_mode_' . $device->device_id;
+            $labelModes = $htmlData->labelModes();
+            $labelMode = $request->cookie($labelCookie) !== null && isset($labelModes[$request->cookie($labelCookie)])
+                ? $request->cookie($labelCookie)
+                : 'device';
+
+            $diskKeys = $htmlData->diskKeys();
+            foreach ($diskKeys as $diskKey) {
+                $disk = $htmlData->disk($diskKey);
+                $diskLabels[$diskKey] = $disk !== null ? $htmlData->displayLabel($disk, $labelMode) : $diskKey;
+                $diskFields[$diskKey] = $disk !== null ? [
+                    'device' => $htmlData->deviceLabel($disk),
+                    'model' => $htmlData->model($disk),
+                    'serial' => $htmlData->serial($disk),
+                    'wwn' => trim((string) ($disk['wwn'] ?? '')),
+                    'model_family' => trim((string) ($disk['model_family'] ?? '')),
+                ] : [];
+            }
+
+            $namingTemplate = $htmlData->namingTemplate();
+            $perDiskTemplates = $this->perDiskTemplates($appId);
+            $defaultViewMode = $htmlData->defaultViewMode();
+            $viewModes = $htmlData->diskViewModes();
+        }
+
+        return view('device.apps.smart.settings-naming', [
+            'device' => $device,
+            'appId' => $appId,
+            'diskKeys' => $diskKeys,
+            'diskLabels' => $diskLabels,
+            'diskFields' => $diskFields,
+            'namingTemplate' => $namingTemplate,
+            'perDiskTemplates' => $perDiskTemplates,
+            'defaultViewMode' => $defaultViewMode,
+            'viewModes' => $viewModes,
+        ]);
+    }
+
+    /** Save the global naming template (shared by every device), or a per-disk override on this device when disk_key is given. Blank value clears it (revert to inherited/default). */
+    public function updateNamingTemplate(Device $device, Request $request): JsonResponse
+    {
+        $this->authorize('update', $device);
+
+        $validated = $request->validate([
+            'app_id' => 'required|integer',
+            'disk_key' => 'nullable|string',
+            'value' => 'nullable|string|max:120',
+        ]);
+
+        $appId = $this->ownedAppId($device, (int) $validated['app_id']);
+        if ($appId === null) {
+            return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
+        }
+
+        $value = trim((string) ($validated['value'] ?? ''));
+        if (($invalid = $this->invalidTemplateVar($value)) !== null) {
+            return response()->json(['status' => 'error', 'message' => "Unknown variable \${$invalid}"], 422);
+        }
+
+        $diskKey = $validated['disk_key'] ?? '';
+
+        if ($diskKey === '') {
+            DB::table('smart_app_settings')->updateOrInsert(
+                ['app_id' => self::GLOBAL_SETTINGS_APP_ID],
+                ['naming_template' => $value !== '' ? $value : null]
+            );
+        } else {
+            $perDisk = $this->perDiskTemplates($appId);
+            if ($value === '') {
+                unset($perDisk[$diskKey]);
+            } else {
+                $perDisk[$diskKey] = $value;
+            }
+
+            DB::table('smart_app_settings')->updateOrInsert(
+                ['app_id' => $appId],
+                ['disk_naming_templates' => $perDisk !== [] ? json_encode($perDisk) : null]
+            );
+        }
+
+        $this->invalidateHtmlData($device, $appId);
+
+        return response()->json(['status' => 'ok', 'message' => 'Naming template updated']);
+    }
+
+    /** Save the default disk-view mode used on the overview page when no cookie is set yet. */
+    public function updateDefaultViewMode(Device $device, Request $request): JsonResponse
+    {
+        $this->authorize('update', $device);
+
+        $appId = $this->ownedAppId($device, (int) $request->input('app_id'));
+        if ($appId === null) {
+            return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
+        }
+
+        $validModes = array_keys(HtmlData::forDevice(Application::find($appId), $device->toArray())->diskViewModes());
+
+        $validated = $request->validate([
+            'value' => 'required|in:' . implode(',', $validModes),
+        ]);
+
+        DB::table('smart_app_settings')->updateOrInsert(
+            ['app_id' => $appId],
+            ['default_view_mode' => $validated['value']]
+        );
+
+        $this->invalidateHtmlData($device, $appId);
+
+        return response()->json(['status' => 'ok', 'message' => 'Default view mode updated']);
+    }
+
+    /** @return array<string, string> Per-disk naming template overrides for this app, keyed by disk_key. */
+    private function perDiskTemplates(int $appId): array
+    {
+        $json = DB::table('smart_app_settings')->where('app_id', $appId)->value('disk_naming_templates');
+
+        return $json !== null ? (json_decode((string) $json, true) ?: []) : [];
+    }
+
+    /** Returns the first unknown $variable name in $template, or null if all are recognised. */
+    private function invalidTemplateVar(string $template): ?string
+    {
+        if (preg_match_all('/\$(\w+)/', $template, $matches) === 0) {
+            return null;
+        }
+
+        foreach ($matches[1] as $var) {
+            if (! in_array($var, self::NAMING_TEMPLATE_VARS, true)) {
+                return $var;
+            }
+        }
+
+        return null;
     }
 
     /** Inline single-field save (one warn_rate_* window for one row), fired on blur/Enter — no submit button. */
@@ -337,6 +498,15 @@ class SmartAttributeSettingsController
             ->exists();
 
         return $exists ? $requestedAppId : null;
+    }
+
+    /** Flush the cached HtmlData for this device+app so naming/view-mode setting changes show up immediately. */
+    private function invalidateHtmlData(Device $device, int $appId): void
+    {
+        $app = Application::find($appId);
+        if ($app !== null) {
+            HtmlData::forDevice($app, $device->toArray())->invalidate();
+        }
     }
 
     private function upsertThreshold(int $appId, string $diskKey, int $attributeId, array $values): void

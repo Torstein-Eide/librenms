@@ -73,12 +73,35 @@ class HtmlData
     /** @var array<int, string|null> Per-request cache of IEEE OUI => org name lookups. */
     private array $ouiVendorCache = [];
 
+    /**
+     * Sentinel app_id for the global naming-template default — shared across
+     * every device, same convention as smart_attribute_thresholds' app_id=0
+     * global-default row.
+     */
+    private const GLOBAL_SETTINGS_APP_ID = 0;
+
+    /** Global naming template (smart_app_settings.naming_template on the app_id=0 row), or null if unset. */
+    private readonly ?string $namingTemplateDefault;
+
+    /** Saved default disk-view mode for this device (smart_app_settings.default_view_mode), or null if unset. */
+    private readonly ?string $defaultViewModeValue;
+
+    /** @var array<string, string> Per-disk naming template overrides for this device, keyed by disk_key. */
+    private readonly array $namingTemplatesPerDisk;
+
     private function __construct(
         public readonly Application $app,
         public readonly array $device,
     ) {
         $this->allSensors = $this->loadSensors();
         $this->disks = $this->loadDisks();
+
+        $settings = DB::table('smart_app_settings')->where('app_id', $this->app->app_id)->first();
+        $this->defaultViewModeValue = $settings !== null ? trim((string) ($settings->default_view_mode ?? '')) ?: null : null;
+        $this->namingTemplatesPerDisk = $settings !== null ? (json_decode((string) ($settings->disk_naming_templates ?? ''), true) ?: []) : [];
+
+        $global = DB::table('smart_app_settings')->where('app_id', self::GLOBAL_SETTINGS_APP_ID)->value('naming_template');
+        $this->namingTemplateDefault = trim((string) ($global ?? '')) ?: null;
     }
 
     // -------------------------------------------------------------------------
@@ -576,7 +599,40 @@ class HtmlData
             'serial'        => 'Serial',
             'device_serial' => 'Device (Serial)',
             'model_serial'  => 'Model (Serial)',
+            'custom'        => 'Custom',
         ];
+    }
+
+    /** The saved naming template: per-disk override (when $diskKey given and set) falling back to the device-wide default, or null if neither is set. */
+    public function namingTemplate(?string $diskKey = null): ?string
+    {
+        if ($diskKey !== null && isset($this->namingTemplatesPerDisk[$diskKey])) {
+            return $this->namingTemplatesPerDisk[$diskKey];
+        }
+
+        return $this->namingTemplateDefault;
+    }
+
+    /** The saved default disk-view mode (overview page), falling back to 'basic'. */
+    public function defaultViewMode(): string
+    {
+        $mode = $this->defaultViewModeValue ?? '';
+
+        return array_key_exists($mode, $this->diskViewModes()) ? $mode : 'basic';
+    }
+
+    /** Render a naming template's $variable placeholders against a disk's data. */
+    public function renderNamingTemplate(array $disk, string $template): string
+    {
+        return preg_replace_callback('/\$(device|model|serial|wwn|model_family)\b/', function (array $m) use ($disk): string {
+            return match ($m[1]) {
+                'device'       => $this->deviceLabel($disk),
+                'model'        => $this->model($disk),
+                'serial'       => $this->serial($disk),
+                'wwn'          => trim((string) ($disk['wwn'] ?? '')),
+                'model_family' => trim((string) ($disk['model_family'] ?? '')),
+            };
+        }, $template);
     }
 
     /** Available per-disk view modes, across all disk types. */
@@ -617,6 +673,7 @@ class HtmlData
             'serial'        => $serial !== '' ? $serial : $device,
             'device_serial' => $serial !== '' ? "{$device} ({$serial})" : $device,
             'model_serial'  => $serial !== '' ? "{$model} ({$serial})" : $model,
+            'custom'        => $this->renderNamingTemplate($disk, $this->namingTemplate((string) ($disk['disk_key'] ?? '')) ?? '$device'),
             default         => $device,
         };
     }

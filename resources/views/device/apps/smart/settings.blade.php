@@ -39,7 +39,7 @@
                 . ' | <a href="' . htmlspecialchars(route('device.apps.smart.compare', $device), ENT_QUOTES) . '">' . __('Compare') . '</a>'
                 . ' | <span class="pagemenu-selected">' . __('Settings') . '</span>'
                 . '<br>&nbsp;&nbsp; ' . __('Setting') . ': <span class="pagemenu-selected">' . __('Attribute Warning Thresholds') . '</span>'
-                . ' | <span class="text-muted">' . __('...(more to come)') . '</span>';
+                . ' | <a href="' . htmlspecialchars(route('device.apps.smart.settings.naming', $device), ENT_QUOTES) . '">' . __('Disk Naming') . '</a>';
             print_optionbar_end();
         @endphp
 
