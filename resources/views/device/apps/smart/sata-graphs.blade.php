@@ -110,11 +110,9 @@
         $appGraph('smart_v2_powerState', 'Power State', $anchorPrefix . 'power-state', $powerStateBadge);
     }
     if ($powerSpec) {
-        $appGraph('smart_v2_attributes', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk), [
+        $appGraph('smart_v2_attr_value', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk), [
             'attr_id'     => '9',
             'attr_thresh' => $powerSpec['thresh'] !== null ? (string) $powerSpec['thresh'] : '',
-            'has_raw'     => $powerSpec['has_raw'] ? '1' : '0',
-            'has_norm'    => $powerSpec['has_norm'] ? '1' : '0',
             'rate_unit'   => $powerSpec['rate_unit'] ?? '',
         ]);
     }
@@ -146,11 +144,9 @@ function smartAttrScaleToggle(cb, wrapperId) {
             . '<input type="checkbox" id="' . $toggleId . '" checked onchange="smartAttrScaleToggle(this,\'' . $wrapperId . '\')"> Scale from zero</label></h4>';
         echo '<div id="' . $wrapperId . '">';
         foreach ($attrSpecs as $spec) {
-            $appGraph('smart_v2_attributes', $spec['title'], $anchorPrefix . 'attr-' . $spec['id'], $spec['header'], [
+            $appGraph('smart_v2_attr_value', $spec['title'], $anchorPrefix . 'attr-' . $spec['id'], $spec['header'], [
                 'attr_id'     => (string) $spec['id'],
                 'attr_thresh' => $spec['thresh'] !== null ? (string) $spec['thresh'] : '',
-                'has_raw'     => $spec['has_raw'] ? '1' : '0',
-                'has_norm'    => $spec['has_norm'] ? '1' : '0',
                 'rate_unit'   => $spec['rate_unit'] ?? '',
             ]);
         }

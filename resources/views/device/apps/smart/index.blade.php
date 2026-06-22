@@ -600,7 +600,7 @@
                             }
                             $a       = $attrMap[$id];
                             $status  = (int) ($a['status'] ?? 0);
-                            $rawDisp = htmlspecialchars($data->formatRawSpaced($a['value_raw_string'] ?? $a['value_raw'] ?? ''));
+                            $rawDisp = htmlspecialchars($data->formatRawSI($a['value_raw_string'] ?? $a['value_raw'] ?? ''));
                             $rawNum  = is_numeric($a['value_raw'] ?? null) ? htmlspecialchars((string) (int) $a['value_raw']) : '-';
                             $norm    = is_numeric($a['value_norm'] ?? null) ? htmlspecialchars((string) (int) $a['value_norm']) : '-';
 

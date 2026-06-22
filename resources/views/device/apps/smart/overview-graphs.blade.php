@@ -95,14 +95,12 @@
                     'key' => $key, 'disk' => $disk,
                     'badge' => isset($spec['header']) ? '<span class="text-muted" style="font-size:12px">' . htmlspecialchars($spec['header']) . '</span>' : '',
                     'graph_array' => [
-                        'type'        => 'application_smart_v2_attributes',
+                        'type'        => 'application_smart_v2_attr_value',
                         'id'          => $data->app->app_id,
                         'disk'        => $disk['idx'],
                         'scale_min'   => '0',
                         'attr_id'     => (string) $spec['id'],
                         'attr_thresh' => $spec['thresh'] !== null ? (string) $spec['thresh'] : '',
-                        'has_raw'     => $spec['has_raw'] ? '1' : '0',
-                        'has_norm'    => $spec['has_norm'] ? '1' : '0',
                         'rate_unit'   => $spec['rate_unit'] ?? '',
                     ],
                 ];

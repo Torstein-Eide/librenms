@@ -8,6 +8,7 @@ use App\Models\Sensor;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use LibreNMS\Util\Number;
 
 /**
  * Data layer for the SMART HTML view (SNMP / SMARTMON-MIB handler).
@@ -983,20 +984,30 @@ class HtmlData
     }
 
     /**
-     * Add thin thousands separators to every long digit run in a raw reading,
-     * leaving surrounding text intact: "433684413" => "433 684 413",
-     * "0/433684413" => "0/433 684 413", "31 (Min/Max 24/40)" unchanged.
+     * Abbreviate every long digit run in a raw reading to an SI-suffixed
+     * number, leaving surrounding text intact: "433684413" => "433.7M",
+     * "0/433684413" => "0/433.7M", "31 (Min/Max 24/40)" unchanged.
+     *
+     * A space-based thousands separator (the prior approach) would be
+     * ambiguous here: several SmartmonAtaSmartAttrFormat values (raw8,
+     * raw16, raw16raw16, raw24raw8) already use spaces to separate
+     * independent sub-values within the same raw string (e.g. "0 0 0 0 0
+     * 23"), so an inserted grouping space could be misread as another
+     * sub-value boundary. SI suffixes avoid the space entirely.
      */
-    public function formatRawSpaced(mixed $raw): string
+    public function formatRawSI(mixed $raw): string
     {
         $s = trim((string) $raw);
         if ($s === '') {
             return '';
         }
 
+        // Number::formatSi() inserts a space before the unit (e.g. "433.7 M"),
+        // which would recreate the exact ambiguity this method exists to avoid
+        // — stripped here so the SI suffix abuts the number with no space.
         return preg_replace_callback(
             '/\d{4,}/',
-            static fn ($m) => preg_replace('/\B(?=(\d{3})+(?!\d))/', ' ', $m[0]),
+            static fn ($m) => str_replace(' ', '', Number::formatSi((float) $m[0], 1, 0, '')),
             $s
         );
     }
@@ -1050,7 +1061,12 @@ class HtmlData
      * Per-attribute graph specs for a disk, limited to attributes whose RRD
      * datasets actually exist.
      *
-     * @return array<int, array{id:int, name:string, raw_name:string, title:string, header:string, thresh:?float, has_raw:bool, has_norm:bool, rate_unit:?string}>
+     * Which DS actually exist for a given attribute (plain id{N}/id{N}Normalized,
+     * vs. the multi-part/div sub-DS variants) is decided by the graph itself
+     * (smart_v2_attr_value.inc.php, via Rrd::listDatasets()) at render time, not
+     * here — this only carries the DB-sourced display/threshold context.
+     *
+     * @return array<int, array{id:int, name:string, raw_name:string, title:string, header:string, thresh:?float, rate_unit:?string}>
      */
     public function attributeGraphSpecs(string $diskKey): array
     {
@@ -1061,9 +1077,7 @@ class HtmlData
 
         // Attribute list is sourced from the discovered DB rows, not the RRD's
         // dataset list — so a graph appears as soon as an attribute is known,
-        // independent of RRD readback. The poller writes both a raw (id{N}) and
-        // normalized (id{N}Normalized) dataset for every attribute, so both
-        // lines are graphable.
+        // independent of RRD readback.
         $specs = [];
         foreach ($disk['attributes'] as $attr) {
             $id = (int) ($attr['attribute_id'] ?? 0);
@@ -1084,8 +1098,6 @@ class HtmlData
                 'title'    => 'ID# ' . $id . ', ' . $name,
                 'header'   => $header,
                 'thresh'   => is_numeric($attr['value_threshold'] ?? null) ? (float) $attr['value_threshold'] : null,
-                'has_raw'  => true,
-                'has_norm' => true,
                 'rate_unit' => $attr['rate_unit'] ?? null,
             ];
         }
@@ -1125,6 +1137,34 @@ class HtmlData
         // threshold breached, synthesized by Common::combineStatus().
         'attr_status' => [
             -1 => '-', 0 => 'Unknown', 1 => 'OK', 2 => 'Failing now', 3 => 'Failed in past', 4 => 'Rate exceeded',
+        ],
+        // SmartmonAtaSmartAttrFormat: encoding of value_raw_string for this
+        // attribute, resolved from smartmontools' drivedb.h. Each description
+        // is unique to its format so the raw column's tooltip can explain
+        // what's actually being shown. See mibs/SMARTMON-TC-MIB for the full
+        // worked examples this is summarized from.
+        'attr_format' => [
+            0  => 'Unknown format',
+            1  => 'Six independent byte counters',
+            2  => 'Three independent word counters',
+            3  => 'Plain decimal (48-bit)',
+            4  => 'Hex value (48-bit, same number as decimal)',
+            5  => 'Plain decimal (56-bit)',
+            6  => 'Hex value (56-bit, same number as decimal)',
+            7  => 'Plain decimal (64-bit)',
+            8  => 'Hex value (64-bit, same number as decimal)',
+            9  => 'Primary value, optional pair in parentheses',
+            10 => 'Primary value, optional average in parentheses',
+            11 => 'Primary value, optional extra bytes in parentheses',
+            12 => 'Two 24-bit values separated by /',
+            13 => 'A 24-bit and a 32-bit value separated by /',
+            14 => 'Seconds, rendered as Hh+MMm+SSs',
+            15 => 'Minutes, rendered as Hh+MMm',
+            16 => '30-second ticks, rendered as Hh+MMm',
+            17 => 'Hours plus milliseconds',
+            18 => 'Temperature, optional Min/Max in parentheses',
+            19 => 'Temperature x10, fixed-point decimal',
+            20 => 'Vendor-specific named format',
         ],
         // SmartmonAtaSelfTestType
         'selftest_type' => [

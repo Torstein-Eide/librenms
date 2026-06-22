@@ -67,6 +67,32 @@ foreach ($disks as $disk) {
         continue;
     }
 
+    // The same attribute ID can have a different RRD dataset shape per disk,
+    // depending on that disk's smartmonSataAttrFormat (see Common.php's
+    // pollSataDeviceRrd()): plain id{N}, div id{N}Hi/Lo/Sum, or multi-part
+    // id{N}P0..P5. Pick the closest single-value proxy when the plain DS
+    // isn't there, so disks on different formats can still be compared.
+    $existingDs = Rrd::listDatasets($rrd_filename);
+    $ds = null;
+    $labelSuffix = '';
+    if (in_array($dsName, $existingDs, true)) {
+        $ds = $dsName;
+    } elseif (in_array($dsName . 'Hi', $existingDs, true)) {
+        $ds = $dsName . 'Hi';
+        $labelSuffix = ' (Hi)';
+    } else {
+        foreach (['P5', 'P4', 'P3', 'P2', 'P1', 'P0'] as $suffix) {
+            if (in_array($dsName . $suffix, $existingDs, true)) {
+                $ds = $dsName . $suffix;
+                $labelSuffix = ' (' . $suffix . ')';
+                break;
+            }
+        }
+    }
+    if ($ds === null) {
+        continue;
+    }
+
     $diskData = $htmlData->disk($disk->disk_key);
     $descr = $diskData !== null
         ? $htmlData->displayLabel($diskData, $labelMode)
@@ -74,8 +100,8 @@ foreach ($disks as $disk) {
 
     $rrd_list[] = [
         'filename' => $rrd_filename,
-        'descr'    => $descr,
-        'ds'       => $dsName,
+        'descr'    => $descr . $labelSuffix,
+        'ds'       => $ds,
     ];
 }
 

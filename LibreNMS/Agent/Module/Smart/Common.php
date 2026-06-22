@@ -395,6 +395,7 @@ class Common extends Application
             if (isset($this->sataAttributes[$devIdx])) {
                 $this->syncSataAttributeRows($dev, $this->sataAttributes[$devIdx]);
                 $this->syncSataAttributeRates($dev, $this->sataAttributes[$devIdx]);
+                $this->reconcileSataAttributeRrds($dev, $this->sataAttributes[$devIdx]);
             }
         }
 
@@ -780,6 +781,9 @@ class Common extends Application
     private function walkAndSyncSataAttrPoll(): void
     {
         // Only the four frequently-changing columns: raw value/string, status, normalized.
+        // Format isn't walked here -- it's resolved from drivedb.h per drive model/attribute
+        // and doesn't change between discovery cycles, so pollSataDeviceRrd() reads the
+        // copy discovery already persisted into smart_sata_attributes instead of re-walking it.
         $attrColumns = $this->walkSataColumns([
             'smartmonSataAttrRawValue',
             'smartmonSataAttrRawString',
@@ -920,10 +924,15 @@ class Common extends Application
         $fields = [];
 
         if (! empty($attrRows)) {
-            $rrdTypes = DB::table('smart_sata_attributes')
+            // Format isn't walked at poll time (see walkAndSyncSataAttrPoll()) -- it's
+            // resolved from drivedb.h per drive model/attribute and effectively static
+            // between discovery cycles, so read the copy discovery already persisted,
+            // alongside rrd_type, in a single query.
+            $attrMeta = DB::table('smart_sata_attributes')
                 ->where('app_id', $this->appId)
                 ->where('disk_key', $diskKey)
-                ->pluck('rrd_type', 'attribute_id');
+                ->get(['attribute_id', 'rrd_type', 'format'])
+                ->keyBy('attribute_id');
 
             foreach ($attrRows as $attrId => $row) {
                 $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
@@ -932,13 +941,46 @@ class Common extends Application
                 if (strlen($dsNorm) > 19) {
                     continue;
                 }
-                $rawType = $rrdTypes[$id]
+                $meta = $attrMeta->get($id);
+                $rawType = $meta->rrd_type
                     ?? ($this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(self::ATA_COUNTER_ATTRS[$id])
                         ? 'COUNTER' : 'GAUGE');
-                $rrd_def->addDataset($dsRaw, $rawType, 0);
+
+                $format = $this->intValue($meta->format ?? null);
+                $rawString = $row['smartmonSataAttrRawString'] ?? null;
+
                 $rrd_def->addDataset($dsNorm, 'GAUGE', 0);
-                $fields[$dsRaw] = $row['smartmonSataAttrRawValue'] ?? null;
                 $fields[$dsNorm] = $row['smartmonSataAttrValue'] ?? null;
+
+                // Multi-value formats (raw8, raw16, raw16raw16, raw24raw8, raw24div24,
+                // raw24div32) decode into independent sub-DS that replace the base idXX
+                // entirely -- the packed RawValue isn't a meaningful single number for
+                // these. Fall back to writing idXX from RawValue if RawString didn't
+                // parse, so a malformed string doesn't lose the attribute's data outright.
+                $subValues = $this->attrFormatSubValues($format, $rawString);
+                if ($subValues !== []) {
+                    foreach ($subValues as $suffix => $value) {
+                        $dsSub = 'id' . $id . $suffix;
+                        if (strlen($dsSub) > 19) {
+                            continue;
+                        }
+                        $rrd_def->addDataset($dsSub, 'GAUGE', 0);
+                        $fields[$dsSub] = $value;
+                    }
+
+                    continue;
+                }
+
+                // For formats that reduce RawString to a single more-meaningful number
+                // (e.g. min2hour/msec24hour32 -> total hours as a float) use that
+                // instead of the packed RawValue; it's a derived float, so always GAUGE.
+                $singleValue = $this->attrFormatSingleValue($format, $rawString);
+                if ($singleValue !== null) {
+                    $rawType = 'GAUGE';
+                }
+
+                $rrd_def->addDataset($dsRaw, $rawType, 0);
+                $fields[$dsRaw] = $singleValue ?? ($row['smartmonSataAttrRawValue'] ?? null);
             }
         }
 
@@ -961,6 +1003,128 @@ class Common extends Application
             'rrd_name'            => $rrdName,
             'rrd_update_template' => true,
         ], $fields);
+    }
+
+    /**
+     * Decode the extra component(s) packed into smartmonSataAttrRawString for
+     * multi-value SmartmonAtaSmartAttrFormat encodings (raw8, raw16,
+     * raw16raw16, raw24raw8, raw24div24, raw24div32). Returns DS-suffix =>
+     * value pairs that replace the base id{N} DS entirely (see
+     * pollSataDeviceRrd()) -- the packed RawValue isn't a meaningful single
+     * number for these formats. [] for single-value formats, unknown/null
+     * format, or an unparseable string.
+     */
+    private function attrFormatSubValues(?int $format, ?string $rawString): array
+    {
+        if ($format === null || $rawString === null) {
+            return [];
+        }
+        $s = trim($rawString);
+
+        return match ($format) {
+            1 => $this->parseRaw8SubValues($s),
+            2 => $this->parseRaw16SubValues($s),
+            9 => $this->parseRaw16Raw16SubValues($s),
+            11 => $this->parseRaw24Raw8SubValues($s),
+            12, 13 => $this->parseRaw24DivSubValues($s),
+            default => [],
+        };
+    }
+
+    /** raw8: 'b5 b4 b3 b2 b1 b0' -> independent byte counters, P5..P0 by position. */
+    private function parseRaw8SubValues(string $s): array
+    {
+        if (! preg_match('/^(\d+) (\d+) (\d+) (\d+) (\d+) (\d+)$/', $s, $m)) {
+            return [];
+        }
+
+        return [
+            'P5' => (float) $m[1], 'P4' => (float) $m[2], 'P3' => (float) $m[3],
+            'P2' => (float) $m[4], 'P1' => (float) $m[5], 'P0' => (float) $m[6],
+        ];
+    }
+
+    /** raw16: 'w2 w1 w0' -> independent word counters, P2..P0 by position. */
+    private function parseRaw16SubValues(string $s): array
+    {
+        if (! preg_match('/^(\d+) (\d+) (\d+)$/', $s, $m)) {
+            return [];
+        }
+
+        return ['P2' => (float) $m[1], 'P1' => (float) $m[2], 'P0' => (float) $m[3]];
+    }
+
+    /** raw16raw16: 'w0' or 'w0 (w2 w1)' -> P2/P1 only when the paren group is present. */
+    private function parseRaw16Raw16SubValues(string $s): array
+    {
+        if (! preg_match('/^\d+ \((\d+) (\d+)\)$/', $s, $m)) {
+            return [];
+        }
+
+        return ['P2' => (float) $m[1], 'P1' => (float) $m[2]];
+    }
+
+    /** raw24raw8: 'low24' or 'low24 (b5 b4 b3)' -> P5/P4/P3 only when the paren group is present. */
+    private function parseRaw24Raw8SubValues(string $s): array
+    {
+        if (! preg_match('/^\d+ \((\d+) (\d+) (\d+)\)$/', $s, $m)) {
+            return [];
+        }
+
+        return ['P5' => (float) $m[1], 'P4' => (float) $m[2], 'P3' => (float) $m[3]];
+    }
+
+    /** raw24div24/raw24div32: 'hi/lo' -> Sum (hi+lo) plus the two parts. */
+    private function parseRaw24DivSubValues(string $s): array
+    {
+        if (! preg_match('#^(\d+)/(\d+)$#', $s, $m)) {
+            return [];
+        }
+        $hi = (float) $m[1];
+        $lo = (float) $m[2];
+
+        return ['Sum' => $hi + $lo, 'Hi' => $hi, 'Lo' => $lo];
+    }
+
+    /**
+     * For SmartmonAtaSmartAttrFormat values that reduce smartmonSataAttrRawString
+     * to a single number more meaningful than the packed RawValue (min2hour,
+     * msec24hour32 -> total hours as a float), return that value so it can
+     * replace the base id{N} DS. Returns null for every other format (or an
+     * unparseable string), in which case the caller keeps using RawValue as-is.
+     */
+    private function attrFormatSingleValue(?int $format, ?string $rawString): ?float
+    {
+        if ($format === null || $rawString === null) {
+            return null;
+        }
+        $s = trim($rawString);
+
+        return match ($format) {
+            15 => $this->parseMin2HourHours($s),
+            17 => $this->parseMsec24Hour32Hours($s),
+            default => null,
+        };
+    }
+
+    /** min2hour: 'Hh+MMm' (optional trailing paren extra is ignored) -> total hours as a float. */
+    private function parseMin2HourHours(string $s): ?float
+    {
+        if (! preg_match('/^(\d+)h\+(\d+)m/', $s, $m)) {
+            return null;
+        }
+
+        return (float) $m[1] + ((float) $m[2]) / 60;
+    }
+
+    /** msec24hour32: 'Hh+MMm+SS.mmms' -> total hours as a float, including the ms fraction. */
+    private function parseMsec24Hour32Hours(string $s): ?float
+    {
+        if (! preg_match('/^(\d+)h\+(\d+)m\+(\d+)\.(\d+)s$/', $s, $m)) {
+            return null;
+        }
+
+        return (float) $m[1] + ((float) $m[2]) / 60 + ((float) $m[3]) / 3600 + ((float) $m[4]) / 3600000;
     }
 
     // ── NVMe ──────────────────────────────────────────────────────────────────
@@ -1674,12 +1838,13 @@ class Common extends Application
                     ? substr((string) $row['smartmonSataAttrRawString'], 0, 32)
                     : null,
                 'status'           => $row['smartmonSataAttrStatus'] ?? null,
+                'format'           => $this->intValue($row['smartmonSataAttrFormat'] ?? null),
                 'flags'            => $this->parseAttrFlags($row['smartmonSataAttrFlags'] ?? null),
                 'rrd_type'         => $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null)
                     ? 'COUNTER' : 'GAUGE',
             ], ['app_id', 'disk_key', 'attribute_id'], [
                 'name', 'value_norm', 'value_worst',
-                'value_threshold', 'value_raw', 'value_raw_string', 'status', 'flags', 'rrd_type',
+                'value_threshold', 'value_raw', 'value_raw_string', 'status', 'format', 'flags', 'rrd_type',
             ]);
         }
     }
@@ -2719,6 +2884,22 @@ class Common extends Application
         $rrd->addDatasets($rrdFile, $datasets);
     }
 
+    /**
+     * Like addDatasets(), but for a config array keyed by dataset name (see
+     * Rrd::addDatasetsFromConfig()) -- used where the dataset set is built up
+     * incrementally per attribute, so keying by name naturally dedupes.
+     *
+     * @param array<string, array{type:string,heartbeat:int,min?:int|float|string|null,max?:int|float|string|null}> $config
+     */
+    private function addDatasetsFromConfig(string $rrdFile, array $config): void
+    {
+        $rrd = app(Rrd::class);
+        if (! $rrd->checkRrdExists($rrdFile)) {
+            return;
+        }
+        $rrd->addDatasetsFromConfig($rrdFile, $config);
+    }
+
     /** Statically defined DS that the per-device RRD families must always carry. */
     private function commonDeviceRrdDatasets(): array
     {
@@ -2746,6 +2927,69 @@ class Common extends Application
         foreach ($this->nvmeDevices() as $dev) {
             $idx = $this->mibDiskIndex($dev['disk_key']);
             $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart_nvme', $this->appId, $idx]), $datasets);
+        }
+    }
+
+    /**
+     * Retrofit each attribute's *current* smartmonSataAttrFormat-implied RRD
+     * dataset set onto an already-existing per-disk RRD file, via
+     * Rrd::addDatasetsFromConfig() (a no-op tune for DS that already exist).
+     *
+     * smartmontools' drivedb.h changes over time, so an attribute's format
+     * can change between discovery cycles (e.g. a drivedb update reclassifies
+     * an attribute from a plain format to a div/multi-part one, or vice
+     * versa). pollSataDeviceRrd() only ever updates a file's *values* on the
+     * DS it expects to already exist -- it never creates new DS on an
+     * existing file -- so without this, a drivedb-driven format change would
+     * leave the RRD stuck with the previous cycle's DS shape and start
+     * failing to write the now-expected ones.
+     */
+    private function reconcileSataAttributeRrds(array $dev, array $attrRows): void
+    {
+        if (empty($attrRows)) {
+            return;
+        }
+
+        $diskKey = $dev['disk_key'];
+        $idx = $this->mibDiskIndex($diskKey);
+        $rrd = app(Rrd::class);
+        $rrdFile = $rrd->name($this->device->hostname, ['app', 'smart', $this->appId, $idx]);
+
+        $heartbeat = LibrenmsConfig::get('rrd.heartbeat');
+        $config = [];
+
+        foreach ($attrRows as $attrId => $row) {
+            $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
+            $dsRaw = 'id' . $id;
+            $dsNorm = $dsRaw . 'Normalized';
+            if (strlen($dsNorm) > 19) {
+                continue;
+            }
+
+            $config[$dsNorm] = ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
+
+            $format = $this->intValue($row['smartmonSataAttrFormat'] ?? null);
+            $rawString = $row['smartmonSataAttrRawString'] ?? null;
+            $subValues = $this->attrFormatSubValues($format, $rawString);
+            if ($subValues !== []) {
+                foreach ($subValues as $suffix => $value) {
+                    $dsSub = $dsRaw . $suffix;
+                    if (strlen($dsSub) > 19) {
+                        continue;
+                    }
+                    $config[$dsSub] = ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
+                }
+
+                continue;
+            }
+
+            $rawType = $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(self::ATA_COUNTER_ATTRS[$id])
+                ? 'COUNTER' : 'GAUGE';
+            $config[$dsRaw] = ['type' => $rawType, 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
+        }
+
+        if ($config !== []) {
+            $this->addDatasetsFromConfig($rrdFile, $config);
         }
     }
 

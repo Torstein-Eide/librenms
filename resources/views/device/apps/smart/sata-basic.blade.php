@@ -462,7 +462,8 @@
         $value    = $attr['value_norm'] ?? null;
         $worst    = $attr['value_worst'] ?? null;
         $rawNum   = is_numeric($attr['value_raw'] ?? null) ? (float) $attr['value_raw'] : 0;
-        $rawDisp  = $data->formatRawSpaced($attr['value_raw_string'] ?? $attr['value_raw'] ?? '');
+        $rawFull  = (string) ($attr['value_raw_string'] ?? $attr['value_raw'] ?? '');
+        $rawDisp  = $data->formatRawSI($rawFull);
         $attrId   = (int) ($attr['attribute_id'] ?? 0);
         $name     = str_replace('_', ' ', (string) ($attr['name'] ?? ''));
 
@@ -487,7 +488,12 @@
         $worstCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($worstTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars((string) ($worst ?? '')) . '</span>';
 
         $threshCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars('Failure threshold - attribute fails when Value drops below this', ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars((string) ($thresh ?? '')) . '</span>';
-        $rawCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars('Raw hardware reading - vendor-specific meaning', ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars($rawDisp) . '</span>';
+
+        $rawFormat = isset($attr['format']) && is_numeric($attr['format']) ? (int) $attr['format'] : null;
+        $rawTip = 'Raw hardware reading - vendor-specific meaning'
+            . "\nFormat: " . $data->decode('attr_format', $rawFormat)
+            . "\nFull raw: " . $rawFull;
+        $rawCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars($rawTip, ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars($rawDisp) . '</span>';
 
         $statusBadge = match ($status) {
             1  => '<span class="label label-default">' . htmlspecialchars($statusLabel) . '</span>',
@@ -530,17 +536,15 @@
         $rate168h = $attr['rate_168h'] ?? null;
         $rate672h = $attr['rate_672h'] ?? null;
 
-        // In-row mini graph: the same smart_v2_attributes graph, 60x15.
+        // In-row mini graph: the same smart_v2_attr_value graph, 60x15.
         // Click → graphs page, hover → day/week/month/year popup (as on device overview).
         $mini = '';
         if ($attrId > 0) {
             $mini = \LibreNMS\Util\Url::graphPopup([
                 'id'          => $attrAppId,
-                'type'        => 'application_smart_v2_attributes',
+                'type'        => 'application_smart_v2_attr_value',
                 'disk'        => $idx,
                 'attr_id'     => $attrId,
-                'has_raw'     => 1,
-                'has_norm'    => 1,
                 'rate_unit'   => $attr['rate_unit'] ?? '',
                 'from'        => $attrFrom,
                 'to'          => $attrNow,
@@ -551,11 +555,31 @@
             ]);
         }
 
+        // raw24div24/raw24div32 (Hi/Lo split into two separate graphs, see
+        // smart_v2_attr_value.inc.php) get a second mini graph here for Lo's
+        // own scale, since Hi and Lo often differ by orders of magnitude.
+        $miniDiv = '';
+        if ($attrId > 0 && in_array($rawFormat, [12, 13], true)) {
+            $miniDiv = \LibreNMS\Util\Url::graphPopup([
+                'id'          => $attrAppId,
+                'type'        => 'application_smart_v2_attr_div',
+                'disk'        => $idx,
+                'attr_id'     => $attrId,
+                'rate_unit'   => $attr['rate_unit'] ?? '',
+                'from'        => $attrFrom,
+                'to'          => $attrNow,
+                'width'       => 60,
+                'height'      => 15,
+                'legend'      => 'no',
+                'popup_title' => htmlspecialchars($device['hostname'] . ' - ' . $name . ' (Hi/Lo)'),
+            ]);
+        }
+
         echo '<tr style="' . $rowStyle . '" data-fail="' . $isFail . '" data-flags="' . htmlspecialchars($flagsRaw, ENT_QUOTES) . '">'
             . '<td data-sort="' . $attrId . '">' . $attrId . '</td>'
             . '<td data-sort="' . htmlspecialchars($name, ENT_QUOTES) . '">' . htmlspecialchars($name) . '</td>'
             . '<td data-sort="' . $status . '">' . $statusBadge . '</td>'
-            . '<td>' . $mini . '</td>'
+            . '<td>' . $mini . ($miniDiv !== '' ? '<br>' . $miniDiv : '') . '</td>'
             . '<td>' . $flagsCell . '</td>'
             . '<td data-sort="' . htmlspecialchars((string) ($value ?? ''), ENT_QUOTES) . '">' . $valueCell . '</td>'
             . '<td data-sort="' . htmlspecialchars((string) ($worst ?? ''), ENT_QUOTES) . '">' . $worstCell . '</td>'
