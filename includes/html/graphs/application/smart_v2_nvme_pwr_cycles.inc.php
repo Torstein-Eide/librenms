@@ -7,7 +7,7 @@ use App\Facades\Rrd;
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart_nvme', $app->app_id, $vars['disk']]);
 
 $name         = 'smart';
-$unit_text    = '';
+$unit_text    = 'cycles';
 $unitlen      = 20;
 $bigdescrlen  = 22;
 $smalldescrlen = 22;

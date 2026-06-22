@@ -7,7 +7,7 @@
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
 
 $name = 'smart';
-$unit_text = '';
+$unit_text = 'count';
 $unitlen = 10;
 $bigdescrlen = 25;
 $smalldescrlen = 25;
@@ -19,11 +19,11 @@ $transparency = 15;
 
 $rrd_list = [];
 if (Rrd::checkRrdExists($rrd_filename)) {
-    $availableDs = [];
-    $point = Rrd::lastUpdate($rrd_filename);
-    if ($point !== null && is_array($point->data ?? null)) {
-        $availableDs = array_keys($point->data);
-    }
+    // Each disk's RRD only carries DS for the attribute IDs that disk actually
+    // reports — listDatasets() reads the file header directly, so a disk
+    // missing one of these "Big 5" attributes is skipped instead of failing
+    // the graph with an "unknown DS" error.
+    $availableDs = Rrd::listDatasets($rrd_filename);
 
     foreach ([
         'id5'   => 'Reallocated Sector Ct',
@@ -32,7 +32,7 @@ if (Rrd::checkRrdExists($rrd_filename)) {
         'id197' => 'Current Pending Sector',
         'id198' => 'Offline Uncorrectable',
     ] as $ds => $descr) {
-        if ($availableDs !== [] && ! in_array($ds, $availableDs, true)) {
+        if (! in_array($ds, $availableDs, true)) {
             continue;
         }
 
@@ -42,6 +42,10 @@ if (Rrd::checkRrdExists($rrd_filename)) {
             'ds'       => $ds,
         ];
     }
+}
+
+if (empty($rrd_list)) {
+    return;
 }
 
 require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';

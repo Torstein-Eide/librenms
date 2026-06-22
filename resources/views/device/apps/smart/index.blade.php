@@ -776,7 +776,8 @@ SCRIPT;
 
             $sections = [
                 ['id' => 'smart-overview-all-temp', 'title' => 'All Temperatures', 'type' => 'smart_v2_all_temp'],
-                ['id' => 'smart-overview-all-wear', 'title' => 'Wear Remaining', 'type' => 'smart_v2_all_wear'],
+                ['id' => 'smart-overview-all-wear', 'title' => 'Wear Used', 'type' => 'smart_v2_all_wear'],
+                ['id' => 'smart-overview-all-spare', 'title' => 'Available Spare', 'type' => 'smart_v2_all_spare'],
             ];
             foreach ($data->overviewAttributeIds() as $id => $aname) {
                 $sections[] = [

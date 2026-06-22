@@ -1,7 +1,6 @@
 <?php
 
 use App\Facades\Rrd;
-use App\Models\Sensor;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 $name = 'smart';
@@ -15,10 +14,9 @@ $printtotal = 0;
 $addarea = 1;
 $transparency = 15;
 
-// MIB-driven wear ("Percentage Used" / "Endurance Used") sensors, relabeled
-// per the saved naming template — same approach as the all-temperatures
-// overview graph. Legacy rev1 "smart_wear" sensors have no disk_key to map
-// to, so they keep falling back to their stored sensor_descr below.
+// MIB-driven "Available Spare" (NVMe) sensors, relabeled per the saved
+// naming template — same approach as the all-temperatures overview graph.
+// There is no legacy rev1 equivalent for this sensor.
 $htmlData = isset($app) ? HtmlData::forDevice($app, $device) : null;
 $labelMode = 'device';
 if ($htmlData !== null) {
@@ -28,11 +26,10 @@ if ($htmlData !== null) {
 }
 
 $rrd_list = [];
-$mibSensorIds = [];
 
 if ($htmlData !== null) {
     foreach ($htmlData->diskKeys() as $diskKey) {
-        $sensor = $htmlData->percentageUsedSensor($diskKey);
+        $sensor = $htmlData->availableSpareSensor($diskKey);
         if ($sensor === null) {
             continue;
         }
@@ -48,27 +45,7 @@ if ($htmlData !== null) {
             'descr'    => $disk !== null ? $htmlData->displayLabel($disk, $labelMode) : $sensor->sensor_descr,
             'ds'       => 'sensor',
         ];
-        $mibSensorIds[] = $sensor->sensor_id;
     }
-}
-
-$wearSensors = Sensor::where('device_id', $device['device_id'])
-    ->where('sensor_type', 'smart_wear')
-    ->whereNotIn('sensor_id', $mibSensorIds)
-    ->orderBy('sensor_descr')
-    ->get();
-
-foreach ($wearSensors as $sensor) {
-    $rrd_filename = Rrd::name($device['hostname'], ['sensor', $sensor->sensor_class, $sensor->sensor_type, $sensor->sensor_index]);
-    if (! Rrd::checkRrdExists($rrd_filename)) {
-        continue;
-    }
-
-    $rrd_list[] = [
-        'filename' => $rrd_filename,
-        'descr'    => $sensor->sensor_descr,
-        'ds'       => 'sensor',
-    ];
 }
 
 if (empty($rrd_list)) {
