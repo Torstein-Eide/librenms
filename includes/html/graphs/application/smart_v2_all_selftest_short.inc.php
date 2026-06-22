@@ -4,7 +4,8 @@ use App\Facades\Rrd;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 $name = 'smart';
-$unit_text = 'h';
+$unit_text = 'Time since';
+$unit_label = 'h';
 $unitlen = 6;
 $bigdescrlen = 25;
 $smalldescrlen = 25;

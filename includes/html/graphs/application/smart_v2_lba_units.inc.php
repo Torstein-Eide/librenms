@@ -26,7 +26,8 @@ $blockSize = isset($vars['block_size']) && is_numeric($vars['block_size']) ? (fl
 // Allow negative Y values for writes rendered below the axis.
 unset($vars['scale_min']);
 
-$unit_text = 'LBA/s';
+$unit_text = 'Logical block address';
+$unit_label = 'LBA/S';
 require 'includes/html/graphs/common.inc.php';
 
 $stacked = generate_stacked_graphs();

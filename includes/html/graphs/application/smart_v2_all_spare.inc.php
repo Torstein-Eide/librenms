@@ -5,6 +5,7 @@ use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 $name = 'smart';
 $unit_text = '%';
+$unit_label = 'Percent';
 $unitlen = 6;
 $bigdescrlen = 25;
 $smalldescrlen = 25;

@@ -4,7 +4,7 @@ use App\Facades\Rrd;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 $name = 'smart';
-$unit_text = '';
+$unit_text = 'Self test state';
 $unitlen = 6;
 $bigdescrlen = 25;
 $smalldescrlen = 25;
