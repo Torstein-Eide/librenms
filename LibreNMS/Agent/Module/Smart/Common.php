@@ -9,6 +9,7 @@ use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use LibreNMS\Agent\Application;
+use LibreNMS\Agent\Smart\DiskIdentity;
 use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
@@ -3176,27 +3177,16 @@ class Common extends Application
         return $this->healthLevel($health->overall_status, $attrs->pluck('status'), $attrs->pluck('rate_status'));
     }
 
-    /** Human-readable sensor label: "Model Serial (name)" or graceful fallbacks. */
+    /** Human-readable sensor label: "Model Serial (name)" or graceful fallbacks. Shared with HtmlData::diskLabel(). */
     private function sensorLabel(array $dev, string $fallback): string
     {
-        $model = trim((string) ($dev['model_name'] ?? ''));
-        $serial = trim((string) ($dev['serial_number'] ?? ''));
-        $name = trim((string) ($dev['device_name'] ?? ''));
-
-        $parts = array_filter([$model, $serial]);
-        $label = implode(' ', $parts);
-
-        if ($name !== '') {
-            $label = $label !== '' ? "{$label} ({$name})" : $name;
-        }
-
-        return $label !== '' ? $label : $fallback;
+        return DiskIdentity::label($dev, $fallback);
     }
 
-    /** Sanitized, stable sensor/RRD index from a disk key (max 80 chars, safe chars). */
+    /** Sanitized, stable sensor/RRD index from a disk key. Shared with HtmlData::diskIndex() -- must stay identical. */
     private function mibDiskIndex(string $key): string
     {
-        return substr(preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
+        return DiskIdentity::index($key);
     }
 
     /**

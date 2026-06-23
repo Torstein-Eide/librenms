@@ -8,6 +8,7 @@ use App\Models\Sensor;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use LibreNMS\Agent\Smart\DiskIdentity;
 use LibreNMS\Util\Number;
 
 /**
@@ -179,10 +180,10 @@ class HtmlData
         return $name !== '' ? $name : $diskKey;
     }
 
-    /** Stable sensor/RRD index for a disk key. Must match Common::mibDiskIndex(). */
+    /** Stable sensor/RRD index for a disk key. Shared with Common::mibDiskIndex() -- must stay identical. */
     public function diskIndex(string $diskKey): string
     {
-        return substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $diskKey), 0, 80);
+        return DiskIdentity::index($diskKey);
     }
 
     public function diskNavigation(string $diskKey): string
@@ -548,19 +549,10 @@ class HtmlData
         );
     }
 
-    /** Reconstruct the disk label used in sensor descriptions: "model serial (device)". */
+    /** Reconstruct the disk label used in sensor descriptions: "model serial (device)". Shared with Common::sensorLabel(). */
     private function diskLabel(array $disk): string
     {
-        $model = trim((string) ($disk['model_name'] ?? ''));
-        $serial = trim((string) ($disk['serial_number'] ?? ''));
-        $name = trim((string) ($disk['device_name'] ?? ''));
-
-        $label = trim(implode(' ', array_filter([$model, $serial])));
-        if ($name !== '') {
-            $label = $label !== '' ? "{$label} ({$name})" : $name;
-        }
-
-        return $label;
+        return DiskIdentity::label($disk);
     }
 
     public function selftestStatusSensor(string $diskKey): ?Sensor
