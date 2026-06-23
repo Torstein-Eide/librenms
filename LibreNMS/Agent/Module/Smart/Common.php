@@ -32,37 +32,6 @@ class Common extends Application
     private const SATA_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SATA-MIB'];
     private const SENSOR_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SENSOR-MIB'];
 
-    // smartSATAChangeByDeviceTable IDs used for change-detection guards (matches
-    // sata_table_meta_for() in the agentx). The full ID space, including the
-    // tables that aren't change-gated (info=1, attr=3, errorCmd=5), is in
-    // SATA_TID_NAMES below; only the IDs referenced as change guards are named here.
-    private const SATA_TID_HEALTH = 2;
-    private const SATA_TID_ERROR_LOG = 4;
-    private const SATA_TID_SELFTEST = 6;
-    private const SATA_TID_ERC = 7;
-    private const SATA_TID_PHY_EVENT = 8;
-    private const SATA_TID_SELECTIVE_TEST = 9;
-    private const SATA_TID_LOG_DIR = 10;
-    private const SATA_TID_DEV_STAT = 11;
-    private const SATA_TID_PENDING_DEFECTS = 12;
-
-    // SNMP returns enumerated table IDs as named strings (e.g. "sataInfo") when MIBs are loaded.
-    // Map them to the integer constants so change-detection lookups work correctly.
-    private const SATA_TID_NAMES = [
-        'sataInfo'           => 1,
-        'sataHealth'         => 2,
-        'sataAttr'           => 3,
-        'sataErrorLog'       => 4,
-        'sataErrorCmd'       => 5,
-        'sataSelfTest'       => 6,
-        'sataErc'            => 7,
-        'sataPhyEvent'       => 8,
-        'sataSelectiveTest'  => 9,
-        'sataLogDir'         => 10,
-        'sataDevStat'        => 11,
-        'sataPendingDefects' => 12,
-    ];
-
     /**
      * SmartmonSensorDataType → [LibreNMS sensor_class, sensor_type, index prefix]
      * Types other(1), unknown(2), vibration(8) have no useful LibreNMS mapping and are skipped.
@@ -160,9 +129,6 @@ class Common extends Application
         'smart_sas_info', 'smart_sas_health', 'smart_sas_error_counters', 'smart_sas_selftest_log',
     ];
 
-    private ?array $sataChangeRows = null;
-    private ?array $sataSubindexChangeRows = null;
-    private ?array $prevSataChange = null;
     private array  $sataHealth = [];
     private array  $sataAttributes = [];
     private array  $sensorRows = [];
@@ -170,6 +136,7 @@ class Common extends Application
     // Stable per-run identity context, initialized at the top of discover()/poll().
     private Context $context;
     private DeviceTable $deviceTable;
+    private ChangeTracker $changeTracker;
     // SATA / NVMe device lists for the current run, keyed by snmp_index.
     private array   $sataDeviceList = [];
     private array   $nvmeDeviceList = [];
@@ -264,6 +231,7 @@ class Common extends Application
             $this,
         );
         $this->deviceTable = new DeviceTable($this->context);
+        $this->changeTracker = new ChangeTracker($this->context);
     }
 
     /** @internal public delegate for Context; only Context should call this. */
@@ -422,7 +390,7 @@ class Common extends Application
     private function discoverSata(): void
     {
         // Change index must be loaded first so all table-change guards below are valid.
-        $this->sataChangeByDeviceTable();
+        $this->changeTracker->load();
         $this->sataDeviceList = $this->sataDevices();
         $this->vlog('discoverSata: ' . count($this->sataDeviceList) . ' SATA device(s) found');
 
@@ -452,14 +420,14 @@ class Common extends Application
         }
 
         // Change-guarded tables (per device):
-        $this->walkAndSyncSataTable('smartmonSataErcTable', 2, self::SATA_TID_ERC, [$this, 'syncSataErcRows']);
-        $this->walkAndSyncSataTable('smartmonSataPhyEventTable', 2, self::SATA_TID_PHY_EVENT, [$this, 'syncSataPhyEventRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorLogTable', 2, self::SATA_TID_ERROR_LOG, [$this, 'syncSataErrorLogRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable', 3, self::SATA_TID_ERROR_LOG, [$this, 'syncSataErrorCmdRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelfTestTable', 2, self::SATA_TID_SELFTEST, [$this, 'syncSataSelfTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataLogDirTable', 2, self::SATA_TID_LOG_DIR, [$this, 'syncSataLogDirRows']);
-        $this->walkAndSyncSataTable('smartmonSataDevStatTable', 3, self::SATA_TID_DEV_STAT, [$this, 'syncSataDevStatRows'], true);
+        $this->walkAndSyncSataTable('smartmonSataErcTable', 2, ChangeTracker::TID_ERC, [$this, 'syncSataErcRows']);
+        $this->walkAndSyncSataTable('smartmonSataPhyEventTable', 2, ChangeTracker::TID_PHY_EVENT, [$this, 'syncSataPhyEventRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorLogTable', 2, ChangeTracker::TID_ERROR_LOG, [$this, 'syncSataErrorLogRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable', 3, ChangeTracker::TID_ERROR_LOG, [$this, 'syncSataErrorCmdRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelfTestTable', 2, ChangeTracker::TID_SELFTEST, [$this, 'syncSataSelfTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, ChangeTracker::TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataLogDirTable', 2, ChangeTracker::TID_LOG_DIR, [$this, 'syncSataLogDirRows']);
+        $this->walkAndSyncSataTable('smartmonSataDevStatTable', 3, ChangeTracker::TID_DEV_STAT, [$this, 'syncSataDevStatRows'], true);
 
         // Self-test age sensors, computed from the freshly-synced self-test log + power-on hours.
         $this->discoverSelftestAgeSensors($this->sataDeviceList, 'smart_selftest_', 'smart_sata_health', 'smart_sata_selftest_log');
@@ -468,7 +436,7 @@ class Common extends Application
         $this->syncSensorTypes();
 
         // Persist change snapshot for the next cycle's change detection.
-        $this->persistSataChangeSnapshot();
+        $this->changeTracker->persist();
     }
 
     /**
@@ -756,7 +724,7 @@ class Common extends Application
         $this->sataDeviceList = $this->sataDevicesFromDb();
 
         // Table: Health (change-guarded; DB sync; sensors updated below)
-        $this->walkAndSyncSataTable('smartmonSataHealthTable', 1, self::SATA_TID_HEALTH, [$this, 'syncSataHealthRow']);
+        $this->walkAndSyncSataTable('smartmonSataHealthTable', 1, ChangeTracker::TID_HEALTH, [$this, 'syncSataHealthRow']);
 
         // Table: Attributes (change-guarded; limited columns for DB sync + RRD)
         $this->walkAndSyncSataAttrPoll();
@@ -766,11 +734,11 @@ class Common extends Application
         // Change-guarded tables:
         $this->walkAndSyncSataPhyEventPoll();
         $this->walkAndSyncSataDevStatPoll();
-        $this->walkAndSyncSataTable('smartmonSataErrorLogTable', 2, self::SATA_TID_ERROR_LOG, [$this, 'syncSataErrorLogRows']);
-        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable', 3, self::SATA_TID_ERROR_LOG, [$this, 'syncSataErrorCmdRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelfTestTable', 2, self::SATA_TID_SELFTEST, [$this, 'syncSataSelfTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, self::SATA_TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
-        $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable', 2, self::SATA_TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorLogTable', 2, ChangeTracker::TID_ERROR_LOG, [$this, 'syncSataErrorLogRows']);
+        $this->walkAndSyncSataTable('smartmonSataErrorCmdTable', 3, ChangeTracker::TID_ERROR_LOG, [$this, 'syncSataErrorCmdRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelfTestTable', 2, ChangeTracker::TID_SELFTEST, [$this, 'syncSataSelfTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, ChangeTracker::TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
+        $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable', 2, ChangeTracker::TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
 
         // Health, self-test status, and self-test age sensors, computed from the
         // tables just synced above and batched through a single updateSensorValues()
@@ -780,7 +748,7 @@ class Common extends Application
             $this->pollSataDeviceSensors($dev);
         }
 
-        $this->persistSataChangeSnapshot();
+        $this->changeTracker->persist();
     }
 
     /** Update the SATA Health, Self-test Status, and Self-test age sensors for one device. */
@@ -1500,56 +1468,6 @@ class Common extends Application
     }
 
     // ── SNMP table fetchers ───────────────────────────────────────────────────
-
-    private function sataChangeByDeviceTable(): void
-    {
-        if ($this->sataChangeRows !== null) {
-            return;
-        }
-        $this->prevSataChange = $this->loadStoredSataChangeSnapshot();
-
-        // table(2) puts the column name at depth 3 ([devIdx][tableId][colName]),
-        // so walk the full table and extract the lastChange column explicitly.
-        $this->sataChangeRows = [];
-        foreach ($this->walkSataTable('smartSATAChangeByDeviceTable', 2) as $devIdx => $tableRows) {
-            foreach ($tableRows as $tableId => $row) {
-                if (! is_array($row)) {
-                    continue;
-                }
-                // SNMP returns named enum strings ("sataInfo") when MIBs are loaded; normalize to int.
-                $tid = self::SATA_TID_NAMES[(string) $tableId] ?? (is_numeric($tableId) ? (int) $tableId : null);
-                if ($tid === null) {
-                    continue;
-                }
-                $this->sataChangeRows[(string) $devIdx][(string) $tid] =
-                    $row['smartSATAChangeByDeviceLastChange'] ?? null;
-            }
-        }
-
-        $this->sataSubindexChangeRows = [];
-        foreach ($this->walkSataTable('smartSATAChangeBySubindexTable', 3) as $devIdx => $tableRows) {
-            if (! is_array($tableRows)) {
-                continue;
-            }
-            foreach ($tableRows as $tableId => $subindexes) {
-                if (! is_array($subindexes)) {
-                    continue;
-                }
-                $tid = self::SATA_TID_NAMES[(string) $tableId] ?? (is_numeric($tableId) ? (int) $tableId : null);
-                if ($tid === null) {
-                    continue;
-                }
-                foreach ($subindexes as $subindex => $row) {
-                    if (is_array($row)) {
-                        $this->sataSubindexChangeRows[(string) $devIdx][(string) $tid][(string) $subindex] =
-                            $row['smartSATAChangeBySubindexLastChange'] ?? null;
-                    }
-                }
-            }
-        }
-
-        $this->vlog('sataChangeByDeviceTable: loaded ' . count($this->sataChangeRows) . ' device change row(s), prev snapshot ' . ($this->prevSataChange !== null ? 'present' : 'absent'));
-    }
 
     private function sataHealthTable(): void
     {
@@ -2439,8 +2357,8 @@ class Common extends Application
     /** Poll-time narrowed walk: value + overflow only (name/size already in DB from discovery). */
     private function walkAndSyncSataPhyEventPoll(): void
     {
-        $this->sataChangeByDeviceTable();
-        if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable(self::SATA_TID_PHY_EVENT)) {
+        $this->changeTracker->load();
+        if (! Debug::isVerbose() && ! $this->changeTracker->anyDeviceChangedForTable(ChangeTracker::TID_PHY_EVENT)) {
             return;
         }
 
@@ -2448,7 +2366,7 @@ class Common extends Application
         $overflowRows = $this->walkSataTable('smartmonSataPhyEventOverflow', 2);
 
         foreach ($this->sataDeviceList as $devIdx => $dev) {
-            if (! $this->sataTableChangedForDevice((string) $devIdx, self::SATA_TID_PHY_EVENT)) {
+            if (! $this->changeTracker->tableChangedForDevice((string) $devIdx, ChangeTracker::TID_PHY_EVENT)) {
                 continue;
             }
             $merged = [];
@@ -2464,12 +2382,12 @@ class Common extends Application
 
     /**
      * Poll-time narrowed walk for DevStat: only value column, with two-level change guards
-     * (device-level via sataChangeByDeviceTable, page-level via sataSubindexChangeRows).
+     * (device-level and page-level, both via ChangeTracker).
      */
     private function walkAndSyncSataDevStatPoll(): void
     {
-        $this->sataChangeByDeviceTable();
-        if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable(self::SATA_TID_DEV_STAT)) {
+        $this->changeTracker->load();
+        if (! Debug::isVerbose() && ! $this->changeTracker->anyDeviceChangedForTable(ChangeTracker::TID_DEV_STAT)) {
             return;
         }
 
@@ -2477,12 +2395,12 @@ class Common extends Application
         $allValueRows = $this->walkSataTable('smartmonSataDevStatValue', 3, true);
 
         foreach ($this->sataDeviceList as $devIdx => $dev) {
-            if (! $this->sataTableChangedForDevice((string) $devIdx, self::SATA_TID_DEV_STAT)) {
+            if (! $this->changeTracker->tableChangedForDevice((string) $devIdx, ChangeTracker::TID_DEV_STAT)) {
                 continue;
             }
             $upsertRows = [];
             foreach ($allValueRows[(string) $devIdx] ?? [] as $pageNum => $offsets) {
-                if (! Debug::isVerbose() && ! $this->sataTableChangedForDevicePage((string) $devIdx, self::SATA_TID_DEV_STAT, (int) $pageNum)) {
+                if (! Debug::isVerbose() && ! $this->changeTracker->tableChangedForDevicePage((string) $devIdx, ChangeTracker::TID_DEV_STAT, (int) $pageNum)) {
                     continue;
                 }
                 foreach ($offsets as $offset => $value) {
@@ -2504,33 +2422,6 @@ class Common extends Application
 
     // ── Change detection ──────────────────────────────────────────────────────
 
-    private function sataTableChangedForDevice(string $devIdx, int $tableId): bool
-    {
-        $current = $this->sataChangeRows[$devIdx][$tableId] ?? null;
-        $prev = $this->prevSataChange !== null ? ($this->prevSataChange[$devIdx][$tableId][0] ?? null) : null;
-
-        return $current !== $prev;
-    }
-
-    private function sataTableChangedForDevicePage(string $devIdx, int $tableId, int $subindex): bool
-    {
-        $current = $this->sataSubindexChangeRows[$devIdx][$tableId][$subindex] ?? null;
-        $prev = $this->prevSataChange !== null ? ($this->prevSataChange[$devIdx][$tableId][$subindex] ?? null) : null;
-
-        return $current !== $prev;
-    }
-
-    private function anySataDeviceChangedForTable(int $tableId): bool
-    {
-        foreach (array_keys($this->sataChangeRows) as $devIdx) {
-            if ($this->sataTableChangedForDevice((string) $devIdx, $tableId)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     /**
      * Walk one SATA table, normalize rows, and sync each device row that has changed.
      * Pass null for $tableId to sync unconditionally (no change guard).
@@ -2543,8 +2434,8 @@ class Common extends Application
     ): void {
         $unconditional = $tableId === null;
         if (! $unconditional) {
-            $this->sataChangeByDeviceTable();
-            if (! Debug::isVerbose() && ! $this->anySataDeviceChangedForTable($tableId)) {
+            $this->changeTracker->load();
+            if (! Debug::isVerbose() && ! $this->changeTracker->anyDeviceChangedForTable($tableId)) {
                 $this->vlog("walkAndSyncSataTable: {$table} skipped (no changes)");
 
                 return;
@@ -2555,73 +2446,12 @@ class Common extends Application
         $synced = 0;
         foreach ($this->walkSataTable($table, $depth, $numericIndex) as $devIdx => $rows) {
             $dev = $this->sataDeviceList[$devIdx] ?? null;
-            if ($dev !== null && ($unconditional || $this->sataTableChangedForDevice($devIdx, $tableId))) {
+            if ($dev !== null && ($unconditional || $this->changeTracker->tableChangedForDevice($devIdx, $tableId))) {
                 $sync($dev, $rows);
                 $synced++;
             }
         }
         $this->vlog("walkAndSyncSataTable: {$table} synced {$synced} device(s)");
-    }
-
-    private function loadStoredSataChangeSnapshot(): ?array
-    {
-        $rows = DB::table('smart_sata_change')
-            ->where('app_id', $this->context->appId)
-            ->get(['device_idx', 'table_id', 'subindex', 'last_change']);
-
-        if ($rows->isEmpty()) {
-            return null;
-        }
-
-        // Structure: [devIdx][tableId][subindex] => last_change
-        // subindex = 0 for device-level rows; subindex = pageNum/errorIdx for subindex rows.
-        $snapshot = [];
-        foreach ($rows as $row) {
-            $snapshot[$row->device_idx][$row->table_id][$row->subindex] = $row->last_change;
-        }
-
-        return $snapshot;
-    }
-
-    private function persistSataChangeSnapshot(): void
-    {
-        $this->sataChangeByDeviceTable();
-        $upsertRows = [];
-
-        foreach ($this->sataChangeRows as $devIdx => $tables) {
-            foreach ($tables as $tableId => $ts) {
-                if ($ts !== null) {
-                    $upsertRows[] = [
-                        'app_id'      => $this->context->appId,
-                        'device_idx'  => (int) $devIdx,
-                        'table_id'    => (int) $tableId,
-                        'subindex'    => 0,
-                        'last_change' => $ts,
-                    ];
-                }
-            }
-        }
-
-        foreach ($this->sataSubindexChangeRows ?? [] as $devIdx => $tables) {
-            foreach ($tables as $tableId => $subindexes) {
-                foreach ($subindexes as $subindex => $ts) {
-                    if ($ts !== null) {
-                        $upsertRows[] = [
-                            'app_id'      => $this->context->appId,
-                            'device_idx'  => (int) $devIdx,
-                            'table_id'    => (int) $tableId,
-                            'subindex'    => (int) $subindex,
-                            'last_change' => $ts,
-                        ];
-                    }
-                }
-            }
-        }
-
-        $this->vlog('persistSataChangeSnapshot: upserting ' . count($upsertRows) . ' change row(s)');
-        if (! empty($upsertRows)) {
-            DbSync::upsert('smart_sata_change', $upsertRows, ['app_id', 'device_idx', 'table_id', 'subindex']);
-        }
     }
 
     // ── V1 → V2 migration ────────────────────────────────────────────────────
