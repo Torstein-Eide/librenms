@@ -164,14 +164,60 @@ final class RrdtoolTest extends TestCase
         $this->assertSame([], $this->parseXportRatesProxy($xml, ['id5']));
     }
 
+    /**
+     * getBucketAverages()'s 2-bucket request (used for GAUGE rate-of-change instead of
+     * two separate boundary-probe calls) returns the full chronological series per
+     * dataset, including any extra rows rrdtool's step alignment adds, so the caller can
+     * difference the first against the last regardless of how many rows came back.
+     */
+    public function testParseXportSeriesReturnsChronologicalNonNanValues(): void
+    {
+        $xml = <<<'XML'
+            <?xml version="1.0" encoding="ISO-8859-1"?>
+            <xport>
+              <meta>
+                <start>1782208200</start>
+                <end>1782237000</end>
+                <step>14400</step>
+                <rows>3</rows>
+                <columns>1</columns>
+                <legend>
+                  <entry>id197</entry>
+                </legend>
+              </meta>
+              <data>
+                <row><v>1.0000000000e+01</v></row>
+                <row><v>1.2000000000e+01</v></row>
+                <row><v>NaN</v></row>
+              </data>
+            </xport>
+            XML;
+
+        $series = $this->parseXportSeriesProxy($xml, ['id197']);
+        $this->assertSame(['id197' => [10.0, 12.0]], $series);
+
+        // The caller (Common::fetchAttributeRates()) takes first vs last of the series.
+        $values = $series['id197'];
+        $this->assertSame(2.0, $values[array_key_last($values)] - $values[0]);
+    }
+
     private function parseXportRatesProxy(string $xportOutput, array $datasets): array
     {
-        // parseXportRates() touches no instance state, so a bare, uninitialized
+        return $this->invokePrivate('parseXportRates', $xportOutput, $datasets);
+    }
+
+    private function parseXportSeriesProxy(string $xportOutput, array $datasets): array
+    {
+        return $this->invokePrivate('parseXportSeries', $xportOutput, $datasets);
+    }
+
+    private function invokePrivate(string $method, mixed ...$args): array
+    {
+        // The methods under test touch no instance state, so a bare, uninitialized
         // instance (skipping the constructor/loadConfig) is fine here; a Mockery
         // partial mock can't call through to a private method on the real class.
         $rrd = (new \ReflectionClass(Rrd::class))->newInstanceWithoutConstructor();
-        $method = new \ReflectionMethod($rrd, 'parseXportRates');
 
-        return $method->invoke($rrd, $xportOutput, $datasets);
+        return (new \ReflectionMethod($rrd, $method))->invoke($rrd, ...$args);
     }
 }
