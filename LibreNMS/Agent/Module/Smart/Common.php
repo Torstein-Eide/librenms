@@ -987,8 +987,10 @@ class Common extends Application
         if (count($fields) === 1 && ! $hasRrd) {
             return;
         }
-        $this->addDatasets($rrdFile, $this->commonDeviceRrdDatasets());
 
+        // DS reconciliation (retrofitting power_state onto older files) is a
+        // discovery concern, handled by reconcileCommonDeviceRrds(); new files
+        // get every DS at create time from $rrd_def. No tune at poll time.
         app('Datastore')->put($this->os->getDeviceArray(), 'app', [
             'name'                => 'smart',
             'app_id'              => $this->appId,
@@ -1406,9 +1408,11 @@ class Common extends Application
         $fields['power_state'] = $this->intValue($dev['power_state'] ?? null);
 
         $rrdName = ['app', 'smart_nvme', $this->appId, $idx];
-        $rrd = app(Rrd::class);
-        $this->addDatasets($rrd->name($this->device->hostname, $rrdName), $this->commonDeviceRrdDatasets());
 
+        // DS reconciliation (retrofitting power_state onto older files) is a
+        // discovery concern, handled by reconcileCommonDeviceRrds(); new files
+        // get every DS at create time from $rrd_def below. No tune at poll time.
+        //
         // NVME_HEALTH_RRD is a fixed set, plus power_state, so $fields always carries every DS.
         app('Datastore')->put($this->os->getDeviceArray(), 'app', [
             'name'                => 'smart_nvme',
