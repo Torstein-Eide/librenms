@@ -3,69 +3,42 @@
 namespace LibreNMS\Agent\Module\Smart\Support;
 
 /**
- * Stateless SNMP value decoding shared by the SMART MIB discovery/poll pipeline:
- * coercing enum/typed SNMP scalars to plain PHP values. Extracted from
- * {@see \LibreNMS\Agent\Module\Smart\Common} so the SATA/NVMe (and future SAS)
- * pipelines can reuse the same decoders without depending on Common itself.
+ * SMART-MIB-specific SNMP value decoding that isn't generic enough to live in
+ * {@see \LibreNMS\Util\SnmpDecode}: coercing enum/typed SNMP scalars used
+ * throughout the Smart module, extracting a scalar from a SnmpQuery table()
+ * leaf, and the SMARTMON-*-MIB BITS/TruthValue conventions. Shared by the
+ * SATA/NVMe (and future SAS) pipelines without depending on Common itself.
  */
 final class SnmpDecode
 {
-    /**
-     * Convert a SNMP DateAndTime string (e.g. "2026-6-6,22:15:11.0,+2:0")
-     * to a MySQL-compatible datetime string ("2026-06-06 22:15:11"), or null.
-     */
-    public static function parseDateAndTime(mixed $raw): ?string
+    public static function intValue(mixed $value): ?int
     {
-        if ($raw === null || $raw === '') {
-            return null;
+        if (is_int($value)) {
+            return $value;
         }
-        $pattern = '/^(\d{4})-(\d{1,2})-(\d{1,2}),(\d{1,2}):(\d{2}):(\d{2})(?:\.\d+)?(?:,[+-]\d+:\d+)?$/';
-        if (! preg_match($pattern, trim((string) $raw), $m)) {
+
+        if (! is_string($value)) {
             return null;
         }
 
-        return sprintf('%04d-%02d-%02d %02d:%02d:%02d', $m[1], $m[2], $m[3], $m[4], $m[5], $m[6]);
-    }
-
-    /**
-     * Compute the actual physical value from a SENSOR-MIB row.
-     * Actual value = col × 10^(scale_exponent − precision)
-     *
-     * @param  array<int, int>  $scaleExpMap  SmartmonSensorScale enum => power of 10 exponent
-     */
-    public static function applySensorScaleCol(array $row, string $valueCol, array $scaleExpMap): ?float
-    {
-        $raw = $row[$valueCol] ?? null;
-        if ($raw === null) {
+        $value = trim($value);
+        if ($value === '' || preg_match('/^(?:STRING:\s*)?\d{4}-\d{1,2}-\d{1,2},/', $value)) {
             return null;
         }
 
-        // smartmonSensorScale is an enum returned as a name ("units(9)") when MIBs load.
-        $scaleEnum = self::intValue($row['smartmonSensorScale'] ?? null) ?? 9; // units(9 = 10^0)
-        $precision = self::intValue($row['smartmonSensorPrecision'] ?? null) ?? 0;
-        $exp = $scaleExpMap[$scaleEnum] ?? 0;
+        if (preg_match('/\((-?\d+)\)$/', $value, $matches)) {
+            return (int) $matches[1];
+        }
 
-        return (float) $raw * (10 ** ($exp - $precision));
-    }
+        if (preg_match('/:\s*(-?\d+)/', $value, $matches)) {
+            return (int) $matches[1];
+        }
 
-    /**
-     * Translate smartmonSensorScale + precision into sensor_divisor / sensor_multiplier
-     * so updateSensorValues() can scale the raw smartmonSensorValue at poll time
-     * (e.g. milli(8) precision 0 → divisor 1000: 12169 → 12.169). Both keys are
-     * always returned so a re-discovery resets any stale factor.
-     *
-     * @param  array<int, int>  $scaleExpMap  SmartmonSensorScale enum => power of 10 exponent
-     * @return array{sensor_divisor: int, sensor_multiplier: int}
-     */
-    public static function sensorScaleColumns(array $row, array $scaleExpMap): array
-    {
-        $scaleEnum = self::intValue($row['smartmonSensorScale'] ?? null) ?? 9;
-        $precision = self::intValue($row['smartmonSensorPrecision'] ?? null) ?? 0;
-        $exp = ($scaleExpMap[$scaleEnum] ?? 0) - $precision;
+        if (preg_match('/^(-?\d+)(?:\s|$)/', $value, $matches)) {
+            return (int) $matches[1];
+        }
 
-        return $exp >= 0
-            ? ['sensor_divisor' => 1, 'sensor_multiplier' => 10 ** $exp]
-            : ['sensor_divisor' => 10 ** (-$exp), 'sensor_multiplier' => 1];
+        return null;
     }
 
     /**
@@ -85,29 +58,6 @@ final class SnmpDecode
         }
 
         return $leaf === [] ? null : reset($leaf);
-    }
-
-    /**
-     * Parse a SNMP BITS value to an integer.
-     * Handles hex strings ("E0", "0xE0"), raw integers, and decimal strings.
-     */
-    public static function parseBitsValue(mixed $raw): ?int
-    {
-        if ($raw === null) {
-            return null;
-        }
-        if (is_int($raw)) {
-            return $raw;
-        }
-        $str = trim((string) $raw);
-        if ($str === '') {
-            return null;
-        }
-        if (! preg_match('/^(?:0x)?([0-9A-Fa-f]+)$/', $str, $m)) {
-            return null;
-        }
-
-        return (int) hexdec($m[1]);
     }
 
     /** Convert SNMPv2 TruthValue to 1/0/null. TruthValue enum: true(1), false(2). */
@@ -175,35 +125,5 @@ final class SnmpDecode
         }
 
         return $raw;
-    }
-
-    public static function intValue(mixed $value): ?int
-    {
-        if (is_int($value)) {
-            return $value;
-        }
-
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $value = trim($value);
-        if ($value === '' || preg_match('/^(?:STRING:\s*)?\d{4}-\d{1,2}-\d{1,2},/', $value)) {
-            return null;
-        }
-
-        if (preg_match('/\((-?\d+)\)$/', $value, $matches)) {
-            return (int) $matches[1];
-        }
-
-        if (preg_match('/:\s*(-?\d+)/', $value, $matches)) {
-            return (int) $matches[1];
-        }
-
-        if (preg_match('/^(-?\d+)(?:\s|$)/', $value, $matches)) {
-            return (int) $matches[1];
-        }
-
-        return null;
     }
 }

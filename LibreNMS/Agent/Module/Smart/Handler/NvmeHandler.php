@@ -8,9 +8,10 @@ use LibreNMS\Agent\Module\Smart\Context;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
-use LibreNMS\Agent\Module\Smart\Support\SnmpDecode;
+use LibreNMS\Agent\Module\Smart\Support\SnmpDecode as SmartSnmpDecode;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
+use LibreNMS\Util\SnmpDecode;
 use SnmpQuery;
 
 /**
@@ -182,7 +183,7 @@ final class NvmeHandler implements DiskTypeHandler
     /** Register the NVMe self-test status sensor (current op, else most recent log result) for one device. */
     private function discoverNvmeSelftestStatusSensor(array $dev, array $health, array $selftestRows): void
     {
-        $currentOp = SnmpDecode::intValue($health['smartmonNvmeCurrentSelfTestOperationValue'] ?? null) ?? 0;
+        $currentOp = SmartSnmpDecode::intValue($health['smartmonNvmeCurrentSelfTestOperationValue'] ?? null) ?? 0;
         $entries = array_map(static fn ($row) => [
             'result'         => $row['smartmonNvmeSelfTestResult'] ?? null,
             'power_on_hours' => $row['smartmonNvmeSelfTestPowerOnHours'] ?? null,
@@ -325,12 +326,12 @@ final class NvmeHandler implements DiskTypeHandler
             $rrd_def->addDataset($ds, $type, 0);
             $value = $col === 'smartmonNvmeCriticalWarning'
                 ? SnmpDecode::parseBitsValue($health[$col] ?? null)
-                : SnmpDecode::intValue($health[$col] ?? null);
+                : SmartSnmpDecode::intValue($health[$col] ?? null);
             $fields[$ds] = $value;
         }
 
         $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
-        $fields['power_state'] = SnmpDecode::intValue($dev['power_state'] ?? null);
+        $fields['power_state'] = SmartSnmpDecode::intValue($dev['power_state'] ?? null);
 
         $rrdName = ['app', 'smart_nvme', $this->ctx->appId, $idx];
 
@@ -363,7 +364,7 @@ final class NvmeHandler implements DiskTypeHandler
     /** Resolve a SmartmonHealthStatus value (enum int, "passed(1)", or bare name) to 0-4. */
     private function healthStatusValue(mixed $raw): ?int
     {
-        $int = SnmpDecode::intValue($raw);
+        $int = SmartSnmpDecode::intValue($raw);
         if ($int !== null) {
             return $int;
         }
@@ -377,20 +378,20 @@ final class NvmeHandler implements DiskTypeHandler
             'app_id'                         => $this->ctx->appId,
             'device_id'                      => $this->ctx->deviceId,
             'disk_key'                       => $dev['disk_key'],
-            'pci_vendor_id'                  => SnmpDecode::intValue($row['smartmonNvmePciVendorId'] ?? null),
-            'pci_device_id'                  => SnmpDecode::intValue($row['smartmonNvmePciVendorSubsystemId'] ?? null),
-            'ieee_oui'                       => SnmpDecode::intValue($row['smartmonNvmeIeeeOuiIdentifier'] ?? null),
-            'total_nvm_capacity_bytes'       => SnmpDecode::intValue($row['smartmonNvmeTotalNvmCapacityBytes'] ?? null),
-            'unallocated_nvm_capacity_bytes' => SnmpDecode::intValue($row['smartmonNvmeUnallocatedNvmCapacityBytes'] ?? null),
-            'controller_id'                  => SnmpDecode::intValue($row['smartmonNvmeControllerId'] ?? null),
+            'pci_vendor_id'                  => SmartSnmpDecode::intValue($row['smartmonNvmePciVendorId'] ?? null),
+            'pci_device_id'                  => SmartSnmpDecode::intValue($row['smartmonNvmePciVendorSubsystemId'] ?? null),
+            'ieee_oui'                       => SmartSnmpDecode::intValue($row['smartmonNvmeIeeeOuiIdentifier'] ?? null),
+            'total_nvm_capacity_bytes'       => SmartSnmpDecode::intValue($row['smartmonNvmeTotalNvmCapacityBytes'] ?? null),
+            'unallocated_nvm_capacity_bytes' => SmartSnmpDecode::intValue($row['smartmonNvmeUnallocatedNvmCapacityBytes'] ?? null),
+            'controller_id'                  => SmartSnmpDecode::intValue($row['smartmonNvmeControllerId'] ?? null),
             'nvme_version'                   => $row['smartmonNvmeVersion'] ?? null,
-            'namespace_count'                => SnmpDecode::intValue($row['smartmonNvmeNamespaceCount'] ?? null),
-            'max_data_transfer_pages'        => SnmpDecode::intValue($row['smartmonNvmeMaximumDataTransferPages'] ?? null),
-            'link_power_state'               => SnmpDecode::intValue($row['smartmonNvmeLinkPowerState'] ?? null),
-            'max_link_speed'                 => SnmpDecode::intValue($row['smartmonNvmeMaxLinkSpeed'] ?? null),
-            'max_link_width'                 => SnmpDecode::intValue($row['smartmonNvmeMaxLinkWidth'] ?? null),
-            'current_link_speed'             => SnmpDecode::intValue($row['smartmonNvmeCurrentLinkSpeed'] ?? null),
-            'current_link_width'             => SnmpDecode::intValue($row['smartmonNvmeCurrentLinkWidth'] ?? null),
+            'namespace_count'                => SmartSnmpDecode::intValue($row['smartmonNvmeNamespaceCount'] ?? null),
+            'max_data_transfer_pages'        => SmartSnmpDecode::intValue($row['smartmonNvmeMaximumDataTransferPages'] ?? null),
+            'link_power_state'               => SmartSnmpDecode::intValue($row['smartmonNvmeLinkPowerState'] ?? null),
+            'max_link_speed'                 => SmartSnmpDecode::intValue($row['smartmonNvmeMaxLinkSpeed'] ?? null),
+            'max_link_width'                 => SmartSnmpDecode::intValue($row['smartmonNvmeMaxLinkWidth'] ?? null),
+            'current_link_speed'             => SmartSnmpDecode::intValue($row['smartmonNvmeCurrentLinkSpeed'] ?? null),
+            'current_link_width'             => SmartSnmpDecode::intValue($row['smartmonNvmeCurrentLinkWidth'] ?? null),
         ], ['app_id', 'disk_key']);
     }
 
@@ -398,7 +399,7 @@ final class NvmeHandler implements DiskTypeHandler
     {
         // Current self-test: OperationValue is the operation enum (0=none, 1=short,
         // 2=extended, 14=vendor); OperationProgress is the completion percentage.
-        $selftestOp = SnmpDecode::intValue($row['smartmonNvmeCurrentSelfTestOperationValue'] ?? null);
+        $selftestOp = SmartSnmpDecode::intValue($row['smartmonNvmeCurrentSelfTestOperationValue'] ?? null);
 
         DbSync::upsert('smart_nvme_health', [
             'app_id'               => $this->ctx->appId,
@@ -406,23 +407,23 @@ final class NvmeHandler implements DiskTypeHandler
             'disk_key'             => $dev['disk_key'],
             'overall_status'       => $this->healthStatusValue($row['smartmonNvmeHealthOverallStatus'] ?? null),
             'critical_warning'     => SnmpDecode::parseBitsValue($row['smartmonNvmeCriticalWarning'] ?? null),
-            'data_units_read'      => SnmpDecode::intValue($row['smartmonNvmeDataUnitsRead'] ?? null),
-            'data_units_written'   => SnmpDecode::intValue($row['smartmonNvmeDataUnitsWritten'] ?? null),
-            'data_bytes_read'      => SnmpDecode::intValue($row['smartmonNvmeDataBytesRead'] ?? null),
-            'data_bytes_written'   => SnmpDecode::intValue($row['smartmonNvmeDataBytesWritten'] ?? null),
-            'host_read_commands'   => SnmpDecode::intValue($row['smartmonNvmeHostReadCommands'] ?? null),
-            'host_write_commands'  => SnmpDecode::intValue($row['smartmonNvmeHostWriteCommands'] ?? null),
-            'controller_busy_time' => SnmpDecode::intValue($row['smartmonNvmeControllerBusyTimeMinutes'] ?? null),
-            'power_cycles'         => SnmpDecode::intValue($row['smartmonNvmePowerCycles'] ?? null),
-            'power_on_hours'       => SnmpDecode::intValue($row['smartmonNvmePowerOnHours'] ?? null),
-            'unsafe_shutdowns'     => SnmpDecode::intValue($row['smartmonNvmeUnsafeShutdowns'] ?? null),
-            'media_errors'         => SnmpDecode::intValue($row['smartmonNvmeMediaDataIntegrityErrors'] ?? null),
-            'num_err_log_entries'  => SnmpDecode::intValue($row['smartmonNvmeErrorInformationLogEntries'] ?? null),
-            'warning_temp_time'    => SnmpDecode::intValue($row['smartmonNvmeWarningTemperatureTimeMinutes'] ?? null),
-            'critical_comp_time'   => SnmpDecode::intValue($row['smartmonNvmeCriticalTemperatureTimeMinutes'] ?? null),
+            'data_units_read'      => SmartSnmpDecode::intValue($row['smartmonNvmeDataUnitsRead'] ?? null),
+            'data_units_written'   => SmartSnmpDecode::intValue($row['smartmonNvmeDataUnitsWritten'] ?? null),
+            'data_bytes_read'      => SmartSnmpDecode::intValue($row['smartmonNvmeDataBytesRead'] ?? null),
+            'data_bytes_written'   => SmartSnmpDecode::intValue($row['smartmonNvmeDataBytesWritten'] ?? null),
+            'host_read_commands'   => SmartSnmpDecode::intValue($row['smartmonNvmeHostReadCommands'] ?? null),
+            'host_write_commands'  => SmartSnmpDecode::intValue($row['smartmonNvmeHostWriteCommands'] ?? null),
+            'controller_busy_time' => SmartSnmpDecode::intValue($row['smartmonNvmeControllerBusyTimeMinutes'] ?? null),
+            'power_cycles'         => SmartSnmpDecode::intValue($row['smartmonNvmePowerCycles'] ?? null),
+            'power_on_hours'       => SmartSnmpDecode::intValue($row['smartmonNvmePowerOnHours'] ?? null),
+            'unsafe_shutdowns'     => SmartSnmpDecode::intValue($row['smartmonNvmeUnsafeShutdowns'] ?? null),
+            'media_errors'         => SmartSnmpDecode::intValue($row['smartmonNvmeMediaDataIntegrityErrors'] ?? null),
+            'num_err_log_entries'  => SmartSnmpDecode::intValue($row['smartmonNvmeErrorInformationLogEntries'] ?? null),
+            'warning_temp_time'    => SmartSnmpDecode::intValue($row['smartmonNvmeWarningTemperatureTimeMinutes'] ?? null),
+            'critical_comp_time'   => SmartSnmpDecode::intValue($row['smartmonNvmeCriticalTemperatureTimeMinutes'] ?? null),
             'current_selftest_op'  => $selftestOp,
             'current_selftest_str' => $this->nvmeSelfTestOpLabel($selftestOp),
-            'current_selftest_pct' => SnmpDecode::intValue($row['smartmonNvmeCurrentSelfTestOperationProgress'] ?? null),
+            'current_selftest_pct' => SmartSnmpDecode::intValue($row['smartmonNvmeCurrentSelfTestOperationProgress'] ?? null),
         ], ['app_id', 'disk_key']);
     }
 
@@ -434,10 +435,10 @@ final class NvmeHandler implements DiskTypeHandler
                 'device_id'     => $this->ctx->deviceId,
                 'disk_key'      => $dev['disk_key'],
                 'ns_id'         => (int) $nsId,
-                'nsze'          => SnmpDecode::intValue($row['smartmonNvmeNamespaceSizeBlocks'] ?? null),
-                'ncap'          => SnmpDecode::intValue($row['smartmonNvmeNamespaceCapacityBlocks'] ?? null),
-                'nuse'          => SnmpDecode::intValue($row['smartmonNvmeNamespaceUtilizationBlocks'] ?? null),
-                'lba_data_size' => SnmpDecode::intValue($row['smartmonNvmeNamespaceFormattedLbaSizeBytes'] ?? null),
+                'nsze'          => SmartSnmpDecode::intValue($row['smartmonNvmeNamespaceSizeBlocks'] ?? null),
+                'ncap'          => SmartSnmpDecode::intValue($row['smartmonNvmeNamespaceCapacityBlocks'] ?? null),
+                'nuse'          => SmartSnmpDecode::intValue($row['smartmonNvmeNamespaceUtilizationBlocks'] ?? null),
+                'lba_data_size' => SmartSnmpDecode::intValue($row['smartmonNvmeNamespaceFormattedLbaSizeBytes'] ?? null),
             ], ['app_id', 'disk_key', 'ns_id']);
         }
         DbSync::pruneStaleRows('smart_nvme_namespaces', $this->ctx->appId, $dev['disk_key'], 'ns_id', array_keys($rows));
@@ -451,13 +452,13 @@ final class NvmeHandler implements DiskTypeHandler
                 'device_id'            => $this->ctx->deviceId,
                 'disk_key'             => $dev['disk_key'],
                 'entry_num'            => (int) $entryIndex,
-                'test_type'            => SnmpDecode::intValue($row['smartmonNvmeSelfTestType'] ?? null),
-                'result'               => SnmpDecode::intValue($row['smartmonNvmeSelfTestResult'] ?? null),
+                'test_type'            => SmartSnmpDecode::intValue($row['smartmonNvmeSelfTestType'] ?? null),
+                'result'               => SmartSnmpDecode::intValue($row['smartmonNvmeSelfTestResult'] ?? null),
                 'result_text'          => isset($row['smartmonNvmeSelfTestResultText'])
                     ? substr((string) $row['smartmonNvmeSelfTestResultText'], 0, 96) : null,
-                'power_on_hours'       => SnmpDecode::intValue($row['smartmonNvmeSelfTestPowerOnHours'] ?? null),
-                'failing_lba'          => SnmpDecode::intValue($row['smartmonNvmeSelfTestFailingLba'] ?? null),
-                'nsid'                 => SnmpDecode::intValue($row['smartmonNvmeSelfTestNamespaceId'] ?? null),
+                'power_on_hours'       => SmartSnmpDecode::intValue($row['smartmonNvmeSelfTestPowerOnHours'] ?? null),
+                'failing_lba'          => SmartSnmpDecode::intValue($row['smartmonNvmeSelfTestFailingLba'] ?? null),
+                'nsid'                 => SmartSnmpDecode::intValue($row['smartmonNvmeSelfTestNamespaceId'] ?? null),
                 'estimated_completion' => SnmpDecode::parseDateAndTime($row['smartmonNvmeSelfTestEstimatedCompletionTime'] ?? null),
             ], ['app_id', 'disk_key', 'entry_num']);
         }
@@ -472,16 +473,16 @@ final class NvmeHandler implements DiskTypeHandler
                 'device_id'             => $this->ctx->deviceId,
                 'disk_key'              => $dev['disk_key'],
                 'state_id'              => (int) $stateId,
-                'operational'           => SnmpDecode::snmpTruthValue($row['smartmonNvmePowerStateOperational'] ?? null),
-                'max_power_mw'          => SnmpDecode::intValue($row['smartmonNvmePowerStateMaxPowerMilliWatts'] ?? null),
-                'active_power_mw'       => SnmpDecode::intValue($row['smartmonNvmePowerStateActivePowerMilliWatts'] ?? null),
-                'idle_power_mw'         => SnmpDecode::intValue($row['smartmonNvmePowerStateIdlePowerMilliWatts'] ?? null),
-                'read_latency_rank'     => SnmpDecode::intValue($row['smartmonNvmePowerStateReadLatencyRank'] ?? null),
-                'read_throughput_rank'  => SnmpDecode::intValue($row['smartmonNvmePowerStateReadThroughputRank'] ?? null),
-                'write_latency_rank'    => SnmpDecode::intValue($row['smartmonNvmePowerStateWriteLatencyRank'] ?? null),
-                'write_throughput_rank' => SnmpDecode::intValue($row['smartmonNvmePowerStateWriteThroughputRank'] ?? null),
-                'entry_latency_us'      => SnmpDecode::intValue($row['smartmonNvmePowerStateEntryLatencyUsec'] ?? null),
-                'exit_latency_us'       => SnmpDecode::intValue($row['smartmonNvmePowerStateExitLatencyUsec'] ?? null),
+                'operational'           => SmartSnmpDecode::snmpTruthValue($row['smartmonNvmePowerStateOperational'] ?? null),
+                'max_power_mw'          => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateMaxPowerMilliWatts'] ?? null),
+                'active_power_mw'       => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateActivePowerMilliWatts'] ?? null),
+                'idle_power_mw'         => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateIdlePowerMilliWatts'] ?? null),
+                'read_latency_rank'     => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateReadLatencyRank'] ?? null),
+                'read_throughput_rank'  => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateReadThroughputRank'] ?? null),
+                'write_latency_rank'    => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateWriteLatencyRank'] ?? null),
+                'write_throughput_rank' => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateWriteThroughputRank'] ?? null),
+                'entry_latency_us'      => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateEntryLatencyUsec'] ?? null),
+                'exit_latency_us'       => SmartSnmpDecode::intValue($row['smartmonNvmePowerStateExitLatencyUsec'] ?? null),
             ], ['app_id', 'disk_key', 'state_id']);
         }
         DbSync::pruneStaleRows('smart_nvme_power_states', $this->ctx->appId, $dev['disk_key'], 'state_id', array_keys($rows));
@@ -501,10 +502,10 @@ final class NvmeHandler implements DiskTypeHandler
                     'disk_key'             => $dev['disk_key'],
                     'ns_id'                => (int) $nsId,
                     'format_id'            => (int) $formatId,
-                    'current'              => SnmpDecode::snmpTruthValue($row['smartmonNvmeLbaFormatCurrent'] ?? null),
-                    'data_size_bytes'      => SnmpDecode::intValue($row['smartmonNvmeLbaFormatDataSizeBytes'] ?? null),
-                    'metadata_size_bytes'  => SnmpDecode::intValue($row['smartmonNvmeLbaFormatMetadataSizeBytes'] ?? null),
-                    'relative_performance' => SnmpDecode::intValue($row['smartmonNvmeLbaFormatRelativePerformance'] ?? null),
+                    'current'              => SmartSnmpDecode::snmpTruthValue($row['smartmonNvmeLbaFormatCurrent'] ?? null),
+                    'data_size_bytes'      => SmartSnmpDecode::intValue($row['smartmonNvmeLbaFormatDataSizeBytes'] ?? null),
+                    'metadata_size_bytes'  => SmartSnmpDecode::intValue($row['smartmonNvmeLbaFormatMetadataSizeBytes'] ?? null),
+                    'relative_performance' => SmartSnmpDecode::intValue($row['smartmonNvmeLbaFormatRelativePerformance'] ?? null),
                 ], ['app_id', 'disk_key', 'ns_id', 'format_id']);
             }
             DbSync::pruneStaleRows('smart_nvme_lba_formats', $this->ctx->appId, $dev['disk_key'], 'format_id', array_keys($formats), ['ns_id' => (int) $nsId]);
@@ -520,17 +521,17 @@ final class NvmeHandler implements DiskTypeHandler
                 'device_id'            => $this->ctx->deviceId,
                 'disk_key'             => $dev['disk_key'],
                 'entry_num'            => (int) $entryIndex,
-                'error_count'          => SnmpDecode::intValue($row['smartmonNvmeErrorCount'] ?? null),
-                'sq_id'                => SnmpDecode::intValue($row['smartmonNvmeErrorSubmissionQueueId'] ?? null),
-                'command_id'           => SnmpDecode::intValue($row['smartmonNvmeErrorCommandId'] ?? null),
-                'status_field'         => SnmpDecode::intValue($row['smartmonNvmeErrorStatusField'] ?? null),
-                'param_error_location' => SnmpDecode::intValue($row['smartmonNvmeErrorParameterErrorLocation'] ?? null),
-                'lba'                  => SnmpDecode::intValue($row['smartmonNvmeErrorLba'] ?? null),
-                'ns_id'                => SnmpDecode::intValue($row['smartmonNvmeErrorNamespaceId'] ?? null),
-                'vendor_info'          => SnmpDecode::intValue($row['smartmonNvmeErrorVendorSpecificInfo'] ?? null),
-                'status_code'          => SnmpDecode::intValue($row['smartmonNvmeErrorStatusCode'] ?? null),
-                'status_code_type'     => SnmpDecode::intValue($row['smartmonNvmeErrorStatusCodeType'] ?? null),
-                'do_not_retry'         => SnmpDecode::snmpTruthValue($row['smartmonNvmeErrorDoNotRetry'] ?? null),
+                'error_count'          => SmartSnmpDecode::intValue($row['smartmonNvmeErrorCount'] ?? null),
+                'sq_id'                => SmartSnmpDecode::intValue($row['smartmonNvmeErrorSubmissionQueueId'] ?? null),
+                'command_id'           => SmartSnmpDecode::intValue($row['smartmonNvmeErrorCommandId'] ?? null),
+                'status_field'         => SmartSnmpDecode::intValue($row['smartmonNvmeErrorStatusField'] ?? null),
+                'param_error_location' => SmartSnmpDecode::intValue($row['smartmonNvmeErrorParameterErrorLocation'] ?? null),
+                'lba'                  => SmartSnmpDecode::intValue($row['smartmonNvmeErrorLba'] ?? null),
+                'ns_id'                => SmartSnmpDecode::intValue($row['smartmonNvmeErrorNamespaceId'] ?? null),
+                'vendor_info'          => SmartSnmpDecode::intValue($row['smartmonNvmeErrorVendorSpecificInfo'] ?? null),
+                'status_code'          => SmartSnmpDecode::intValue($row['smartmonNvmeErrorStatusCode'] ?? null),
+                'status_code_type'     => SmartSnmpDecode::intValue($row['smartmonNvmeErrorStatusCodeType'] ?? null),
+                'do_not_retry'         => SmartSnmpDecode::snmpTruthValue($row['smartmonNvmeErrorDoNotRetry'] ?? null),
                 'status_string'        => isset($row['smartmonNvmeErrorStatusString'])
                     ? substr((string) $row['smartmonNvmeErrorStatusString'], 0, 128) : null,
                 'error_time'           => SnmpDecode::parseDateAndTime($row['smartmonNvmeErrorTimestamp'] ?? null),
@@ -545,12 +546,12 @@ final class NvmeHandler implements DiskTypeHandler
             'app_id'                  => $this->ctx->appId,
             'device_id'               => $this->ctx->deviceId,
             'disk_key'                => $dev['disk_key'],
-            'firmware_update_raw'     => SnmpDecode::intValue($row['smartmonNvmeFirmwareUpdateRaw'] ?? null),
-            'firmware_slot_count'     => SnmpDecode::intValue($row['smartmonNvmeFirmwareSlotCount'] ?? null),
-            'firmware_reset_required' => SnmpDecode::snmpTruthValue($row['smartmonNvmeFirmwareResetRequired'] ?? null),
-            'optional_admin_cmd_raw'  => SnmpDecode::bitsValue($row['smartmonNvmeOptionalAdminCommandRaw'] ?? null),
-            'optional_nvm_cmd_raw'    => SnmpDecode::bitsValue($row['smartmonNvmeOptionalNvmCommandRaw'] ?? null),
-            'log_page_attrs_raw'      => SnmpDecode::bitsValue($row['smartmonNvmeLogPageAttributesRaw'] ?? null),
+            'firmware_update_raw'     => SmartSnmpDecode::intValue($row['smartmonNvmeFirmwareUpdateRaw'] ?? null),
+            'firmware_slot_count'     => SmartSnmpDecode::intValue($row['smartmonNvmeFirmwareSlotCount'] ?? null),
+            'firmware_reset_required' => SmartSnmpDecode::snmpTruthValue($row['smartmonNvmeFirmwareResetRequired'] ?? null),
+            'optional_admin_cmd_raw'  => SmartSnmpDecode::bitsValue($row['smartmonNvmeOptionalAdminCommandRaw'] ?? null),
+            'optional_nvm_cmd_raw'    => SmartSnmpDecode::bitsValue($row['smartmonNvmeOptionalNvmCommandRaw'] ?? null),
+            'log_page_attrs_raw'      => SmartSnmpDecode::bitsValue($row['smartmonNvmeLogPageAttributesRaw'] ?? null),
             'optional_admin_cmd_text' => isset($row['smartmonNvmeOptionalAdminCommandText'])
                 ? substr((string) $row['smartmonNvmeOptionalAdminCommandText'], 0, 255) : null,
             'optional_nvm_cmd_text'   => isset($row['smartmonNvmeOptionalNvmCommandText'])

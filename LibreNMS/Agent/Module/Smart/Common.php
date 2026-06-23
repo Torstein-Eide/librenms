@@ -11,8 +11,9 @@ use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Agent\Module\Smart\Support\RrdReconciler;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
-use LibreNMS\Agent\Module\Smart\Support\SnmpDecode;
+use LibreNMS\Agent\Module\Smart\Support\SnmpDecode as SmartSnmpDecode;
 use LibreNMS\Util\Debug;
+use LibreNMS\Util\SnmpDecode;
 use SnmpQuery;
 
 /**
@@ -78,7 +79,7 @@ class Common extends Application
 
     public function shouldDiscover(): bool
     {
-        $rowCount = SnmpDecode::intValue(
+        $rowCount = SmartSnmpDecode::intValue(
             SnmpQuery::mibs(self::COMMON_MIBS)->hideMib()
                 ->get('SMARTMON-COMMON-MIB::smartmonDeviceTableRowCount.0')
                 ->value('smartmonDeviceTableRowCount.0')
@@ -259,8 +260,8 @@ class Common extends Application
             $devName = $this->sensorLabel($dev, (string) $devIdx);
             foreach ($this->sensorRows[$devIdx] ?? [] as $sensorIdx => $row) {
                 // smartmonSensorType is an enum returned as a name ("celsius(3)") when MIBs load.
-                $type = SnmpDecode::intValue($row['smartmonSensorType'] ?? null);
-                $value = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorValue', self::SENSOR_SCALE_EXP);
+                $type = SmartSnmpDecode::intValue($row['smartmonSensorType'] ?? null);
+                $value = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorValue', 'smartmonSensorScale', 'smartmonSensorPrecision', self::SENSOR_SCALE_EXP);
                 if ($value === null) {
                     $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has null value, skipped');
                     continue;
@@ -275,10 +276,10 @@ class Common extends Application
                 $name = trim((string) ($row['smartmonSensorName'] ?? ''));
                 $sIdx = "{$idx}_{$prefix}_{$sensorIdx}";
                 $descr = $name !== '' ? "{$group} {$devName} {$name}" : "{$group} {$devName}";
-                $highCrit = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorHighCritical', self::SENSOR_SCALE_EXP);
-                $highWarn = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorHighWarning', self::SENSOR_SCALE_EXP);
-                $lowWarn = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorLowWarning', self::SENSOR_SCALE_EXP);
-                $lowCrit = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorLowCritical', self::SENSOR_SCALE_EXP);
+                $highCrit = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorHighCritical', 'smartmonSensorScale', 'smartmonSensorPrecision', self::SENSOR_SCALE_EXP);
+                $highWarn = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorHighWarning', 'smartmonSensorScale', 'smartmonSensorPrecision', self::SENSOR_SCALE_EXP);
+                $lowWarn = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorLowWarning', 'smartmonSensorScale', 'smartmonSensorPrecision', self::SENSOR_SCALE_EXP);
+                $lowCrit = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorLowCritical', 'smartmonSensorScale', 'smartmonSensorPrecision', self::SENSOR_SCALE_EXP);
                 // A warning threshold equal to critical gives no early notice; nudge it
                 // one notch less severe so "warning" fires before "critical".
                 if ($highCrit !== null && $highWarn !== null && $highWarn == $highCrit) {
@@ -288,7 +289,7 @@ class Common extends Application
                     $lowWarn = $lowCrit + 5;
                 }
                 // Carry the scale as divisor/multiplier so the poll can rescale the raw value.
-                $scale = SnmpDecode::sensorScaleColumns($row, self::SENSOR_SCALE_EXP);
+                $scale = SnmpDecode::sensorScaleColumns($row, 'smartmonSensorScale', 'smartmonSensorPrecision', self::SENSOR_SCALE_EXP);
                 $intendedLimits["app:smart_mib:{$sIdx}"] = [
                     'sensor_limit'          => $highCrit,
                     'sensor_limit_warn'     => $highWarn,
@@ -376,7 +377,7 @@ class Common extends Application
 
             // Generic SENSOR-MIB sensors (temperature, NVMe spare/used). Applies to all device types.
             foreach ($this->sensorRows[$snmpIndex] ?? [] as $sensorIdx => $row) {
-                $type = SnmpDecode::intValue($row['smartmonSensorType'] ?? null);
+                $type = SmartSnmpDecode::intValue($row['smartmonSensorType'] ?? null);
                 $meta = self::SENSOR_TYPE_MAP[$type] ?? null;
                 if ($meta !== null) {
                     $expected[] = "app:smart_mib:{$idx}_{$meta[2]}_{$sensorIdx}";
@@ -462,9 +463,9 @@ class Common extends Application
                 ->where('app_id', $this->context->appId)
                 ->where('snmp_index', (int) $snmpIndex)
                 ->update([
-                    'last_poll_result' => SnmpDecode::intValue($row['smartmonDeviceLastPollResult'] ?? null),
+                    'last_poll_result' => SmartSnmpDecode::intValue($row['smartmonDeviceLastPollResult'] ?? null),
                     'last_poll_time'   => SnmpDecode::parseDateAndTime($row['smartmonDeviceLastPollTime'] ?? null),
-                    'power_state'      => SnmpDecode::intValue($row['smartmonDevicePowerState'] ?? null),
+                    'power_state'      => SmartSnmpDecode::intValue($row['smartmonDevicePowerState'] ?? null),
                 ]);
         }
     }
@@ -534,8 +535,8 @@ class Common extends Application
         $values = [];
         foreach ($walked as $sensorIdx => $rawValue) {
             if ($sensor = $bySuffix[(string) $sensorIdx] ?? null) {
-                $raw = SnmpDecode::leafValue($rawValue, 'smartmonSensorValue');
-                $operStatus = SnmpDecode::intValue(SnmpDecode::leafValue($rawValue, 'smartmonSensorOperStatus'));
+                $raw = SmartSnmpDecode::leafValue($rawValue, 'smartmonSensorValue');
+                $operStatus = SmartSnmpDecode::intValue(SmartSnmpDecode::leafValue($rawValue, 'smartmonSensorOperStatus'));
                 // SmartmonSensorStatus: ok(1) = value reported; unavailable(2)/nonoperational(3) = no trustworthy reading.
                 if ($operStatus !== null && $operStatus !== 1) {
                     $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} operStatus={$operStatus} (not ok), skipped");

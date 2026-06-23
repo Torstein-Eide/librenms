@@ -9,6 +9,7 @@ use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 /**
@@ -511,12 +512,12 @@ class SmartAttributeSettingsController
 
     private function upsertThreshold(int $appId, string $diskKey, int $attributeId, array $values): void
     {
-        DB::table('smart_attribute_thresholds')->upsert([
+        DbSync::upsert('smart_attribute_thresholds', [
             'app_id' => $appId,
             'disk_key' => $diskKey,
             'attribute_id' => $attributeId,
             ...$values,
-        ], ['app_id', 'disk_key', 'attribute_id'], array_keys($values));
+        ], ['app_id', 'disk_key', 'attribute_id']);
     }
 
     /**

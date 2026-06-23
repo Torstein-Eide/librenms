@@ -4,7 +4,8 @@ namespace LibreNMS\Agent\Module\Smart;
 
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
-use LibreNMS\Agent\Module\Smart\Support\SnmpDecode;
+use LibreNMS\Agent\Module\Smart\Support\SnmpDecode as SmartSnmpDecode;
+use LibreNMS\Util\SnmpDecode;
 use SnmpQuery;
 
 /**
@@ -113,12 +114,12 @@ final class DeviceTable
                 'disk_key'             => $this->diskKey($row, (string) $index),
                 'device_name'          => $row['smartmonDeviceName'] ?? null,
                 'device_path'          => $row['smartmonDevicePath'] ?? null,
-                'device_type'          => SnmpDecode::intValue($row['smartmonDeviceType'] ?? null),
+                'device_type'          => SmartSnmpDecode::intValue($row['smartmonDeviceType'] ?? null),
                 'last_poll_time'       => $statusRow['smartmonDeviceLastPollTime'] ?? null,
-                'last_poll_result'     => SnmpDecode::intValue($statusRow['smartmonDeviceLastPollResult'] ?? null),
-                'last_poll_exit_status'=> SnmpDecode::intValue($statusRow['smartmonDeviceLastPollExitStatus'] ?? null),
-                'power_state'          => SnmpDecode::intValue($statusRow['smartmonDevicePowerState'] ?? null),
-                'physical_index'       => SnmpDecode::intValue($row['smartmonDevicePhysicalIndex'] ?? null),
+                'last_poll_result'     => SmartSnmpDecode::intValue($statusRow['smartmonDeviceLastPollResult'] ?? null),
+                'last_poll_exit_status'=> SmartSnmpDecode::intValue($statusRow['smartmonDeviceLastPollExitStatus'] ?? null),
+                'power_state'          => SmartSnmpDecode::intValue($statusRow['smartmonDevicePowerState'] ?? null),
+                'physical_index'       => SmartSnmpDecode::intValue($row['smartmonDevicePhysicalIndex'] ?? null),
                 'uris'                 => $row['smartmonDeviceUris'] ?? null,
                 'model_family'         => $row['smartmonDeviceModelFamily'] ?? null,
                 'model_name'           => $row['smartmonDeviceModelName'] ?? null,
