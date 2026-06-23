@@ -60,7 +60,7 @@ function debug_collapse_div(string $id, string ...$panels): void
  *
  * @param  string    $id      HTML id for the collapse target (must be unique on page)
  * @param  string    $label   Button label text
- * @param  string  ...$panels  HTML strings — each already a complete panel block
+ * @param  string  ...$panels  HTML strings, each already a complete panel block
  */
 function debug_collapsible(string $id, string $label, string ...$panels): void
 {
@@ -77,7 +77,7 @@ function debug_collapsible(string $id, string $label, string ...$panels): void
 /**
  * Return one Bootstrap panel as an HTML string.
  *
- * @param  string  $title    Panel heading text (not escaped — caller must escape if needed)
+ * @param  string  $title    Panel heading text (not escaped; caller must escape if needed)
  * @param  string  $body     Panel body HTML
  * @param  string  $toolbar  Optional HTML prepended inside the body (e.g. copy/export buttons)
  */
@@ -156,9 +156,9 @@ function debug_csv_data_uri(array $headers, array $rows): string
  * Return the last recorded data point from an RRD file, or null if unavailable.
  *
  * @param  string  $rrdFile  Absolute path to the RRD file
- * @return \LibreNMS\Data\Store\TimeSeriesPoint|null
+ * @return LibreNMS\Data\Store\TimeSeriesPoint|null
  */
-function debug_rrd_last_point(string $rrdFile): ?\LibreNMS\Data\Store\TimeSeriesPoint
+function debug_rrd_last_point(string $rrdFile): ?LibreNMS\Data\Store\TimeSeriesPoint
 {
     try {
         return App\Facades\Rrd::lastUpdate($rrdFile);
@@ -173,7 +173,7 @@ function debug_rrd_last_point(string $rrdFile): ?\LibreNMS\Data\Store\TimeSeries
  * Column headers are derived from the keys of the first row.
  * Optionally adds an Export CSV toolbar button when $csvFilename is provided.
  *
- * @param  string         $title        Panel heading text (not HTML-escaped — caller escapes if needed)
+ * @param  string         $title        Panel heading text (not HTML-escaped; caller escapes if needed)
  * @param  iterable       $rows         Array/Collection of flat associative arrays; values cast to string
  * @param  string|null    $csvFilename  When set, adds a CSV download button with this filename
  */

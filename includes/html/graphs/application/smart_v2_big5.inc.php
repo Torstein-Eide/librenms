@@ -1,6 +1,6 @@
 <?php
 
-// V2 reliability attributes graph — reads from smart (ATA attributes) RRD
+// V2 reliability attributes graph. Reads from smart (ATA attributes) RRD
 // Covers the "Big 5" SMART attributes that indicate impending failure.
 // $vars['disk'] is the pre-computed diskIndex (safe chars only, max 80), set by renderDriveGraphs()
 
@@ -20,7 +20,7 @@ $transparency = 15;
 $rrd_list = [];
 if (Rrd::checkRrdExists($rrd_filename)) {
     // Each disk's RRD only carries DS for the attribute IDs that disk actually
-    // reports — listDatasets() reads the file header directly, so a disk
+    // reports. listDatasets() reads the file header directly, so a disk
     // missing one of these "Big 5" attributes is skipped instead of failing
     // the graph with an "unknown DS" error.
     $availableDs = Rrd::listDatasets($rrd_filename);

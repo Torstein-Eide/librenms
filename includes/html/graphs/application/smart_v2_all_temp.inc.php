@@ -16,8 +16,8 @@ $addarea = 1;
 $transparency = 15;
 
 // MIB-driven disks can report several temperature sensors (composite + a
-// per-zone sensor each), but this overview graph shows one line per drive —
-// use the same canonical per-disk sensor (HtmlData::temperatureSensor()) as
+// per-zone sensor each), but this overview graph shows one line per drive.
+// It uses the same canonical per-disk sensor (HtmlData::temperatureSensor()) as
 // the per-disk table/view, relabeled per the saved naming template / label
 // mode. Legacy rev1 "smart_temperature" sensors have no disk_key to map to,
 // so they keep falling back to their stored sensor_descr.

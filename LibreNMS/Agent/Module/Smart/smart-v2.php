@@ -9,7 +9,7 @@ use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
 
 /**
- * SMART agent module — payload version 2+.
+ * SMART agent module. Payload version 2+.
  *
  * Moved verbatim from LibreNMS/Agent/Module/smart.php.
  * Only structural changes to fit the Application base class:
@@ -349,7 +349,7 @@ class SmartV2 extends Application
      *
      * ATA disks: one RRD per disk (`smart`) with DS names `id{N}` built
      * dynamically from whatever attribute IDs the disk reports. DS names are
-     * stable — new IDs added in a later poll won't appear (RRD is fixed at
+     * stable. New IDs added in a later poll won't appear (RRD is fixed at
      * creation time), but missing IDs are stored as U (unknown).
      *
      * NVMe disks: one RRD per disk (`smart_nvme`) with fixed DS names for
@@ -493,7 +493,7 @@ class SmartV2 extends Application
             $this->updateNumericSensor($device, $sensor, $value);
         }
 
-        // Health (state — boolean cast)
+        // Health (state, boolean cast)
         if ($sensor = $sensors->get("{$idx}_health")) {
             $value = isset($disk['health']['smart_passed'])
                 ? ($disk['health']['smart_passed'] ? 0 : 1)
@@ -573,7 +573,7 @@ class SmartV2 extends Application
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    /** Stable sensor index from MODEL+SERIAL key — safe chars only, max 80 */
+    /** Stable sensor index from MODEL+SERIAL key. Safe chars only, max 80 */
     private function diskIndex(string $key): string
     {
         return substr(preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
@@ -658,7 +658,7 @@ class SmartV2 extends Application
      */
     private function extractWear(array $disk): ?float
     {
-        // NVMe — log is at disk top level, not under health
+        // NVMe: log is at disk top level, not under health
         $nvmeUsed = $disk['stats']['nvme_smart_health_information_log']['percentage_used'] ?? null;
         if ($nvmeUsed !== null) {
             return (float) (100 - $nvmeUsed);

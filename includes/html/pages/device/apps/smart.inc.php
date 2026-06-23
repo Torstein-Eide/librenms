@@ -32,7 +32,7 @@ function smart_debug_rrd_entries(HtmlData $data): array
         $isNvme = $data->isNvme($disk);
 
         // The poller only ever writes ['app','smart',...] for ATA/SATA disks and
-        // ['app','smart_nvme',...] for NVMe disks — never both — so pick the kind
+        // ['app','smart_nvme',...] for NVMe disks, never both. Pick the kind
         // that actually matches this disk.
         foreach ([
             ($isNvme ? 'nvme_health' : 'attributes') => ['app', $isNvme ? 'smart_nvme' : 'smart', $appId, $idx],
@@ -91,7 +91,7 @@ function smart_debug_db_panels(HtmlData $data, ?string $selectedDisk): array
     $panels[] = $wrap('common', debug_db_table_panel('smart_app_state', $appState, "smart_app_state-{$appId}.csv"));
 
     // smart_sata_change is keyed by device_idx (the smartmonDeviceTable SNMP index),
-    // not disk_key — resolve it via smart_devices.snmp_index for the selected disk.
+    // not disk_key. Resolve it via smart_devices.snmp_index for the selected disk.
     $changeQuery = DB::table('smart_sata_change')->where('app_id', $appId);
     if ($diskKey !== null) {
         $snmpIndex = DB::table('smart_devices')->where('app_id', $appId)->where('disk_key', $diskKey)->value('snmp_index');
@@ -101,7 +101,7 @@ function smart_debug_db_panels(HtmlData $data, ?string $selectedDisk): array
     $panels[] = $wrap('sata', debug_db_table_panel('smart_sata_change', $changes, "smart_sata_change-{$appId}.csv"));
 
     // smart_attribute_thresholds rows are keyed by (app_id, disk_key, attribute_id), but
-    // a global-default row always has app_id=0/disk_key='' (not this app's app_id) — so
+    // a global-default row always has app_id=0/disk_key='' (not this app's app_id), so
     // it must be pulled in via an explicit OR rather than the plain app_id filter below.
     $thresholdQuery = DB::table('smart_attribute_thresholds')
         ->where(function ($q) use ($appId, $diskKey) {

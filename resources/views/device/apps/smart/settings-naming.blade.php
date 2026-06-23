@@ -64,7 +64,7 @@
                                data-update-url="{{ route('device.apps.smart.settings.naming_template', $device) }}"
                                placeholder="$device"
                                value="{{ $namingTemplate }}">
-                        <p class="text-muted" style="margin:4px 0 0">{{ __('Saved here, but used as the fallback on every device\'s SMART app — not just this one.') }}</p>
+                        <p class="text-muted" style="margin:4px 0 0">{{ __('Saved here, but used as the fallback on every device\'s SMART app, not just this one.') }}</p>
                         <div class="text-muted smart-naming-preview" data-disk_key="" style="margin-top:4px"></div>
                     </div>
 

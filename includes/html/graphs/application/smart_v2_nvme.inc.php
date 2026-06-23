@@ -1,6 +1,6 @@
 <?php
 
-// V2 NVMe health log graph — generic multi-metric fallback / "all" dashboard.
+// V2 NVMe health log graph. Generic multi-metric fallback / "all" dashboard.
 // Dedicated single-metric files exist for each named metric group:
 //   smart_v2_nvme_ctrl_busy, smart_v2_nvme_temp_time, smart_v2_nvme_data_units,
 //   smart_v2_nvme_host_io, smart_v2_nvme_errors, smart_v2_nvme_pwr_hours,

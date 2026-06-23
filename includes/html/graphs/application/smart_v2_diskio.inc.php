@@ -16,7 +16,7 @@ if ($diskIdx === '') {
     throw new RrdGraphException('Missing disk');
 }
 
-// Mirrors LibreNMS\Agent\Module\Smart\Common::mibDiskIndex() — the disk_key is
+// Mirrors LibreNMS\Agent\Module\Smart\Common::mibDiskIndex(). The disk_key is
 // sanitized into the same safe-character index used everywhere else in the app.
 $mibDiskIndex = static fn (string $key): string => substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
 

@@ -42,6 +42,7 @@ use LibreNMS\RRD\RrdProcess;
 use LibreNMS\Util\Debug;
 use LibreNMS\Util\Rewrite;
 use SimpleXMLElement;
+use Symfony\Component\Process\Exception\RuntimeException as ProcessRuntimeException;
 use Symfony\Component\Process\Process;
 
 class Rrd extends BaseDatastore
@@ -183,7 +184,7 @@ class Rrd extends BaseDatastore
 
         // Values may be plain numbers, scientific notation (1.23e+05), or the
         // non-numeric tokens rrdtool emits (U, nan, -nan), so accept word chars
-        // plus . + - in the value group — not just [\d.-].
+        // plus . + - in the value group, not just [\d.-].
         if (preg_match('/((?: \w+)+)\n\n(\d+):((?: [\w.+-]+)+)\nOK/', $output, $matches)) {
             $data = array_combine(
                 explode(' ', ltrim($matches[1])),
@@ -211,7 +212,7 @@ class Rrd extends BaseDatastore
         // Proc pipe uses non-blocking reads and stream_select returns as soon as any
         // data arrives, so large info output is often truncated. A dedicated subprocess
         // blocks until rrdtool exits and all output is available. Bypassing rrdcached
-        // here is intentional — DS structure lives in the file header, not the write
+        // here is intentional. DS structure lives in the file header, not the write
         // buffer, so reading directly always returns the current on-disk structure.
         $process = new Process([$this->rrdtool_executable, 'info', $filename]);
         $process->setTimeout(10);
@@ -418,7 +419,7 @@ class Rrd extends BaseDatastore
      *
      * For a COUNTER-type dataset, rrdtool auto-derives the stored counter to a
      * per-second rate of change on read, so the returned value is already a
-     * rate (changes/second) — callers multiply by 3600 for changes/hour. For a
+     * rate (changes/second); callers multiply by 3600 for changes/hour. For a
      * GAUGE-type dataset this is simply the average value over the window, not
      * a rate; callers wanting a rate of change for a GAUGE should difference
      * two narrow boundary calls instead.
@@ -428,7 +429,7 @@ class Rrd extends BaseDatastore
      * @param  int  $start  Unix timestamp, window start
      * @param  int  $end  Unix timestamp, window end
      * @return array<string, float>|null null means the rrdtool call itself failed
-     *         (timeout, process error) — distinct from an empty array, which means
+     *         (timeout, process error). This is distinct from an empty array, which means
      *         the call succeeded but had no data for any requested dataset. Callers
      *         should not treat the two the same: a hard failure shouldn't be used to
      *         overwrite previously-persisted values with "no data".
@@ -499,7 +500,13 @@ class Rrd extends BaseDatastore
 
         try {
             $output = app(RrdProcess::class, ['timeout' => 15])->run('xport ' . implode(' ', $options), '</xport>');
-        } catch (RrdException) {
+        } catch (RrdException|ProcessRuntimeException $e) {
+            // Catches both rrdtool-reported errors (RrdException) and Symfony Process
+            // failures: timeout, signal, failed start (ProcessRuntimeException and its
+            // subclasses). A slow/unavailable rrdtool degrades to "no rate this
+            // window" like any other fetch failure, instead of throwing out of discovery.
+            Log::error('RRD[xport failed for ' . $filename . ']: ' . $e::class . ': ' . $e->getMessage());
+
             return null;
         }
 
@@ -810,7 +817,7 @@ class Rrd extends BaseDatastore
             return false;
         }
 
-        // Atomic replace — both files are on the same filesystem.
+        // Atomic replace. Both files are on the same filesystem.
         if (! rename($tmpRrd, $filename)) {
             @unlink($tmpRrd);
 

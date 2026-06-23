@@ -1,6 +1,6 @@
 <?php
 
-// NVMe host read/write command counts — DERIVE rate (commands/s).
+// NVMe host read/write command counts, DERIVE rate (commands/s).
 // Reads above axis (green), writes below axis (blue).
 // Follows the same pattern as generic_multi_bits_separated but with correct units.
 
@@ -36,7 +36,7 @@ if ($width > 1500) {
     $descr_len = 8 + min(20, (int) round(($width - 260) / 9.5));
 }
 
-$colour_in  = 'ffa420';
+$colour_in = 'ffa420';
 $colour_out = '9b59b6';
 
 if ($width > 500) {
@@ -51,11 +51,11 @@ if ($width > 500) {
     $rrd_options[] = sprintf("COMMENT:%10s\l", 'Max');
 }
 
-$descr_rd = RrdStore::fixedSafeDescr('Read',  $descr_len) . '  In';
+$descr_rd = RrdStore::fixedSafeDescr('Read', $descr_len) . '  In';
 $descr_wr = RrdStore::fixedSafeDescr('Write', $descr_len) . ' Out';
 
 if ($hasRd) {
-    $rrd_options[] = 'DEF:in0='  . $rrd_filename . ':host_rd:AVERAGE';
+    $rrd_options[] = 'DEF:in0=' . $rrd_filename . ':host_rd:AVERAGE';
     $rrd_options[] = 'CDEF:inB0=in0,1,*';
     $rrd_options[] = 'AREA:inB0#' . $colour_in . $stacked['transparency'] . ':' . $descr_rd;
     $rrd_options[] = 'GPRINT:inB0:LAST:%6.2lf%s';

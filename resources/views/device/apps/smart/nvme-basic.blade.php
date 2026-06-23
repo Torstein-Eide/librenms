@@ -99,7 +99,7 @@
             $duOverlibArray['width'] = 210;
             $duOverlib = generate_overlib_content($duOverlibArray, $device['hostname'] . ' - LBAs Written/Read');
 
-            // Current rate (LBA/s + B/s) from the last RRD interval — 1 NVMe data unit = 512 000 B.
+            // Current rate (LBA/s + B/s) from the last RRD interval. 1 NVMe data unit = 512 000 B.
             $du = 512000;
             $duRrdFile = \App\Facades\Rrd::name($device['hostname'], ['app', 'smart_nvme', $data->app->app_id, $disk['idx']]);
             $duRates   = \App\Facades\Rrd::getLastRates($duRrdFile, ['du_rd', 'du_wr']);

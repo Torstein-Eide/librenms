@@ -26,7 +26,7 @@ use LibreNMS\Util\Number;
  */
 class HtmlData
 {
-    private const CACHE_TTL = 300; // seconds (5 min — matches default poll interval)
+    private const CACHE_TTL = 300; // seconds (5 min, matches default poll interval)
 
     /** SATA device protocol_type values (SmartmonDeviceType: ata=1, sat=2). */
     private const SATA_TYPES = [1, 2];
@@ -75,7 +75,7 @@ class HtmlData
     private array $ouiVendorCache = [];
 
     /**
-     * Sentinel app_id for the global naming-template default — shared across
+     * Sentinel app_id for the global naming-template default. Shared across
      * every device, same convention as smart_attribute_thresholds' app_id=0
      * global-default row.
      */
@@ -179,7 +179,7 @@ class HtmlData
         return $name !== '' ? $name : $diskKey;
     }
 
-    /** Stable sensor/RRD index for a disk key — must match Common::mibDiskIndex(). */
+    /** Stable sensor/RRD index for a disk key. Must match Common::mibDiskIndex(). */
     public function diskIndex(string $diskKey): string
     {
         return substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $diskKey), 0, 80);
@@ -747,7 +747,7 @@ class HtmlData
     /**
      * Estimated total service life in years, extrapolated from wear consumed so far
      * against power-on age (assumes a constant wear rate). SATA is gated to attribute
-     * 177 "Wear_Leveling_Count" specifically — its normalised value (100 = new, falling
+     * 177 "Wear_Leveling_Count" specifically. Its normalised value (100 = new, falling
      * to the failure threshold as the drive wears) is a reliable remaining-life percentage,
      * unlike some of the other vendor-specific wear attributes. NVMe uses the
      * spec-defined "Percentage Used" sensor directly. Returns null when the required
@@ -850,7 +850,7 @@ class HtmlData
      * Distinct (ATA attribute ID, name) pairs across all disks, for the overview
      * multi-disk attribute graphs. Numbered SMART attributes above the
      * standardized "Big 5" are vendor-defined, so the same numeric ID can mean
-     * a different counter on different disk vendors/models — these are kept as
+     * a different counter on different disk vendors/models. These are kept as
      * separate entries (rather than deduped by ID alone) so they're never
      * graphed together as if they were the same metric. `raw_name` is the
      * exact smart_sata_attributes.name value (e.g. "Raw_Read_Error_Rate"),
@@ -926,7 +926,7 @@ class HtmlData
         );
 
         if (empty($rates)) {
-            // No rate history yet (e.g. just discovered) — fall back to the legacy name list.
+            // No rate history yet (e.g. just discovered). Fall back to the legacy name list.
             return in_array($attr['name'] ?? null, self::LEGACY_PERSEC_COUNTER_NAMES, true) ? 'second' : 'hour';
         }
 
@@ -1003,8 +1003,8 @@ class HtmlData
         }
 
         // Number::formatSi() inserts a space before the unit (e.g. "433.7 M"),
-        // which would recreate the exact ambiguity this method exists to avoid
-        // — stripped here so the SI suffix abuts the number with no space.
+        // which would recreate the exact ambiguity this method exists to avoid.
+        // That space is stripped here so the SI suffix abuts the number with no space.
         return preg_replace_callback(
             '/\d{4,}/',
             static fn ($m) => str_replace(' ', '', Number::formatSi((float) $m[0], 1, 0, '')),
@@ -1064,7 +1064,7 @@ class HtmlData
      * Which DS actually exist for a given attribute (plain id{N}/id{N}Normalized,
      * vs. the multi-part/div sub-DS variants) is decided by the graph itself
      * (smart_v2_attr_value.inc.php, via Rrd::listDatasets()) at render time, not
-     * here — this only carries the DB-sourced display/threshold context.
+     * here. This method only carries the DB-sourced display/threshold context.
      *
      * @return array<int, array{id:int, name:string, raw_name:string, title:string, header:string, thresh:?float, rate_unit:?string}>
      */
@@ -1076,7 +1076,7 @@ class HtmlData
         }
 
         // Attribute list is sourced from the discovered DB rows, not the RRD's
-        // dataset list — so a graph appears as soon as an attribute is known,
+        // dataset list, so a graph appears as soon as an attribute is known,
         // independent of RRD readback.
         $specs = [];
         foreach ($disk['attributes'] as $attr) {

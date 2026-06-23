@@ -1,4 +1,4 @@
-{{-- SATA/SAS per-disk "Self-test" view — self-test log, selective spans, offline --}}
+{{-- SATA/SAS per-disk "Self-test" view: self-test log, selective spans, offline --}}
 {{-- data collection and the related capabilities. Inherits closures ($panelStart, --}}
 {{-- $panelEnd, $tableRow, $tooltipForLabel, $labelWithTooltip, $formatHoursAgo, --}}
 {{-- $stateBadge) and $data, $device, $selectedDisk, $smartUrl from smart.blade.php. --}}
@@ -12,7 +12,7 @@
     $healthSensor = $data->healthSensor($selectedDisk);
     $healthBadge  = $stateBadge($healthSensor, 'SMART overall-health self-assessment test result.');
 
-    // Self-test panel badge (running / passed / failed) — mirrors the other views.
+    // Self-test panel badge (running / passed / failed). Mirrors the other views.
     $execRaw   = $health['selftest_exec_status_raw'] ?? null;
     $remaining = $health['selftest_remaining_pct'] ?? null;
     if ((int) $execRaw === 15 || (is_numeric($remaining) && (int) $remaining > 0)) {

@@ -1,6 +1,6 @@
 <?php
 
-// V2 self-test age graph — hours since last Short and Extended self-tests.
+// V2 self-test age graph. Hours since last Short and Extended self-tests.
 // Modelled on includes/html/graphs/sensor/runtime.inc.php.
 // Reads from sensor RRDs written by the smart poller (not app RRDs).
 // $vars['disk'] is the pre-computed diskIndex, set by renderDriveGraphs().

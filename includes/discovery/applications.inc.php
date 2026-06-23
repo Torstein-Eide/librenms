@@ -111,7 +111,7 @@ DeviceCache::getPrimary()->applications()->whereIn('app_type', $apps_to_remove)-
 // clean application_metrics
 ApplicationMetric::doesntHave('app')->delete();
 
-// Per-app OOP discovery — OS class defines which handlers exist
+// Per-app OOP discovery. OS class defines which handlers exist
 // json_app_get() and update_application() live in polling/functions.inc.php;
 // load it here since discovery does not include it by default.
 include_once base_path('includes/polling/functions.inc.php');

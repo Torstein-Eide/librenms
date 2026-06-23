@@ -7,6 +7,7 @@ use App\Models\Device;
 use App\Models\Sensor;
 use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Agent\Application;
 use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
@@ -193,7 +194,7 @@ class Common extends Application
         $hasRows = DB::table('smart_devices')
             ->where('app_id', $this->app->app_id)
             ->exists();
-        $this->vlog('shouldDiscover: OID empty/unresponsive, DB ' . ($hasRows ? 'non-empty — run for cleanup' : 'empty — skip'));
+        $this->vlog('shouldDiscover: OID empty/unresponsive, DB ' . ($hasRows ? 'non-empty, running for cleanup' : 'empty, skipping'));
 
         return $hasRows;
     }
@@ -283,7 +284,7 @@ class Common extends Application
         // Type: NVMe
         $this->discoverNvme();
 
-        // Type: SAS — future (not yet implemented)
+        // Type: SAS. Not yet implemented.
         // $this->discoverSas();
 
         // SENSOR-MIB sensors: register for every discovered device.
@@ -303,12 +304,12 @@ class Common extends Application
                 $type = $this->intValue($row['smartmonSensorType'] ?? null);
                 $value = $this->applySensorScaleCol($row, 'smartmonSensorValue');
                 if ($value === null) {
-                    $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has null value — skipped');
+                    $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has null value, skipped');
                     continue;
                 }
                 $meta = self::SENSOR_TYPE_MAP[$type] ?? null;
                 if ($meta === null) {
-                    $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has no SENSOR_TYPE_MAP entry — skipped');
+                    $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has no SENSOR_TYPE_MAP entry, skipped');
                     continue;
                 }
                 $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type={$type} ({$meta[0]}) value={$value}");
@@ -374,7 +375,7 @@ class Common extends Application
         $this->sataDeviceList = $this->sataDevices();
         $this->vlog('discoverSata: ' . count($this->sataDeviceList) . ' SATA device(s) found');
 
-        // Info table: sync unconditionally — static identity data not tracked in change table.
+        // Info table: sync unconditionally. Static identity data is not tracked in the change table.
         $this->walkAndSyncSataTable('smartmonSataInfoTable', 1, null, [$this, 'syncSataInfoRow']);
 
         // Tables needed for sensor discovery (always fetched).
@@ -515,8 +516,8 @@ class Common extends Application
      * Register the "Last Short/Long Test" age sensors (runtime class) for each
      * device in $deviceList. Runs after the self-test log table has been
      * synced so the age is computed from the current cycle's data. Only
-     * creates a sensor when a matching log entry with power-on hours exists —
-     * not all devices (especially NVMe) implement the self-test log.
+     * creates a sensor when a matching log entry with power-on hours exists.
+     * Not all devices (especially NVMe) implement the self-test log.
      *
      * @param  array<int|string, array{disk_key: string, snmp_index: string}>  $deviceList
      */
@@ -603,7 +604,7 @@ class Common extends Application
         foreach ($this->commonDevices ?? [] as $snmpIndex => $dev) {
             $idx = $this->mibDiskIndex($dev['disk_key']);
 
-            // Generic SENSOR-MIB sensors (temperature, NVMe spare/used) — all device types.
+            // Generic SENSOR-MIB sensors (temperature, NVMe spare/used). Applies to all device types.
             foreach ($this->sensorRows[$snmpIndex] ?? [] as $sensorIdx => $row) {
                 $type = $this->intValue($row['smartmonSensorType'] ?? null);
                 $meta = self::SENSOR_TYPE_MAP[$type] ?? null;
@@ -643,7 +644,7 @@ class Common extends Application
      * Covers two cases with one pass:
      *  - a single drive removed while SNMP is healthy (prune by disk_key), and
      *  - the device-table OID gone empty/unresponsive (commonDevices is empty,
-     *    so every row for this app is deleted — the full-wipe path).
+     *    so every row for this app is deleted; this is the full-wipe path).
      */
     private function cleanupStaleDevices(): void
     {
@@ -708,7 +709,7 @@ class Common extends Application
     {
         $this->sataDeviceList = $this->sataDevicesFromDb();
 
-        // Table: Health (change-guarded; DB sync — sensors updated below)
+        // Table: Health (change-guarded; DB sync; sensors updated below)
         $this->walkAndSyncSataTable('smartmonSataHealthTable', 1, self::SATA_TID_HEALTH, [$this, 'syncSataHealthRow']);
 
         // Table: Attributes (change-guarded; limited columns for DB sync + RRD)
@@ -744,7 +745,7 @@ class Common extends Application
         $idx = $this->mibDiskIndex($diskKey);
         $values = [];
 
-        // Health state sensor — synthesized from DB
+        // Health state sensor, synthesized from DB
         $health = $this->synthesizeHealthFromDb($diskKey);
         if ($health !== null) {
             $values["{$idx}_health"] = (float) $health;
@@ -774,7 +775,7 @@ class Common extends Application
      * and DB row for every SATA device, every poll.
      *
      * Both the RRD (a time-series) and the displayed raw/normalized values must
-     * refresh each interval, so neither is change-gated here — the
+     * refresh each interval, so neither is change-gated here. The
      * smartSATAChange stamp is unreliable for the frequently-incrementing
      * attribute values.
      */
@@ -845,7 +846,7 @@ class Common extends Application
             ->table(2);
 
         $this->vlog('pollSensorValues: walked smartmonSensorValue/OperStatus for device idx(es) ['
-            . implode(', ', array_keys($sensorValues)) . '] — '
+            . implode(', ', array_keys($sensorValues)) . ']; '
             . count($this->sataDeviceList) . ' SATA / ' . count($this->nvmeDeviceList) . ' NVMe device(s) to update');
 
         foreach ($this->sataDeviceList as $devIdx => $dev) {
@@ -876,11 +877,11 @@ class Common extends Application
         }
 
         $walked = $sensorValues[$devIdx] ?? [];
-        $this->vlog("matchSensorMibValues: idx={$idx} devIdx={$devIdx} — "
+        $this->vlog("matchSensorMibValues: idx={$idx} devIdx={$devIdx}; "
             . count($sensors) . ' DB sensor(s), suffix key(s) [' . implode(', ', array_keys($bySuffix)) . '], '
             . 'walked sub-index(es) [' . implode(', ', array_keys($walked)) . ']');
         if ($walked === []) {
-            $this->vlog("matchSensorMibValues: no walked values for devIdx={$devIdx} (key mismatch?) — sensors left unchanged");
+            $this->vlog("matchSensorMibValues: no walked values for devIdx={$devIdx} (key mismatch?), sensors left unchanged");
         }
 
         // Collect raw values keyed by sensor_index, then let updateSensorValues()
@@ -892,7 +893,7 @@ class Common extends Application
                 $operStatus = $this->intValue($this->leafValue($rawValue, 'smartmonSensorOperStatus'));
                 // SmartmonSensorStatus: ok(1) = value reported; unavailable(2)/nonoperational(3) = no trustworthy reading.
                 if ($operStatus !== null && $operStatus !== 1) {
-                    $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} operStatus={$operStatus} (not ok) — skipped");
+                    $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} operStatus={$operStatus} (not ok), skipped");
                     continue;
                 }
                 if (is_numeric($raw)) {
@@ -901,7 +902,7 @@ class Common extends Application
                 $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} raw="
                     . var_export($raw, true) . ' operStatus=' . var_export($operStatus, true));
             } else {
-                $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} has no matching DB sensor — skipped");
+                $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} has no matching DB sensor, skipped");
             }
         }
 
@@ -1348,7 +1349,7 @@ class Common extends Application
         $idx = $this->mibDiskIndex($diskKey);
         $values = [];
 
-        // Merged health state — overall status + critical warning stored at poll time.
+        // Merged health state: overall status plus critical warning, stored at poll time.
         $row = DB::table('smart_nvme_health')
             ->where('app_id', $this->appId)
             ->where('disk_key', $diskKey)
@@ -1493,8 +1494,8 @@ class Common extends Application
     /**
      * Collapse device-table entries that describe the same physical drive.
      *
-     * A drive enumerated via two transports can appear twice — e.g. one path
-     * reports a WWN and the other only a serial — yielding two different
+     * A drive enumerated via two transports can appear twice. For example, one
+     * path reports a WWN and the other only a serial, yielding two different
      * disk_keys. Entries sharing any non-empty WWN or serial are treated as one
      * logical drive; the most complete entry (WWN-bearing, then lowest
      * snmp_index) is kept as canonical and the rest are dropped so only a single
@@ -1532,7 +1533,7 @@ class Common extends Application
                 }
             }
             if ($canonical !== null) {
-                $this->vlog("dedupeCommonDevices: snmp_index={$idx} (disk_key={$dev['disk_key']}) is a duplicate of snmp_index={$canonical} — dropped");
+                $this->vlog("dedupeCommonDevices: snmp_index={$idx} (disk_key={$dev['disk_key']}) is a duplicate of snmp_index={$canonical}, dropped");
                 continue;
             }
             foreach ($identities as $id) {
@@ -1885,7 +1886,7 @@ class Common extends Application
         $thresholdRows = $this->loadThresholdRows($diskKey);
 
         // A window whose rrdtool fetch failed outright (timeout, process error) keeps
-        // whatever rate was last persisted for it instead of being nulled out — a
+        // whatever rate was last persisted for it instead of being nulled out. A
         // transient fetch failure must not be indistinguishable from "no data".
         $previousRates = $failedWindows !== []
             ? DB::table('smart_sata_attributes')
@@ -1929,7 +1930,7 @@ class Common extends Application
      * Average change per hour, per RRD dataset, for every lookback window.
      *
      * Every dataset for a given window is fetched in ONE batched rrdtool call
-     * (Rrd::getWindowAverages() takes the whole dataset list) — each call
+     * (Rrd::getWindowAverages() takes the whole dataset list). Each call
      * spawns a separate rrdtool subprocess, so this is 4 calls for all COUNTER
      * datasets plus 8 for all GAUGE datasets (2 boundary probes x 4 windows),
      * regardless of how many SMART attributes the disk has. Looping a single
@@ -1955,7 +1956,7 @@ class Common extends Application
                 $counterRates = $rrd->getWindowAverages($filename, $counterDs, $start, $now);
                 if ($counterRates === null) {
                     $failedWindows[$suffix] = true;
-                    $this->vlog("fetchAttributeRates: counter fetch FAILED for window={$suffix} file={$filename} — keeping previously persisted rates for this window");
+                    Log::error("smart_mib: fetchAttributeRates: counter fetch FAILED for window={$suffix} file={$filename}, keeping previously persisted rates for this window");
                 } else {
                     foreach ($counterRates as $ds => $perSecond) {
                         $ratesByDs[$ds][$suffix] = $perSecond * 3600;
@@ -1968,7 +1969,7 @@ class Common extends Application
                 $endVals = $rrd->getWindowAverages($filename, $gaugeDs, max($now - $probe, $start), $now);
                 if ($startVals === null || $endVals === null) {
                     $failedWindows[$suffix] = true;
-                    $this->vlog("fetchAttributeRates: gauge fetch FAILED for window={$suffix} file={$filename} — keeping previously persisted rates for this window");
+                    Log::error("smart_mib: fetchAttributeRates: gauge fetch FAILED for window={$suffix} file={$filename}, keeping previously persisted rates for this window");
                 } else {
                     foreach ($gaugeDs as $ds) {
                         if (isset($startVals[$ds], $endVals[$ds])) {
@@ -1993,8 +1994,8 @@ class Common extends Application
     /**
      * Fold rate_status into the displayed `status`: a rate-of-change breach (rate_status=2)
      * escalates status to 3 (failedInPast) even if the device itself reports the attribute
-     * fine, and a device-reported notRelevant(-1) — meaning the disk has no failure threshold
-     * for this attribute — is treated as ok(1) once a rate-of-change threshold is enabled and
+     * fine. A device-reported notRelevant(-1), meaning the disk has no failure threshold
+     * for this attribute, is treated as ok(1) once a rate-of-change threshold is enabled and
      * not breached, since the rate threshold then stands in for the missing device one.
      */
     private function combineStatus(?int $rawStatus, int $rateStatus): ?int
@@ -2036,7 +2037,7 @@ class Common extends Application
      * Every smart_attribute_thresholds row that can apply to this disk: its own per-disk
      * overrides plus every global-default row (app_id=0, disk_key=''). Fetched once per
      * disk so effectiveLimits() can look up a given attribute_id in memory rather than
-     * re-querying per attribute — this runs in the poller hot path.
+     * re-querying per attribute. This runs in the poller hot path.
      */
     private function loadThresholdRows(string $diskKey): \Illuminate\Support\Collection
     {
@@ -2074,7 +2075,7 @@ class Common extends Application
     }
 
     /**
-     * A configured warn_rate_* limit, or null if unset/0 — 0 means "no limit" (disabled),
+     * A configured warn_rate_* limit, or null if unset/0. 0 means "no limit" (disabled),
      * not "warn on any change", so it must not be treated as an active threshold.
      */
     private function thresholdLimit(object $threshold, string $column): ?float
@@ -2815,7 +2816,7 @@ class Common extends Application
      *   3. Mark the device as migrated so this runs only once.
      *
      * Note: the separate V1 smart_id9 / smart_id232 / smart_maxtemp files are
-     * intentionally left untouched — they will simply stop being updated and
+     * intentionally left untouched. They will simply stop being updated and
      * age out of RRD naturally.
      */
     private function migrateV1Rrds(): void
@@ -2865,8 +2866,8 @@ class Common extends Application
     /**
      * Reconcile an existing RRD file's datasets against a statically defined
      * set, adding whatever's missing. Used at discovery time to retrofit new
-     * DS onto RRD files created by an older version of this module — e.g.
-     * power_state didn't exist as a DS before this was added, so disks
+     * DS onto RRD files created by an older version of this module. For
+     * example, power_state didn't exist as a DS before this was added, so disks
      * polled by a prior version have files missing it.
      *
      * Skipped if the file doesn't exist yet: a brand-new device gets every
@@ -3189,7 +3190,7 @@ class Common extends Application
      * Synthesize the 1–5 health value from a discovery-time health row + attribute rows.
      *
      * rate_status isn't known yet for this discovery cycle (syncSataAttributeRates(),
-     * which computes it from a fresh RRD fetch, runs later in the same disk loop) — so
+     * which computes it from a fresh RRD fetch, runs later in the same disk loop). So
      * this reads the rate_status persisted by the previous discovery/poll instead, same
      * as synthesizeHealthFromDb() does for the ongoing poll path.
      */
@@ -3415,7 +3416,7 @@ class Common extends Application
             return null;
         }
 
-        // Named bits carry the bit number in parentheses — use them directly.
+        // Named bits carry the bit number in parentheses. Use them directly.
         if (preg_match_all('/\((\d+)\)/', $str, $m)) {
             $mask = 0;
             foreach ($m[1] as $bit) {
@@ -3454,11 +3455,11 @@ class Common extends Application
 
     /**
      * Parse an SNMP BITS value (e.g. the OACS/ONCS/LPA bitmaps in SMARTMON-TC-MIB) into a
-     * plain integer where bit N is set iff the MIB's bit(N) is set — i.e. directly usable
+     * plain integer where bit N is set iff the MIB's bit(N) is set, directly usable
      * with `($raw >> $bit) & 1` against the same bit indexes the TEXTUAL-CONVENTION defines.
      *
-     * net-snmp renders BITS values as e.g. "E8 00 securitySendReceive(0) formatNvm(1) ..."
-     * — hex octets (MSB-first per RFC 2578, not directly usable as an integer) followed by
+     * net-snmp renders BITS values as e.g. "E8 00 securitySendReceive(0) formatNvm(1) ...":
+     * hex octets (MSB-first per RFC 2578, not directly usable as an integer) followed by
      * the named set bits. The "(n)" suffixes are the authoritative bit indexes, so prefer
      * those; fall back to decoding the hex octets if a build's snmp options hide them.
      */

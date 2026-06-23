@@ -1,9 +1,9 @@
 <?php
 
 // Live power-saving state per disk, read directly from each disk's app RRD
-// (power_state is an app-level dataset, not a SENSOR-MIB sensor — see
-// includes/html/graphs/application/smart_v2_powerState.inc.php for the
-// per-disk single-line version and its state-code legend).
+// (power_state is an app-level dataset, not a SENSOR-MIB sensor).
+// See includes/html/graphs/application/smart_v2_powerState.inc.php for the
+// per-disk single-line version and its state-code legend.
 // Values map to SmartmonDevicePowerState: 0 unknown, 1 active, 2 idleA,
 // 3 idleB, 4 idleC, 5 standbyY, 6 standbyZ, 7 sleeping, 8 standby.
 
@@ -64,4 +64,4 @@ require 'includes/html/graphs/generic_multi_line_exact_numbers.inc.php';
 
 $powerStateLabels = [1 => 'Active', 2 => 'Idle A', 3 => 'Idle B', 4 => 'Idle C', 5 => 'Standby Y', 6 => 'Standby Z', 7 => 'Sleeping', 8 => 'Standby'];
 $legend = implode('  ', array_map(static fn ($value, $label) => $value . '=' . $label, array_keys($powerStateLabels), $powerStateLabels));
-$rrd_options[] = 'COMMENT:' . \LibreNMS\Data\Store\Rrd::safeDescr($legend) . '\l';
+$rrd_options[] = 'COMMENT:' . LibreNMS\Data\Store\Rrd::safeDescr($legend) . '\l';

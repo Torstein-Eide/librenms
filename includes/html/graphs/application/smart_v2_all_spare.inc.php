@@ -16,7 +16,7 @@ $addarea = 1;
 $transparency = 15;
 
 // MIB-driven "Available Spare" (NVMe) sensors, relabeled per the saved
-// naming template — same approach as the all-temperatures overview graph.
+// naming template, same approach as the all-temperatures overview graph.
 // There is no legacy rev1 equivalent for this sensor.
 $htmlData = isset($app) ? HtmlData::forDevice($app, $device) : null;
 $labelMode = 'device';

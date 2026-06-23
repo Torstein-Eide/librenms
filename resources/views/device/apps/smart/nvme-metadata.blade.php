@@ -1,4 +1,4 @@
-{{-- NVMe per-disk "Metadata" view — static identity/capability metadata that --}}
+{{-- NVMe per-disk "Metadata" view: static identity/capability metadata that --}}
 {{-- rarely changes, namespaces & LBA formats, and power states. Inherits closures --}}
 {{-- ($panelStart, $panelEnd, $tableRow, $tooltipForLabel) and $data, $device, --}}
 {{-- $selectedDisk, $smartUrl from the parent smart.blade.php. --}}

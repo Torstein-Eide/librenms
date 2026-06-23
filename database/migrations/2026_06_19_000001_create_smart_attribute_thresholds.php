@@ -10,7 +10,7 @@ use Illuminate\Database\Schema\Blueprint;
  * A row with app_id=0 / disk_key='' is the global default for an
  * attribute_id; a row with app_id+disk_key set overrides it for one disk.
  * (0/'' sentinels, not NULL, so the (app_id, disk_key, attribute_id) unique
- * index actually enforces "one global row per attribute_id" — MySQL unique
+ * index actually enforces "one global row per attribute_id". MySQL unique
  * indexes do not treat two NULLs as equal, so NULL sentinels would silently
  * allow duplicate global rows.)
  */

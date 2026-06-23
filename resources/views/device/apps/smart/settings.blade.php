@@ -185,7 +185,7 @@
             var copyUrl = '{{ $appId !== null ? route('device.apps.smart.settings.copy', $device) : '' }}';
             var token = '{{ csrf_token() }}';
 
-            // Inline edit, save on blur or Enter — no save button.
+            // Inline edit, save on blur or Enter. No save button.
             $('.smart-thresh-field').on('focusin', function () {
                 $(this).data('val', $(this).val());
             });

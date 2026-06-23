@@ -140,7 +140,7 @@ abstract class Application
 
     /**
      * Register state translations for the last discovered sensor.
-     * Fluent — call immediately after discoverSensor().
+     * Fluent. Call immediately after discoverSensor().
      */
     protected function withStateTranslations(string $stateName, array $translations): static
     {
@@ -229,7 +229,7 @@ abstract class Application
 
             $prevValue = $sensor->sensor_current;
 
-            #Log::info("$value $unit");
+            //Log::info("$value $unit");
 
             app('Datastore')->put($device, 'sensor', [
                 'sensor_class' => $sensor->sensor_class,

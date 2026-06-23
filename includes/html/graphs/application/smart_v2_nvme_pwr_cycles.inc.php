@@ -1,20 +1,20 @@
 <?php
 
-// NVMe power cycle count — GAUGE counter.
+// NVMe power cycle count, GAUGE counter.
 
 use App\Facades\Rrd;
 
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart_nvme', $app->app_id, $vars['disk']]);
 
-$name         = 'smart';
-$unit_text    = 'cycles';
-$unitlen      = 20;
-$bigdescrlen  = 22;
+$name = 'smart';
+$unit_text = 'cycles';
+$unitlen = 20;
+$bigdescrlen = 22;
 $smalldescrlen = 22;
-$colours      = 'mega';
-$dostack      = 0;
-$printtotal   = 0;
-$addarea      = 1;
+$colours = 'mega';
+$dostack = 0;
+$printtotal = 0;
+$addarea = 1;
 $transparency = 15;
 
 $rrd_list = [];

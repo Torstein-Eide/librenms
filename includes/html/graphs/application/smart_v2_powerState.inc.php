@@ -18,7 +18,7 @@ if (! Rrd::checkRrdExists($rrd_filename)) {
 }
 
 // Use listDatasets() (one-shot process reading the file header directly),
-// not lastUpdate() — its persistent-pipe read can truncate the output for
+// not lastUpdate(). Its persistent-pipe read can truncate the output for
 // files with many DS (this RRD can carry 50+ SATA attribute DS plus
 // power_state), making a present dataset look missing.
 if (! in_array('power_state', Rrd::listDatasets($rrd_filename), true)) {

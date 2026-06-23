@@ -1,6 +1,6 @@
 <?php
 
-// NVMe data units read/written — DERIVE rate (data units/s, 1 DU = 512 000 B).
+// NVMe data units read/written, DERIVE rate (data units/s, 1 DU = 512 000 B).
 // Reads above axis (green), writes below axis (blue).
 // Follows the same pattern as generic_multi_bits_separated but with correct units.
 
@@ -36,8 +36,8 @@ if ($width > 1500) {
     $descr_len = 8 + min(20, (int) round(($width - 260) / 9.5));
 }
 
-$colour_in  = \App\Facades\LibrenmsConfig::get('graph_colours.greens.0');
-$colour_out = \App\Facades\LibrenmsConfig::get('graph_colours.blues.0');
+$colour_in = App\Facades\LibrenmsConfig::get('graph_colours.greens.0');
+$colour_out = App\Facades\LibrenmsConfig::get('graph_colours.blues.0');
 
 if ($width > 500) {
     $rrd_options[] = sprintf('COMMENT:%s', substr(str_pad($unit_text, $descr_len + 5), 0, $descr_len + 5));
@@ -51,11 +51,11 @@ if ($width > 500) {
     $rrd_options[] = sprintf("COMMENT:%10s\l", 'Max');
 }
 
-$descr_rd = RrdStore::fixedSafeDescr('Read',  $descr_len) . '  In';
+$descr_rd = RrdStore::fixedSafeDescr('Read', $descr_len) . '  In';
 $descr_wr = RrdStore::fixedSafeDescr('Write', $descr_len) . ' Out';
 
 if ($hasRd) {
-    $rrd_options[] = 'DEF:in0='  . $rrd_filename . ':du_rd:AVERAGE';
+    $rrd_options[] = 'DEF:in0=' . $rrd_filename . ':du_rd:AVERAGE';
     $rrd_options[] = 'CDEF:inB0=in0,1,*';
     $rrd_options[] = 'AREA:inB0#' . $colour_in . $stacked['transparency'] . ':' . $descr_rd;
     $rrd_options[] = 'GPRINT:inB0:LAST:%6.2lf%s';

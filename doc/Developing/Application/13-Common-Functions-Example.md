@@ -221,7 +221,7 @@ class Common extends Application
         $this->syncSensors('diskmon_drive_health');
 
         // deleteStaleAgentSensors() removes sensors that were previously
-        // created by this handler but are no longer expected — for example,
+        // created by this handler but are no longer expected. For example,
         // a disk was removed from the agent's report.
         $this->deleteStaleAgentSensors(
             oidPrefix:    'app:diskmon:',
@@ -462,7 +462,7 @@ The verbose block is produced by `printDiscoverySummary()`. The `discoveryComple
 
 ## shouldPoll() guard pattern
 
-Without the guard, a poll cycle that runs before discovery has completed will find no sensors and silently do nothing — but still consume a poll slot. With the guard:
+Without the guard, a poll cycle that runs before discovery has completed will find no sensors and silently do nothing, but still consume a poll slot. With the guard:
 
 ```php
 public function shouldPoll(): bool

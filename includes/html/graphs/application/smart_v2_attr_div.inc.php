@@ -33,7 +33,7 @@ $thresh = $vars['attr_thresh'] ?? null;
 $normMax = 255.0;
 
 // rate_unit: 'second' for COUNTER attributes whose average rate exceeds
-// 3600 raw-units/hour (i.e. >1/s on average — rrdtool already auto-rates
+// 3600 raw-units/hour (i.e. >1/s on average; rrdtool already auto-rates
 // COUNTER DS to per-second on read), 'hour' for slower COUNTER attributes;
 // '' / unset for GAUGE attributes, which carry no rate semantics. See
 // HtmlData::attributeRateUnit().
@@ -144,7 +144,7 @@ if ($loMax !== null && $loMax > 0) {
     // instead of a fixed 0-255 normalized scale.
     //
     // Both literals must be formatted as plain decimals, not PHP's default
-    // float-to-string cast — leftMax/loMax can differ by many orders of
+    // float-to-string cast. leftMax/loMax can differ by many orders of
     // magnitude (e.g. the Hi=0 floor-of-10 case against a huge Lo peak),
     // and PHP switches to scientific notation ("4.13E-8") for very small
     // floats, which rrdtool's CDEF/--right-axis parsers can't read.

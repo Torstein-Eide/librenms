@@ -34,20 +34,20 @@ $attrUnitRules = [
     '/spin.?up.?time/i'                                 => ['Spin-up Time', 'ms'],
     '/performance/i'                                  => ['Performance', ''],
     '/helium level/i'                                 => ['Helium Level', '%'],
- #   '/helium condition/i'                             => ['Helium Level', ''],
+    //   '/helium condition/i'                             => ['Helium Level', ''],
     '/(health monitor|head health)/i'                 => ['Health', ''],
     '/(wear leveling|media wear)/i'                   => ['Wear', '%'],
     '/rdwr ratio/i'                                   => ['Ratio', '%'],
     '/workld timer/i'                                 => ['Time', 'min'],
     '/(hours)/i'                                      => ['Time', 'h'],
     '/(total.?lbas.?(written|read)|nand.?writes)/i'      => ['Data', ''],
-#    '/disk shift/i'                                   => ['Shift', ''],
-#    '/pressure limit/i'                               => ['Pressure', ''],
-#    '/(exception mode|throttle)/i'                    => ['Status', ''],
-#    '/sector/i'                                       => ['Sectors', ''],
-#    '/(rsvd blk|bad block)/i'                         => ['Blocks', ''],
-#    '/(error|crc|g-sense|timeout|fail|uncorrect)/i'   => ['Errors', ''],
-#    '/(count|cycle|retry|retract|recovery|downshift)/i' => ['Count', ''],
+    //    '/disk shift/i'                                   => ['Shift', ''],
+    //    '/pressure limit/i'                               => ['Pressure', ''],
+    //    '/(exception mode|throttle)/i'                    => ['Status', ''],
+    //    '/sector/i'                                       => ['Sectors', ''],
+    //    '/(rsvd blk|bad block)/i'                         => ['Blocks', ''],
+    //    '/(error|crc|g-sense|timeout|fail|uncorrect)/i'   => ['Errors', ''],
+    //    '/(count|cycle|retry|retract|recovery|downshift)/i' => ['Count', ''],
 ];
 
 $unit_text = 'Raw';
@@ -109,7 +109,7 @@ $thresh = $vars['attr_thresh'] ?? null;
 $normMax = 255.0;
 
 // rate_unit: 'second' for COUNTER attributes whose average rate exceeds
-// 3600 raw-units/hour (i.e. >1/s on average — rrdtool already auto-rates
+// 3600 raw-units/hour (i.e. >1/s on average; rrdtool already auto-rates
 // COUNTER DS to per-second on read), 'hour' for slower COUNTER attributes;
 // '' / unset for GAUGE attributes, which carry no rate semantics. See
 // HtmlData::attributeRateUnit().
@@ -309,7 +309,7 @@ if ($hasDiv) {
 
     if ($rawMax !== null && $rawMax > 0) {
         // Lock the left axis to the actual period max so right-axis top = 255 exactly.
-        // Format as plain decimal — rrdtool rejects scientific notation for --right-axis.
+        // Format as plain decimal. rrdtool rejects scientific notation for --right-axis.
         $slope = rtrim(rtrim(sprintf('%.18f', $normMax / $rawMax), '0'), '.');
         $graph_params->right_axis = $slope . ':0';
         $graph_params->scale_max = (int) ceil($rawMax);
@@ -339,7 +339,7 @@ if ($hasDiv) {
         $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
         $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
     } else {
-        // Raw is 0 or unavailable — both sit naturally in the 0-255 range.
+        // Raw is 0 or unavailable. Both sit naturally in the 0-255 range.
         $graph_params->right_axis = '1:0';
 
         if (is_numeric($thresh)) {

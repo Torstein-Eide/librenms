@@ -1,4 +1,4 @@
-{{-- SATA/SAS per-disk "Metadata" view — static identity/capability metadata that --}}
+{{-- SATA/SAS per-disk "Metadata" view: static identity/capability metadata that --}}
 {{-- rarely changes, plus the FARM header pages. Inherits closures ($panelStart, --}}
 {{-- $panelEnd, $tableRow, $tooltipForLabel, $labelWithTooltip) and $data, $device, --}}
 {{-- $selectedDisk, $smartUrl from the parent smart.blade.php. --}}

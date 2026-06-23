@@ -19,7 +19,7 @@ $transparency = 15;
 $rrd_list = [];
 if (Rrd::checkRrdExists($rrd_filename)) {
     // Each disk's RRD only carries DS for the attribute IDs that disk actually
-    // reports — listDatasets() reads the file header directly, so a disk
+    // reports. listDatasets() reads the file header directly, so a disk
     // missing one of these attributes is skipped instead of failing the
     // graph with an "unknown DS" error.
     $availableDs = Rrd::listDatasets($rrd_filename);

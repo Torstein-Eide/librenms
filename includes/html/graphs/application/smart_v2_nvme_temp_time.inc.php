@@ -1,6 +1,6 @@
 <?php
 
-// NVMe temperature threshold time — warning and critical, as % of poll interval.
+// NVMe temperature threshold time: warning and critical, as % of poll interval.
 // warn_tmp_t / crit_cmp_t are DERIVE of accumulated minutes; ×6 000 = % of time.
 
 use App\Facades\Rrd;

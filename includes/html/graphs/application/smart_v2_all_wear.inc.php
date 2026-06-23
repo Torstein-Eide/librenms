@@ -17,7 +17,7 @@ $addarea = 1;
 $transparency = 15;
 
 // MIB-driven wear ("Percentage Used" / "Endurance Used") sensors, relabeled
-// per the saved naming template — same approach as the all-temperatures
+// per the saved naming template, same approach as the all-temperatures
 // overview graph. Legacy rev1 "smart_wear" sensors have no disk_key to map
 // to, so they keep falling back to their stored sensor_descr below.
 $htmlData = isset($app) ? HtmlData::forDevice($app, $device) : null;

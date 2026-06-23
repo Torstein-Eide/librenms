@@ -17,7 +17,7 @@ use LibreNMS\Agent\Unix\Smart\HtmlData;
  * disk. Each row is edited inline (save-on-change, no submit button), with
  * per-row controls to mute/unmute alerting, reset a disk override back to
  * the global default, or copy the global default's values down into a disk
- * override — mirroring the device health-sensors edit page.
+ * override, mirroring the device health-sensors edit page.
  */
 class SmartAttributeSettingsController
 {
@@ -44,10 +44,10 @@ class SmartAttributeSettingsController
         $appId = $app?->app_id;
 
         // Rate-of-change thresholds only make sense for the newly-detected
-        // ("Count" in the name) COUNTER attributes — these are failure-style
+        // ("Count" in the name) COUNTER attributes. These are failure-style
         // counters (e.g. Reallocated_Event_Count). GAUGE attributes have no
         // rate semantics, and the legacy fixed-list counters (Common::
-        // ATA_COUNTER_ATTRS — Total_LBAs_Written, NAND_Writes, etc.) are
+        // ATA_COUNTER_ATTRS: Total_LBAs_Written, NAND_Writes, etc.) are
         // workload/wear statistics that grow during normal use, not failure
         // indicators, so both are excluded from this settings page.
         $rows = $appId === null ? collect() : DB::table('smart_sata_attributes')
@@ -308,7 +308,7 @@ class SmartAttributeSettingsController
         return null;
     }
 
-    /** Inline single-field save (one warn_rate_* window for one row), fired on blur/Enter — no submit button. */
+    /** Inline single-field save (one warn_rate_* window for one row), fired on blur/Enter. No submit button. */
     public function updateField(Device $device, Request $request): JsonResponse
     {
         $this->authorize('update', $device);
@@ -370,7 +370,7 @@ class SmartAttributeSettingsController
      * Reset one row to "default": deletes the threshold row outright rather
      * than setting its columns to null. Setting columns to null still leaves
      * a per-disk override row in place, which keeps winning over the global
-     * default (it's just an override with no active limits) — deleting the
+     * default (it's just an override with no active limits). Deleting the
      * row is what actually makes a disk fall back to inheriting the global
      * default again. For scope=global this deletes the global default
      * itself, so nothing is configured for that attribute at all.
@@ -407,7 +407,7 @@ class SmartAttributeSettingsController
 
     /**
      * Copy the global default's warn_rate_* limits and alert_enabled down
-     * into a per-disk override row, as an editable starting point — unlike
+     * into a per-disk override row, as an editable starting point. Unlike
      * reset(), the row keeps these as an explicit override afterwards, so it
      * won't drift if the global default later changes.
      */

@@ -8,14 +8,14 @@
     $deviceId  = (int) $data->device['device_id'];
 
     // Reached directly via the dedicated device.apps.smart(.compare) routes, which always
-    // pass smartPage explicitly — as opposed to the legacy device=X/tab=apps/app=smart route,
+    // pass smartPage explicitly. This is unlike the legacy device=X/tab=apps/app=smart route,
     // which already renders the device's "Apps »" selector panel before including this view.
     $viaDedicatedRoute = isset($smartPage);
     $smartPage = $smartPage ?? 'overview';
 
     // Builds a URL back to this same SMART app page, optionally for a specific disk.
     // Disk URLs use the disk's device_name (e.g. "sda", "nvme0") when known, falling back
-    // to its disk_key — see HtmlData::diskUrlId()/resolveDiskKey().
+    // to its disk_key. See HtmlData::diskUrlId()/resolveDiskKey().
     $smartUrl = static fn (?string $disk = null): string => route(
         'device.apps.smart',
         $disk !== null ? [$deviceId, 'disk' => $data->diskUrlId($disk)] : $deviceId
@@ -24,7 +24,7 @@
     // Builds a URL to the Graphs page, optionally for a specific graph-type id
     // (one of $sections[]['id'] in overview-graphs.blade.php, e.g.
     // "smart-overview-all-temp" or "smart-overview-attr-5") and/or display
-    // mode ('mini' — anything else, including omitted, means normal/full-size).
+    // mode ('mini'; anything else, including omitted, means normal/full-size).
     $smartGraphsUrl = static function (?string $view = null, ?string $mode = null) use ($deviceId): string {
         $params = [$deviceId];
         if ($view !== null) {
@@ -69,10 +69,10 @@
     };
     $smartTooltips = [
         'offline data collection' => 'An old ATA SMART background routine that may collect or refresh some drive health data when the drive is idle. '
-            . 'Disabled or Never started does not mean SMART is disabled, broken, or not updating — power-on hours, temperature, error counters, '
+            . 'Disabled or Never started does not mean SMART is disabled, broken, or not updating. Power-on hours, temperature, error counters, '
             . 'reallocated/pending sectors, and self-test logs may still update normally. It only means this specific automatic routine is disabled or has not run.',
         'auto offline data collection' => 'An old ATA SMART background routine that may collect or refresh some drive health data when the drive is idle. '
-            . 'Disabled or Never started does not mean SMART is disabled, broken, or not updating — power-on hours, temperature, error counters, '
+            . 'Disabled or Never started does not mean SMART is disabled, broken, or not updating. Power-on hours, temperature, error counters, '
             . 'reallocated/pending sectors, and self-test logs may still update normally. It only means this specific automatic routine is disabled or has not run.',
         'power cycles' => 'Counts power-on resets or unique device startups during system boot.',
         'lifetime power on resets' => 'Counts power-on resets or unique device startups during system boot.',
@@ -555,7 +555,7 @@
                     $aaId    = 'smart-allattr-' . $deviceId;
                     $aaRadio = $aaId . '-mode';
 
-                    $panelStart('SMART Attributes — All Disks');
+                    $panelStart('SMART Attributes: All Disks');
 
                     // Mode selector.
                     echo '<div style="margin-bottom:10px;display:flex;gap:18px;align-items:center">'
@@ -563,7 +563,7 @@
                         . '<label style="font-weight:normal;margin:0;cursor:pointer"><input type="radio" name="' . $aaRadio . '" value="rawdisp" checked onchange="smartAllAttrMode(\'' . $aaId . '\',this.value)"> Raw Display</label>'
                         . '<label style="font-weight:normal;margin:0;cursor:pointer"><input type="radio" name="' . $aaRadio . '" value="raw" onchange="smartAllAttrMode(\'' . $aaId . '\',this.value)"> Raw</label>'
                         . '<label style="font-weight:normal;margin:0;cursor:pointer"><input type="radio" name="' . $aaRadio . '" value="norm" onchange="smartAllAttrMode(\'' . $aaId . '\',this.value)"> Normalized</label>'
-                        . '<span class="text-muted" style="font-size:12px">SATA/SAS only — cells coloured by attribute status.</span>'
+                        . '<span class="text-muted" style="font-size:12px">SATA/SAS only. Cells coloured by attribute status.</span>'
                         . '</div>';
 
                     echo '<div class="table-responsive"><table id="' . $aaId . '" class="table table-condensed table-hover sa-mode-rawdisp" style="white-space:nowrap">';
@@ -696,7 +696,7 @@ SCRIPT;
 
                 if ($pageDiskStats !== []) {
                     $dsId = 'smart-devstats-' . $deviceId;
-                    $panelStart('Device Statistics — All Disks');
+                    $panelStart('Device Statistics: All Disks');
 
                     $pageOptions = '';
                     foreach (array_keys($pageDiskStats) as $i => $pn) {

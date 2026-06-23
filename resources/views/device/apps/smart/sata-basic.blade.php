@@ -94,7 +94,7 @@
             $panelEnd();
         @endphp
 
-        {{-- LBAs Written/Read (ATA attributes 241/242) — not all drives report these. --}}
+        {{-- LBAs Written/Read (ATA attributes 241/242). Not all drives report these. --}}
         @php
             $attrById = [];
             foreach ($disk['attributes'] as $a) {
@@ -146,7 +146,7 @@
             $panelEnd();
         @endphp
         @else
-        {{-- No LBA-count attributes — fall back to a generic disk I/O graph (UCD-DISKIO-MIB), if available. --}}
+        {{-- No LBA-count attributes. Fall back to a generic disk I/O graph (UCD-DISKIO-MIB), if available. --}}
         @php
             $diskioCandidates = [];
             foreach ([$disk['device_path'] ?? null, $disk['device_name'] ?? null] as $cand) {
@@ -268,7 +268,7 @@
                         || str_ends_with((string) $s->sensor_index, '_selftest_long'));
                 $label = htmlspecialchars($data->shortSensorName($s, $disk));
                 $badge = $sensorBadge($s);
-                // Self-test age rows already navigate elsewhere on row click — don't
+                // Self-test age rows already navigate elsewhere on row click, so don't
                 // also wrap their label/value in the (different) graph link.
                 echo ($isSelftestAge ? $gotoRowOpen('selftest') : '<tr>')
                     . '<td style="white-space:nowrap"><i class="fa ' . $sensorIcon($s->sensor_class) . ' text-muted" style="margin-right:6px"></i>' . ($isSelftestAge ? $label : $sensorGraphLink($s, $label)) . '</td>'

@@ -14,7 +14,7 @@ use LibreNMS\Agent\Unix\Smart\HtmlData;
  * reached only through the legacy device=X/tab=apps/app=smart/ catch-all.
  * The page itself (panels, disk tabs, debug panels) is still the same
  * device.apps.smart.index view and its smart_debug_* helpers, defined in
- * includes/html/pages/device/apps/smart.inc.php — required here purely for
+ * includes/html/pages/device/apps/smart.inc.php. It's required here purely for
  * those function definitions, since that file's own entry point is a no-op
  * without the legacy $app/$device/$vars locals it checks for.
  */
@@ -46,7 +46,7 @@ class SmartController
 
         $app = Application::where('device_id', $device->device_id)->where('app_type', 'smart')->firstOrFail();
 
-        // Matches DeviceController::renderLegacyTab()'s chdir(base_path()) — the view below
+        // Matches DeviceController::renderLegacyTab()'s chdir(base_path()). The view below
         // (and its graph rows) use legacy includes with paths relative to the install dir
         // (e.g. includes/html/print-graphrow.inc.php), which silently fail to resolve
         // otherwise, since this route never goes through that legacy chdir.
@@ -57,7 +57,7 @@ class SmartController
 
         $data = HtmlData::forDevice($app, $device->toArray());
 
-        // ?disk= accepts either the disk's device_name (e.g. "sda", "nvme0" — what links on
+        // ?disk= accepts either the disk's device_name (e.g. "sda", "nvme0"; what links on
         // the page itself now use) or its disk_key (old bookmarked links).
         $resolvedDisk = $selectedDisk !== null ? $data->resolveDiskKey($selectedDisk) : null;
 

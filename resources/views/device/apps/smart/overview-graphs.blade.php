@@ -1,5 +1,5 @@
 {{-- "Graphs" page: a plain text list of available graph types (temperature/wear/ --}}
-{{-- spare/per-attribute), and — for whichever one is selected — its all-disk --}}
+{{-- spare/per-attribute). For whichever one is selected, it also shows its all-disk --}}
 {{-- aggregate graph plus a per-device breakdown. Only one type is shown at a --}}
 {{-- time. Inherits $data, $panelStart, $panelEnd, $smartGraphsUrl, $labelMode --}}
 {{-- from the parent smart/index.blade.php. --}}
@@ -25,7 +25,7 @@
     ];
     foreach ($data->overviewAttributeIds() as $attr) {
         // Vendor-defined attribute IDs can mean different things on different
-        // disks, so the section id includes a name slug — same numeric ID with
+        // disks, so the section id includes a name slug. The same numeric ID with
         // a different name becomes its own separate entry/graph, never merged.
         $nameSlug = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($attr['raw_name'])), '-');
         $sections[] = [
@@ -78,7 +78,7 @@
         // combined types (same sensor accessors the Overview Drives table uses,
         // so SATA vs NVMe is handled transparently), attribute-based for
         // per-attribute sections (only disks that actually report that
-        // attribute — others are simply omitted).
+        // attribute; others are simply omitted).
         $devices = [];
         foreach ($data->diskKeys() as $key) {
             $disk = $data->disk($key);
@@ -86,7 +86,7 @@
             if (isset($active['attr_id'])) {
                 $spec = $data->attributeGraphSpecs($key)[$active['attr_id']] ?? null;
                 // Same numeric ID can be a different vendor-defined counter on
-                // a different disk — only include disks whose attribute name
+                // a different disk. Only include disks whose attribute name
                 // actually matches this section's, not just the numeric ID.
                 if ($spec === null || $spec['raw_name'] !== $active['attr_name']) {
                     continue;
@@ -107,7 +107,7 @@
                 continue;
             }
 
-            // Power State has no SENSOR-MIB sensor — it's an app-level RRD
+            // Power State has no SENSOR-MIB sensor. It's an app-level RRD
             // dataset (same RRD the per-disk attributes live in), so it's
             // handled separately from the sensor-based types below.
             if ($active['type'] === 'smart_v2_all_power_state') {
@@ -165,7 +165,7 @@
         $graph_array = [
             'height' => '100', 'width' => '215', 'from' => $from, 'to' => $now,
             'id'     => $appId, 'type' => 'application_' . $active['type'],
-            'page_title' => 'All Drives — ' . $active['title'],
+            'page_title' => 'All Drives: ' . $active['title'],
         ];
         if (isset($active['attr_id'])) {
             $graph_array['attr_id'] = $active['attr_id'];
@@ -192,7 +192,7 @@
                     ]);
                     $linkArgs = array_merge($entry['graph_array'], [
                         'page' => 'graphs', 'to' => $now,
-                        'page_title' => $active['title'] . ' — ' . $data->displayLabel($entry['disk'], $labelMode),
+                        'page_title' => $active['title'] . ': ' . $data->displayLabel($entry['disk'], $labelMode),
                     ]);
                     $linkUrl = Url::generate($linkArgs);
                     $badge = $entry['badge'] !== '' ? '<span class="pull-right">' . $entry['badge'] . '</span>' : '';

@@ -31,7 +31,7 @@
     $panelStart('Self-test Log', $stBadge);
     if (empty($disk['selftests']) && $curOp === 0) {
         echo '<div class="small text-muted" style="padding:4px 2px">'
-            . '<i class="fa fa-info-circle"></i> No self-test data reported — this drive may not support self-tests.</div>';
+            . '<i class="fa fa-info-circle"></i> No self-test data reported. This drive may not support self-tests.</div>';
     } else {
         $curPoh = $health['power_on_hours'] ?? null;
         $hasLba = false;

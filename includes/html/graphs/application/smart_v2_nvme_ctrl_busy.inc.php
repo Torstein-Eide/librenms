@@ -1,6 +1,6 @@
 <?php
 
-// NVMe controller busy time — rendered as % of poll interval.
+// NVMe controller busy time, rendered as % of poll interval.
 // ctrl_busy is a DERIVE of accumulated minutes; ×6 000 (60 s/min × 100) = % of time.
 
 use App\Facades\Rrd;
@@ -22,7 +22,7 @@ if ($avail !== [] && ! in_array('ctrl_busy', $avail, true)) {
     return;
 }
 
-$rrd_options[] = 'DEF:cb='   . $rrd_filename . ':ctrl_busy:AVERAGE';
+$rrd_options[] = 'DEF:cb=' . $rrd_filename . ':ctrl_busy:AVERAGE';
 $rrd_options[] = 'DEF:cbmn=' . $rrd_filename . ':ctrl_busy:MIN';
 $rrd_options[] = 'DEF:cbmx=' . $rrd_filename . ':ctrl_busy:MAX';
 $rrd_options[] = 'CDEF:cbp=cb,6000,*';

@@ -9,12 +9,12 @@ use Illuminate\Database\Schema\Blueprint;
  * default row). naming_template on the app_id=0 row is the installation-wide
  * default disk-naming template, shared by every device; disk_naming_templates
  * is a per-device JSON map of disk_key => template for per-disk overrides (a
- * disk only appears here when it has an explicit override — absent means it
+ * disk only appears here when it has an explicit override. Absent means it
  * inherits the global template, or the "$device" fallback if neither is
  * set). default_view_mode is the initial per-disk view mode
  * (Basic/Metadata/Self-test/Statistics/Graphs) used on the overview page
  * before the user picks one (which is then remembered client-side via
- * cookie, same as the label-mode selector) — this one stays per-device.
+ * cookie, same as the label-mode selector). This one stays per-device.
  */
 return new class extends Migration {
     public function up(): void
