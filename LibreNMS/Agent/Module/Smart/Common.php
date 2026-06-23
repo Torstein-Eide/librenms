@@ -1931,18 +1931,14 @@ class Common extends Application
     /**
      * Average change per hour, per RRD dataset, for every lookback window.
      *
-     * Every dataset for a given window is fetched in ONE batched rrdtool call: COUNTER
-     * datasets via Rrd::getWindowAverages() (a single window-wide bucket -- rrdtool
-     * auto-derives COUNTER to a per-second rate on read, so one AVERAGE already gives
-     * the rate directly), GAUGE datasets via Rrd::getBucketAverages() requesting 2
-     * buckets across the same window and differencing the first against the last --
-     * rrdtool does the per-half consolidation, instead of this method issuing two
-     * separate narrow boundary-probe calls per window. Each call spawns a separate
-     * rrdtool subprocess, so this is 4 calls for all COUNTER datasets plus 4 for all
-     * GAUGE datasets (1 per window each), regardless of how many SMART attributes the
-     * disk has. Looping a single dataset per call here previously spawned one
-     * subprocess per attribute per window, which exhausted the open-file limit on disks
-     * with 30+ attributes.
+     * Every dataset for a given window is fetched in ONE batched rrdtool call
+     * (Rrd::getWindowAverages() takes the whole dataset list). Each call
+     * spawns a separate rrdtool subprocess, so this is 4 calls for all COUNTER
+     * datasets plus 8 for all GAUGE datasets (2 boundary probes x 4 windows),
+     * regardless of how many SMART attributes the disk has. Looping a single
+     * dataset per call here previously spawned one subprocess per attribute
+     * per window, which exhausted the open-file limit on disks with 30+
+     * attributes.
      *
      * @param  array<string>  $counterDs
      * @param  array<string>  $gaugeDs
@@ -1952,6 +1948,7 @@ class Common extends Application
     {
         $ratesByDs = [];
         $failedWindows = [];
+        $probe = 600; // 10 minutes, well above the default 5-minute poll step
 
         foreach (self::RATE_WINDOWS as $suffix => $seconds) {
             $start = $now - $seconds;
@@ -1970,17 +1967,16 @@ class Common extends Application
             }
 
             if ($gaugeDs !== []) {
-                $buckets = $rrd->getBucketAverages($filename, $gaugeDs, $start, $now, 2);
-                if ($buckets === null) {
+                $startVals = $rrd->getWindowAverages($filename, $gaugeDs, $start, min($start + $probe, $now));
+                $endVals = $rrd->getWindowAverages($filename, $gaugeDs, max($now - $probe, $start), $now);
+                if ($startVals === null || $endVals === null) {
                     $failedWindows[$suffix] = true;
                     Log::error("smart_mib: fetchAttributeRates: gauge fetch FAILED for window={$suffix} file={$filename}, keeping previously persisted rates for this window");
                 } else {
                     foreach ($gaugeDs as $ds) {
-                        $values = $buckets[$ds] ?? [];
-                        if (count($values) < 2) {
-                            continue; // need a start-half and an end-half average to difference
+                        if (isset($startVals[$ds], $endVals[$ds])) {
+                            $ratesByDs[$ds][$suffix] = ($endVals[$ds] - $startVals[$ds]) / $hours;
                         }
-                        $ratesByDs[$ds][$suffix] = ($values[array_key_last($values)] - $values[0]) / $hours;
                     }
                 }
             }

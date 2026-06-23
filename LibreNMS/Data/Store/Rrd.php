@@ -450,37 +450,6 @@ class Rrd extends BaseDatastore
     }
 
     /**
-     * AVERAGE-consolidated series for one or more datasets over [start, end], split into
-     * $buckets equal-width buckets in a single rrdtool invocation -- e.g. for a GAUGE
-     * rate-of-change, request 2 buckets to get a "start half" and "end half" average and
-     * difference them, instead of issuing two separate narrow boundary-probe calls.
-     * rrdtool aligns the requested window to PDP/step boundaries and may return more rows
-     * than $buckets; this returns every non-NaN value per dataset in chronological order
-     * rather than collapsing to one value, so callers can take the first/last entries
-     * themselves regardless of how many rows actually came back.
-     *
-     * @param  array<string>  $datasets
-     * @return array<string, array<int, float>>|null null means the rrdtool call itself
-     *         failed outright (timeout, process error), distinct from an empty array
-     *         (call succeeded, no data for any requested dataset in range).
-     */
-    public function getBucketAverages(string $filename, array $datasets, int $start, int $end, int $buckets): ?array
-    {
-        $datasets = array_values(array_filter(array_unique($datasets), fn ($dataset): bool => is_string($dataset) && $dataset !== ''));
-        if (empty($datasets) || $end <= $start || $buckets < 1) {
-            return [];
-        }
-
-        $step = max(1, intdiv($end - $start, $buckets));
-        $xportOutput = $this->runXportRates($filename, $datasets, 'AVERAGE', $start, $end, $step);
-        if ($xportOutput === null) {
-            return null;
-        }
-
-        return $this->parseXportSeries($xportOutput, $datasets);
-    }
-
-    /**
      * @return array{start: int, end: int, step: int}|null
      */
     private function getLastRateWindow(string $filename): ?array
@@ -560,38 +529,10 @@ class Rrd extends BaseDatastore
     }
 
     /**
-     * Single most-recent value per dataset: the last entry of each dataset's
-     * parseXportSeries() (rrdtool aligns [start, end] to PDP/step boundaries and can
-     * return more rows than requested -- e.g. a single-bucket request can come back as
-     * two rows when the window doesn't land exactly on a step boundary, the common case
-     * since callers compute it from time(). When that push lands past the most recent
-     * sample, the trailing row is an unwritten future bucket (NaN); taking the series'
-     * last non-NaN value instead of unconditionally the last row avoids picking that up).
-     *
      * @param  array<string>  $datasets
      * @return array<string, float>
      */
     private function parseXportRates(string $xportOutput, array $datasets): array
-    {
-        $rates = [];
-        foreach ($this->parseXportSeries($xportOutput, $datasets) as $ds => $values) {
-            if ($values !== []) {
-                $rates[$ds] = $values[array_key_last($values)];
-            }
-        }
-
-        return $rates;
-    }
-
-    /**
-     * Every non-NaN value per dataset, in chronological (row) order, from an xport
-     * response. Datasets not present in the legend, or with no valid value in any row,
-     * are simply absent from the result.
-     *
-     * @param  array<string>  $datasets
-     * @return array<string, array<int, float>>
-     */
-    private function parseXportSeries(string $xportOutput, array $datasets): array
     {
         $xml = simplexml_load_string($xportOutput);
         if (! $xml instanceof SimpleXMLElement) {
@@ -609,15 +550,23 @@ class Rrd extends BaseDatastore
         }
 
         $allowedDatasets = array_flip($datasets);
-        $series = [];
+        $rates = [];
 
-        foreach ($rows as $row) {
+        // rrdtool aligns the requested [start, end] to PDP/step boundaries and can
+        // expand it into more rows than asked for -- a single-bucket request can
+        // come back as two rows when the window doesn't land exactly on a step
+        // boundary (the common case, since callers compute it from time()). When
+        // that push lands past the most recent sample, the trailing row is an
+        // unwritten future bucket (NaN) while the real averaged value sits in an
+        // earlier row. Walk rows newest-first and take each dataset's most recent
+        // non-NaN value instead of assuming the last row is always the right one.
+        for ($r = count($rows) - 1; $r >= 0 && count($rates) < count($allowedDatasets); $r--) {
             $index = 0;
-            foreach ($row->v ?? [] as $value) {
+            foreach ($rows[$r]->v ?? [] as $value) {
                 $ds = $legend[$index] ?? null;
                 $index++;
 
-                if ($ds === null || ! isset($allowedDatasets[$ds])) {
+                if ($ds === null || ! isset($allowedDatasets[$ds]) || isset($rates[$ds])) {
                     continue;
                 }
 
@@ -627,11 +576,11 @@ class Rrd extends BaseDatastore
                 }
 
                 // Cast to native float so callers do not handle scientific-notation strings.
-                $series[$ds][] = (float) $rawValue;
+                $rates[$ds] = (float) $rawValue;
             }
         }
 
-        return $series;
+        return $rates;
     }
 
     /**
