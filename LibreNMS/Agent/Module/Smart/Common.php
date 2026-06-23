@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use LibreNMS\Agent\Application;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
+use LibreNMS\Agent\Module\Smart\Support\SnmpDecode;
 use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
@@ -177,7 +178,7 @@ class Common extends Application
 
     public function shouldDiscover(): bool
     {
-        $rowCount = $this->intValue(
+        $rowCount = SnmpDecode::intValue(
             SnmpQuery::mibs(self::COMMON_MIBS)->hideMib()
                 ->get('SMARTMON-COMMON-MIB::smartmonDeviceTableRowCount.0')
                 ->value('smartmonDeviceTableRowCount.0')
@@ -301,8 +302,8 @@ class Common extends Application
             $devName = $this->sensorLabel($dev, (string) $devIdx);
             foreach ($this->sensorRows[$devIdx] ?? [] as $sensorIdx => $row) {
                 // smartmonSensorType is an enum returned as a name ("celsius(3)") when MIBs load.
-                $type = $this->intValue($row['smartmonSensorType'] ?? null);
-                $value = $this->applySensorScaleCol($row, 'smartmonSensorValue');
+                $type = SnmpDecode::intValue($row['smartmonSensorType'] ?? null);
+                $value = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorValue', self::SENSOR_SCALE_EXP);
                 if ($value === null) {
                     $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has null value, skipped');
                     continue;
@@ -317,10 +318,10 @@ class Common extends Application
                 $name = trim((string) ($row['smartmonSensorName'] ?? ''));
                 $sIdx = "{$idx}_{$prefix}_{$sensorIdx}";
                 $descr = $name !== '' ? "{$group} {$devName} {$name}" : "{$group} {$devName}";
-                $highCrit = $this->applySensorScaleCol($row, 'smartmonSensorHighCritical');
-                $highWarn = $this->applySensorScaleCol($row, 'smartmonSensorHighWarning');
-                $lowWarn = $this->applySensorScaleCol($row, 'smartmonSensorLowWarning');
-                $lowCrit = $this->applySensorScaleCol($row, 'smartmonSensorLowCritical');
+                $highCrit = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorHighCritical', self::SENSOR_SCALE_EXP);
+                $highWarn = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorHighWarning', self::SENSOR_SCALE_EXP);
+                $lowWarn = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorLowWarning', self::SENSOR_SCALE_EXP);
+                $lowCrit = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorLowCritical', self::SENSOR_SCALE_EXP);
                 // A warning threshold equal to critical gives no early notice; nudge it
                 // one notch less severe so "warning" fires before "critical".
                 if ($highCrit !== null && $highWarn !== null && $highWarn == $highCrit) {
@@ -330,7 +331,7 @@ class Common extends Application
                     $lowWarn = $lowCrit + 5;
                 }
                 // Carry the scale as divisor/multiplier so the poll can rescale the raw value.
-                $scale = $this->sensorScaleColumns($row);
+                $scale = SnmpDecode::sensorScaleColumns($row, self::SENSOR_SCALE_EXP);
                 $intendedLimits["app:smart_mib:{$sIdx}"] = [
                     'sensor_limit'          => $highCrit,
                     'sensor_limit_warn'     => $highWarn,
@@ -606,7 +607,7 @@ class Common extends Application
 
             // Generic SENSOR-MIB sensors (temperature, NVMe spare/used). Applies to all device types.
             foreach ($this->sensorRows[$snmpIndex] ?? [] as $sensorIdx => $row) {
-                $type = $this->intValue($row['smartmonSensorType'] ?? null);
+                $type = SnmpDecode::intValue($row['smartmonSensorType'] ?? null);
                 $meta = self::SENSOR_TYPE_MAP[$type] ?? null;
                 if ($meta !== null) {
                     $expected[] = "app:smart_mib:{$idx}_{$meta[2]}_{$sensorIdx}";
@@ -689,9 +690,9 @@ class Common extends Application
                 ->where('app_id', $this->appId)
                 ->where('snmp_index', (int) $snmpIndex)
                 ->update([
-                    'last_poll_result' => $this->intValue($row['smartmonDeviceLastPollResult'] ?? null),
-                    'last_poll_time'   => $this->parseDateAndTime($row['smartmonDeviceLastPollTime'] ?? null),
-                    'power_state'      => $this->intValue($row['smartmonDevicePowerState'] ?? null),
+                    'last_poll_result' => SnmpDecode::intValue($row['smartmonDeviceLastPollResult'] ?? null),
+                    'last_poll_time'   => SnmpDecode::parseDateAndTime($row['smartmonDeviceLastPollTime'] ?? null),
+                    'power_state'      => SnmpDecode::intValue($row['smartmonDevicePowerState'] ?? null),
                 ]);
         }
     }
@@ -809,7 +810,7 @@ class Common extends Application
                 }
                 foreach ($items as $idx2 => $leaf) {
                     // table(2) leaf is [columnName => value]; store the scalar, not the wrapper array.
-                    $result[(string) $devIdx][(string) $idx2][$col] = $this->leafValue($leaf, $col);
+                    $result[(string) $devIdx][(string) $idx2][$col] = SnmpDecode::leafValue($leaf, $col);
                 }
             }
         }
@@ -882,8 +883,8 @@ class Common extends Application
         $values = [];
         foreach ($walked as $sensorIdx => $rawValue) {
             if ($sensor = $bySuffix[(string) $sensorIdx] ?? null) {
-                $raw = $this->leafValue($rawValue, 'smartmonSensorValue');
-                $operStatus = $this->intValue($this->leafValue($rawValue, 'smartmonSensorOperStatus'));
+                $raw = SnmpDecode::leafValue($rawValue, 'smartmonSensorValue');
+                $operStatus = SnmpDecode::intValue(SnmpDecode::leafValue($rawValue, 'smartmonSensorOperStatus'));
                 // SmartmonSensorStatus: ok(1) = value reported; unavailable(2)/nonoperational(3) = no trustworthy reading.
                 if ($operStatus !== null && $operStatus !== 1) {
                     $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} operStatus={$operStatus} (not ok), skipped");
@@ -940,7 +941,7 @@ class Common extends Application
                     ?? ($this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(self::ATA_COUNTER_ATTRS[$id])
                         ? 'COUNTER' : 'GAUGE');
 
-                $format = $this->intValue($meta->format ?? null);
+                $format = SnmpDecode::intValue($meta->format ?? null);
                 $rawString = $row['smartmonSataAttrRawString'] ?? null;
 
                 $rrd_def->addDataset($dsNorm, 'GAUGE', 0);
@@ -979,7 +980,7 @@ class Common extends Application
         }
 
         $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
-        $fields['power_state'] = $this->intValue($dev['power_state'] ?? null);
+        $fields['power_state'] = SnmpDecode::intValue($dev['power_state'] ?? null);
 
         $rrdName = ['app', 'smart', $this->appId, $idx];
         $rrd = app(Rrd::class);
@@ -1211,7 +1212,7 @@ class Common extends Application
     /** Register the NVMe self-test status sensor (current op, else most recent log result) for one device. */
     private function discoverNvmeSelftestStatusSensor(array $dev, array $health, array $selftestRows): void
     {
-        $currentOp = $this->intValue($health['smartmonNvmeCurrentSelfTestOperationValue'] ?? null) ?? 0;
+        $currentOp = SnmpDecode::intValue($health['smartmonNvmeCurrentSelfTestOperationValue'] ?? null) ?? 0;
         $entries = array_map(static fn ($row) => [
             'result'         => $row['smartmonNvmeSelfTestResult'] ?? null,
             'power_on_hours' => $row['smartmonNvmeSelfTestPowerOnHours'] ?? null,
@@ -1283,7 +1284,7 @@ class Common extends Application
      */
     private function nvmeHealthLevel(mixed $overallRaw, mixed $critRaw): int
     {
-        if ($this->parseBitsValue($critRaw)) {
+        if (SnmpDecode::parseBitsValue($critRaw)) {
             return 4; // Critical Warning
         }
 
@@ -1400,13 +1401,13 @@ class Common extends Application
         foreach (self::NVME_HEALTH_RRD as $col => [$ds, $type]) {
             $rrd_def->addDataset($ds, $type, 0);
             $value = $col === 'smartmonNvmeCriticalWarning'
-                ? $this->parseBitsValue($health[$col] ?? null)
-                : $this->intValue($health[$col] ?? null);
+                ? SnmpDecode::parseBitsValue($health[$col] ?? null)
+                : SnmpDecode::intValue($health[$col] ?? null);
             $fields[$ds] = $value;
         }
 
         $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
-        $fields['power_state'] = $this->intValue($dev['power_state'] ?? null);
+        $fields['power_state'] = SnmpDecode::intValue($dev['power_state'] ?? null);
 
         $rrdName = ['app', 'smart_nvme', $this->appId, $idx];
 
@@ -1439,7 +1440,7 @@ class Common extends Application
     /** Resolve a SmartmonHealthStatus value (enum int, "passed(1)", or bare name) to 0-4. */
     private function healthStatusValue(mixed $raw): ?int
     {
-        $int = $this->intValue($raw);
+        $int = SnmpDecode::intValue($raw);
         if ($int !== null) {
             return $int;
         }
@@ -1471,12 +1472,12 @@ class Common extends Application
                 'disk_key'             => $this->diskKey($row, (string) $index),
                 'device_name'          => $row['smartmonDeviceName'] ?? null,
                 'device_path'          => $row['smartmonDevicePath'] ?? null,
-                'device_type'          => $this->intValue($row['smartmonDeviceType'] ?? null),
+                'device_type'          => SnmpDecode::intValue($row['smartmonDeviceType'] ?? null),
                 'last_poll_time'       => $statusRow['smartmonDeviceLastPollTime'] ?? null,
-                'last_poll_result'     => $this->intValue($statusRow['smartmonDeviceLastPollResult'] ?? null),
-                'last_poll_exit_status'=> $this->intValue($statusRow['smartmonDeviceLastPollExitStatus'] ?? null),
-                'power_state'          => $this->intValue($statusRow['smartmonDevicePowerState'] ?? null),
-                'physical_index'       => $this->intValue($row['smartmonDevicePhysicalIndex'] ?? null),
+                'last_poll_result'     => SnmpDecode::intValue($statusRow['smartmonDeviceLastPollResult'] ?? null),
+                'last_poll_exit_status'=> SnmpDecode::intValue($statusRow['smartmonDeviceLastPollExitStatus'] ?? null),
+                'power_state'          => SnmpDecode::intValue($statusRow['smartmonDevicePowerState'] ?? null),
+                'physical_index'       => SnmpDecode::intValue($row['smartmonDevicePhysicalIndex'] ?? null),
                 'uris'                 => $row['smartmonDeviceUris'] ?? null,
                 'model_family'         => $row['smartmonDeviceModelFamily'] ?? null,
                 'model_name'           => $row['smartmonDeviceModelName'] ?? null,
@@ -1697,7 +1698,7 @@ class Common extends Application
                 'serial_number'    => $dev['serial_number'],
                 'firmware_version' => $dev['firmware_version'],
                 'wwn'              => $dev['wwn'],
-                'last_poll_time'   => $this->parseDateAndTime($dev['last_poll_time']),
+                'last_poll_time'   => SnmpDecode::parseDateAndTime($dev['last_poll_time']),
                 'last_poll_result' => $dev['last_poll_result'],
                 'last_poll_exit'   => $dev['last_poll_exit_status'],
                 'power_state'      => $dev['power_state'],
@@ -1713,10 +1714,10 @@ class Common extends Application
             'app_id'                               => $this->appId,
             'device_id'                            => $this->deviceId,
             'disk_key'                             => $dev['disk_key'],
-            'ata_version'                          => $this->intValue($row['smartmonSataAtaVersion'] ?? null),
-            'sata_version'                         => $this->intValue($row['smartmonSataVersion'] ?? null),
+            'ata_version'                          => SnmpDecode::intValue($row['smartmonSataAtaVersion'] ?? null),
+            'sata_version'                         => SnmpDecode::intValue($row['smartmonSataVersion'] ?? null),
             'rotation_rate'                        => $row['smartmonSataRotationRate'] ?? null,
-            'form_factor'                          => $this->intValue($row['smartmonSataFormFactor'] ?? null),
+            'form_factor'                          => SnmpDecode::intValue($row['smartmonSataFormFactor'] ?? null),
             'logical_block_size'                   => $row['smartmonSataLogicalBlockSize'] ?? null,
             'physical_block_size'                  => $row['smartmonSataPhysicalBlockSize'] ?? null,
             'user_capacity_bytes'                  => $row['smartmonSataUserCapacityBytes'] ?? null,
@@ -1725,20 +1726,20 @@ class Common extends Application
             'sct_hist_limit_min'                   => $row['smartmonSataSctHistLimitMin'] ?? null,
             'sct_hist_limit_max'                   => $row['smartmonSataSctHistLimitMax'] ?? null,
             // New columns
-            'ata_version_major'                    => $this->intValue($row['smartmonSataAtaVersionMajor'] ?? null),
-            'ata_version_minor'                    => $this->intValue($row['smartmonSataAtaVersionMinor'] ?? null),
+            'ata_version_major'                    => SnmpDecode::intValue($row['smartmonSataAtaVersionMajor'] ?? null),
+            'ata_version_minor'                    => SnmpDecode::intValue($row['smartmonSataAtaVersionMinor'] ?? null),
             'user_capacity_blocks'                 => $row['smartmonSataUserCapacityBlocks'] ?? null,
-            'in_smartctl_database'                 => $this->snmpTruthValue($row['smartmonSataInSmartctlDatabase'] ?? null),
-            'smart_available'                      => $this->snmpTruthValue($row['smartmonSataSmartAvailable'] ?? null),
-            'smart_enabled'                        => $this->snmpTruthValue($row['smartmonSataSmartEnabled'] ?? null),
-            'trim_supported'                       => $this->snmpTruthValue($row['smartmonSataTrimSupported'] ?? null),
-            'write_cache_enabled'                  => $this->snmpTruthValue($row['smartmonSataWriteCacheEnabled'] ?? null),
-            'read_lookahead_enabled'               => $this->snmpTruthValue($row['smartmonSataReadLookaheadEnabled'] ?? null),
-            'apm_enabled'                          => $this->snmpTruthValue($row['smartmonSataApmEnabled'] ?? null),
-            'apm_level'                            => $this->intValue($row['smartmonSataApmLevel'] ?? null),
+            'in_smartctl_database'                 => SnmpDecode::snmpTruthValue($row['smartmonSataInSmartctlDatabase'] ?? null),
+            'smart_available'                      => SnmpDecode::snmpTruthValue($row['smartmonSataSmartAvailable'] ?? null),
+            'smart_enabled'                        => SnmpDecode::snmpTruthValue($row['smartmonSataSmartEnabled'] ?? null),
+            'trim_supported'                       => SnmpDecode::snmpTruthValue($row['smartmonSataTrimSupported'] ?? null),
+            'write_cache_enabled'                  => SnmpDecode::snmpTruthValue($row['smartmonSataWriteCacheEnabled'] ?? null),
+            'read_lookahead_enabled'               => SnmpDecode::snmpTruthValue($row['smartmonSataReadLookaheadEnabled'] ?? null),
+            'apm_enabled'                          => SnmpDecode::snmpTruthValue($row['smartmonSataApmEnabled'] ?? null),
+            'apm_level'                            => SnmpDecode::intValue($row['smartmonSataApmLevel'] ?? null),
             'security_state'                       => $row['smartmonSataSecurityState'] ?? null,
-            'security_enabled'                     => $this->snmpTruthValue($row['smartmonSataSecurityEnabled'] ?? null),
-            'security_frozen'                      => $this->snmpTruthValue($row['smartmonSataSecurityFrozen'] ?? null),
+            'security_enabled'                     => SnmpDecode::snmpTruthValue($row['smartmonSataSecurityEnabled'] ?? null),
+            'security_frozen'                      => SnmpDecode::snmpTruthValue($row['smartmonSataSecurityFrozen'] ?? null),
             'if_speed_current_value'               => $row['smartmonSataIfSpeedCurrentValue'] ?? null,
             'if_speed_max_value'                   => $row['smartmonSataIfSpeedMaxValue'] ?? null,
             'selftest_polling_short_minutes'       => $row['smartmonSataSelfTestPollingShortMinutes'] ?? null,
@@ -1751,18 +1752,18 @@ class Common extends Application
             'selftest_log_revision'                => $row['smartmonSataSelfTestLogRevision'] ?? null,
             'selftest_log_sectors'                 => $row['smartmonSataSelfTestLogSectors'] ?? null,
             'pending_defects_size'                 => $row['smartmonSataPendingDefectsSize'] ?? null,
-            'capability_selftests_supported'       => $this->snmpTruthValue($row['smartmonSataCapabilitySelfTestsSupported'] ?? null),
-            'capability_conveyance_supported'      => $this->snmpTruthValue($row['smartmonSataCapabilityConveyanceSupported'] ?? null),
-            'capability_selective_supported'       => $this->snmpTruthValue($row['smartmonSataCapabilitySelectiveSupported'] ?? null),
-            'capability_error_logging_supported'   => $this->snmpTruthValue($row['smartmonSataCapabilityErrorLoggingSupported'] ?? null),
-            'capability_gp_logging_supported'      => $this->snmpTruthValue($row['smartmonSataCapabilityGpLoggingSupported'] ?? null),
-            'capability_exec_offline_immediate'    => $this->snmpTruthValue($row['smartmonSataCapabilityExecOfflineImmediate'] ?? null),
-            'capability_offline_aborted_on_cmd'    => $this->snmpTruthValue($row['smartmonSataCapabilityOfflineAbortedOnCmd'] ?? null),
-            'capability_offline_surface_scan'      => $this->snmpTruthValue($row['smartmonSataCapabilityOfflineSurfaceScan'] ?? null),
-            'capability_attr_autosave'             => $this->snmpTruthValue($row['smartmonSataCapabilityAttrAutosave'] ?? null),
-            'sct_error_recovery_supported'         => $this->snmpTruthValue($row['smartmonSataSctErrorRecoverySupported'] ?? null),
-            'sct_feature_control_supported'        => $this->snmpTruthValue($row['smartmonSataSctFeatureControlSupported'] ?? null),
-            'sct_data_table_supported'             => $this->snmpTruthValue($row['smartmonSataSctDataTableSupported'] ?? null),
+            'capability_selftests_supported'       => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilitySelfTestsSupported'] ?? null),
+            'capability_conveyance_supported'      => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilityConveyanceSupported'] ?? null),
+            'capability_selective_supported'       => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilitySelectiveSupported'] ?? null),
+            'capability_error_logging_supported'   => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilityErrorLoggingSupported'] ?? null),
+            'capability_gp_logging_supported'      => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilityGpLoggingSupported'] ?? null),
+            'capability_exec_offline_immediate'    => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilityExecOfflineImmediate'] ?? null),
+            'capability_offline_aborted_on_cmd'    => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilityOfflineAbortedOnCmd'] ?? null),
+            'capability_offline_surface_scan'      => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilityOfflineSurfaceScan'] ?? null),
+            'capability_attr_autosave'             => SnmpDecode::snmpTruthValue($row['smartmonSataCapabilityAttrAutosave'] ?? null),
+            'sct_error_recovery_supported'         => SnmpDecode::snmpTruthValue($row['smartmonSataSctErrorRecoverySupported'] ?? null),
+            'sct_feature_control_supported'        => SnmpDecode::snmpTruthValue($row['smartmonSataSctFeatureControlSupported'] ?? null),
+            'sct_data_table_supported'             => SnmpDecode::snmpTruthValue($row['smartmonSataSctDataTableSupported'] ?? null),
         ], ['app_id', 'disk_key']);
     }
 
@@ -1772,7 +1773,7 @@ class Common extends Application
             'app_id'                     => $this->appId,
             'device_id'                  => $this->deviceId,
             'disk_key'                   => $dev['disk_key'],
-            'overall_status'             => $this->snmpTruthValue($row['smartmonSataHealthOverallStatus'] ?? null),
+            'overall_status'             => SnmpDecode::snmpTruthValue($row['smartmonSataHealthOverallStatus'] ?? null),
             'offline_collection_status'  => $row['smartmonSataOfflineCollectionStatusValue'] ?? null,
             'selftest_exec_status_raw'   => $row['smartmonSataSelfTestExecutionStatusValue'] ?? null,
             'power_cycles'               => $row['smartmonSataPowerCycles'] ?? null,
@@ -1792,8 +1793,8 @@ class Common extends Application
             'sct_temp_lifetime_max'      => $row['smartmonSataSctTempLifetimeMax'] ?? null,
             'sct_temp_under_limit_count' => $row['smartmonSataSctTempUnderLimitCount'] ?? null,
             'sct_temp_over_limit_count'  => $row['smartmonSataSctTempOverLimitCount'] ?? null,
-            'sct_smart_status_passed'               => $this->snmpTruthValue($row['smartmonSataSctSmartStatusPassed'] ?? null),
-            'selftest_estimated_completion_time'    => $this->parseDateAndTime($row['smartmonSataSelfTestEstimatedCompletionTime'] ?? null),
+            'sct_smart_status_passed'               => SnmpDecode::snmpTruthValue($row['smartmonSataSctSmartStatusPassed'] ?? null),
+            'selftest_estimated_completion_time'    => SnmpDecode::parseDateAndTime($row['smartmonSataSelfTestEstimatedCompletionTime'] ?? null),
             'selftest_estimated_bytes_sec'          => $row['smartmonSataSelfTestEstimatedBytesSec'] ?? null,
         ], ['app_id', 'disk_key']);
     }
@@ -1815,7 +1816,7 @@ class Common extends Application
                     ? substr((string) $row['smartmonSataAttrRawString'], 0, 32)
                     : null,
                 'status'           => $row['smartmonSataAttrStatus'] ?? null,
-                'format'           => $this->intValue($row['smartmonSataAttrFormat'] ?? null),
+                'format'           => SnmpDecode::intValue($row['smartmonSataAttrFormat'] ?? null),
                 'flags'            => $this->parseAttrFlags($row['smartmonSataAttrFlags'] ?? null),
                 'rrd_type'         => $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null)
                     ? 'COUNTER' : 'GAUGE',
@@ -1889,7 +1890,7 @@ class Common extends Application
                 '168h' => $ratesByDs[$ds]['168h'] ?? ($failedWindows['168h'] ?? false ? $previous?->rate_168h : null),
                 '672h' => $ratesByDs[$ds]['672h'] ?? ($failedWindows['672h'] ?? false ? $previous?->rate_672h : null),
             ];
-            $rawStatus = $this->intValue($row['smartmonSataAttrStatus'] ?? null);
+            $rawStatus = SnmpDecode::intValue($row['smartmonSataAttrStatus'] ?? null);
             $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
 
             $this->upsert('smart_sata_attributes', [
@@ -1917,7 +1918,7 @@ class Common extends Application
      */
     private function rateDsForAttribute(int $id, array $row): ?string
     {
-        $format = $this->intValue($row['smartmonSataAttrFormat'] ?? null);
+        $format = SnmpDecode::intValue($row['smartmonSataAttrFormat'] ?? null);
         $rawString = $row['smartmonSataAttrRawString'] ?? null;
         $subValues = $this->attrFormatSubValues($format, $rawString);
 
@@ -2141,7 +2142,7 @@ class Common extends Application
                 '168h' => $existing->rate_168h ?? null,
                 '672h' => $existing->rate_672h ?? null,
             ];
-            $rawStatus = $this->intValue($row['smartmonSataAttrStatus'] ?? null);
+            $rawStatus = SnmpDecode::intValue($row['smartmonSataAttrStatus'] ?? null);
             $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
 
             $this->upsert('smart_sata_attributes', [
@@ -2168,7 +2169,7 @@ class Common extends Application
                 'device_id'   => $this->deviceId,
                 'disk_key'    => $dev['disk_key'],
                 'direction'   => (int) $direction,
-                'enabled'     => $this->snmpTruthValue($row['smartmonSataErcEnabled'] ?? null),
+                'enabled'     => SnmpDecode::snmpTruthValue($row['smartmonSataErcEnabled'] ?? null),
                 'deciseconds' => $row['smartmonSataErcDeciseconds'] ?? null,
             ], ['app_id', 'disk_key', 'direction']);
         }
@@ -2188,7 +2189,7 @@ class Common extends Application
                     ? substr((string) $row['smartmonSataPhyEventName'], 0, 128) : null,
                 'size_bytes' => $row['smartmonSataPhyEventSize'] ?? null,
                 'value'      => $row['smartmonSataPhyEventValue'] ?? null,
-                'overflow'   => $this->snmpTruthValue($row['smartmonSataPhyEventOverflow'] ?? null),
+                'overflow'   => SnmpDecode::snmpTruthValue($row['smartmonSataPhyEventOverflow'] ?? null),
             ], ['app_id', 'disk_key', 'event_id']);
         }
         $this->pruneStaleRows('smart_sata_phy_events', $dev['disk_key'], 'event_id', array_keys($rows));
@@ -2205,7 +2206,7 @@ class Common extends Application
                 'disk_key'  => $dev['disk_key'],
                 'event_id'  => (int) $eventId,
                 'value'     => $row['smartmonSataPhyEventValue'] ?? null,
-                'overflow'  => $this->snmpTruthValue($row['smartmonSataPhyEventOverflow'] ?? null),
+                'overflow'  => SnmpDecode::snmpTruthValue($row['smartmonSataPhyEventOverflow'] ?? null),
             ];
         }
         if (! empty($upsertRows)) {
@@ -2272,7 +2273,7 @@ class Common extends Application
                 'entry_num'       => (int) $testIndex,
                 'test_type'       => $row['smartmonSataSelfTestType'] ?? null,
                 'result'          => $row['smartmonSataSelfTestResult'] ?? null,
-                'result_passed'   => $this->snmpTruthValue($row['smartmonSataSelfTestResultPassed'] ?? null),
+                'result_passed'   => SnmpDecode::snmpTruthValue($row['smartmonSataSelfTestResultPassed'] ?? null),
                 'remaining_pct'   => $row['smartmonSataSelfTestRemainingPct'] ?? null,
                 'power_on_hours'  => $row['smartmonSataSelfTestLifetimeHours'] ?? null,
                 'lba_first_error' => $row['smartmonSataSelfTestLbaFirstError'] ?? null,
@@ -2307,8 +2308,8 @@ class Common extends Application
                 'log_address'   => (int) $address,
                 'name'          => isset($row['smartmonSataLogDirName'])
                     ? substr((string) $row['smartmonSataLogDirName'], 0, 128) : null,
-                'readable'      => $this->snmpTruthValue($row['smartmonSataLogDirReadable'] ?? null),
-                'writable'      => $this->snmpTruthValue($row['smartmonSataLogDirWritable'] ?? null),
+                'readable'      => SnmpDecode::snmpTruthValue($row['smartmonSataLogDirReadable'] ?? null),
+                'writable'      => SnmpDecode::snmpTruthValue($row['smartmonSataLogDirWritable'] ?? null),
                 'gp_sectors'    => $row['smartmonSataLogDirGpSectors'] ?? null,
                 'smart_sectors' => $row['smartmonSataLogDirSmartSectors'] ?? null,
             ], ['app_id', 'disk_key', 'log_address']);
@@ -2327,7 +2328,7 @@ class Common extends Application
                 continue;
             }
             foreach ($offsets as $offset => $row) {
-                $flagsRaw = $this->parseBitsValue($row['smartmonSataDevStatFlagsValue'] ?? null);
+                $flagsRaw = SnmpDecode::parseBitsValue($row['smartmonSataDevStatFlagsValue'] ?? null);
                 $valid = $flagsRaw !== null ? (bool) ($flagsRaw & 0x40) : null;
                 $normalized = $flagsRaw !== null ? (bool) ($flagsRaw & 0x20) : null;
 
@@ -2374,20 +2375,20 @@ class Common extends Application
             'app_id'                         => $this->appId,
             'device_id'                      => $this->deviceId,
             'disk_key'                       => $dev['disk_key'],
-            'pci_vendor_id'                  => $this->intValue($row['smartmonNvmePciVendorId'] ?? null),
-            'pci_device_id'                  => $this->intValue($row['smartmonNvmePciVendorSubsystemId'] ?? null),
-            'ieee_oui'                       => $this->intValue($row['smartmonNvmeIeeeOuiIdentifier'] ?? null),
-            'total_nvm_capacity_bytes'       => $this->intValue($row['smartmonNvmeTotalNvmCapacityBytes'] ?? null),
-            'unallocated_nvm_capacity_bytes' => $this->intValue($row['smartmonNvmeUnallocatedNvmCapacityBytes'] ?? null),
-            'controller_id'                  => $this->intValue($row['smartmonNvmeControllerId'] ?? null),
+            'pci_vendor_id'                  => SnmpDecode::intValue($row['smartmonNvmePciVendorId'] ?? null),
+            'pci_device_id'                  => SnmpDecode::intValue($row['smartmonNvmePciVendorSubsystemId'] ?? null),
+            'ieee_oui'                       => SnmpDecode::intValue($row['smartmonNvmeIeeeOuiIdentifier'] ?? null),
+            'total_nvm_capacity_bytes'       => SnmpDecode::intValue($row['smartmonNvmeTotalNvmCapacityBytes'] ?? null),
+            'unallocated_nvm_capacity_bytes' => SnmpDecode::intValue($row['smartmonNvmeUnallocatedNvmCapacityBytes'] ?? null),
+            'controller_id'                  => SnmpDecode::intValue($row['smartmonNvmeControllerId'] ?? null),
             'nvme_version'                   => $row['smartmonNvmeVersion'] ?? null,
-            'namespace_count'                => $this->intValue($row['smartmonNvmeNamespaceCount'] ?? null),
-            'max_data_transfer_pages'        => $this->intValue($row['smartmonNvmeMaximumDataTransferPages'] ?? null),
-            'link_power_state'               => $this->intValue($row['smartmonNvmeLinkPowerState'] ?? null),
-            'max_link_speed'                 => $this->intValue($row['smartmonNvmeMaxLinkSpeed'] ?? null),
-            'max_link_width'                 => $this->intValue($row['smartmonNvmeMaxLinkWidth'] ?? null),
-            'current_link_speed'             => $this->intValue($row['smartmonNvmeCurrentLinkSpeed'] ?? null),
-            'current_link_width'             => $this->intValue($row['smartmonNvmeCurrentLinkWidth'] ?? null),
+            'namespace_count'                => SnmpDecode::intValue($row['smartmonNvmeNamespaceCount'] ?? null),
+            'max_data_transfer_pages'        => SnmpDecode::intValue($row['smartmonNvmeMaximumDataTransferPages'] ?? null),
+            'link_power_state'               => SnmpDecode::intValue($row['smartmonNvmeLinkPowerState'] ?? null),
+            'max_link_speed'                 => SnmpDecode::intValue($row['smartmonNvmeMaxLinkSpeed'] ?? null),
+            'max_link_width'                 => SnmpDecode::intValue($row['smartmonNvmeMaxLinkWidth'] ?? null),
+            'current_link_speed'             => SnmpDecode::intValue($row['smartmonNvmeCurrentLinkSpeed'] ?? null),
+            'current_link_width'             => SnmpDecode::intValue($row['smartmonNvmeCurrentLinkWidth'] ?? null),
         ], ['app_id', 'disk_key']);
     }
 
@@ -2395,31 +2396,31 @@ class Common extends Application
     {
         // Current self-test: OperationValue is the operation enum (0=none, 1=short,
         // 2=extended, 14=vendor); OperationProgress is the completion percentage.
-        $selftestOp = $this->intValue($row['smartmonNvmeCurrentSelfTestOperationValue'] ?? null);
+        $selftestOp = SnmpDecode::intValue($row['smartmonNvmeCurrentSelfTestOperationValue'] ?? null);
 
         $this->upsert('smart_nvme_health', [
             'app_id'               => $this->appId,
             'device_id'            => $this->deviceId,
             'disk_key'             => $dev['disk_key'],
             'overall_status'       => $this->healthStatusValue($row['smartmonNvmeHealthOverallStatus'] ?? null),
-            'critical_warning'     => $this->parseBitsValue($row['smartmonNvmeCriticalWarning'] ?? null),
-            'data_units_read'      => $this->intValue($row['smartmonNvmeDataUnitsRead'] ?? null),
-            'data_units_written'   => $this->intValue($row['smartmonNvmeDataUnitsWritten'] ?? null),
-            'data_bytes_read'      => $this->intValue($row['smartmonNvmeDataBytesRead'] ?? null),
-            'data_bytes_written'   => $this->intValue($row['smartmonNvmeDataBytesWritten'] ?? null),
-            'host_read_commands'   => $this->intValue($row['smartmonNvmeHostReadCommands'] ?? null),
-            'host_write_commands'  => $this->intValue($row['smartmonNvmeHostWriteCommands'] ?? null),
-            'controller_busy_time' => $this->intValue($row['smartmonNvmeControllerBusyTimeMinutes'] ?? null),
-            'power_cycles'         => $this->intValue($row['smartmonNvmePowerCycles'] ?? null),
-            'power_on_hours'       => $this->intValue($row['smartmonNvmePowerOnHours'] ?? null),
-            'unsafe_shutdowns'     => $this->intValue($row['smartmonNvmeUnsafeShutdowns'] ?? null),
-            'media_errors'         => $this->intValue($row['smartmonNvmeMediaDataIntegrityErrors'] ?? null),
-            'num_err_log_entries'  => $this->intValue($row['smartmonNvmeErrorInformationLogEntries'] ?? null),
-            'warning_temp_time'    => $this->intValue($row['smartmonNvmeWarningTemperatureTimeMinutes'] ?? null),
-            'critical_comp_time'   => $this->intValue($row['smartmonNvmeCriticalTemperatureTimeMinutes'] ?? null),
+            'critical_warning'     => SnmpDecode::parseBitsValue($row['smartmonNvmeCriticalWarning'] ?? null),
+            'data_units_read'      => SnmpDecode::intValue($row['smartmonNvmeDataUnitsRead'] ?? null),
+            'data_units_written'   => SnmpDecode::intValue($row['smartmonNvmeDataUnitsWritten'] ?? null),
+            'data_bytes_read'      => SnmpDecode::intValue($row['smartmonNvmeDataBytesRead'] ?? null),
+            'data_bytes_written'   => SnmpDecode::intValue($row['smartmonNvmeDataBytesWritten'] ?? null),
+            'host_read_commands'   => SnmpDecode::intValue($row['smartmonNvmeHostReadCommands'] ?? null),
+            'host_write_commands'  => SnmpDecode::intValue($row['smartmonNvmeHostWriteCommands'] ?? null),
+            'controller_busy_time' => SnmpDecode::intValue($row['smartmonNvmeControllerBusyTimeMinutes'] ?? null),
+            'power_cycles'         => SnmpDecode::intValue($row['smartmonNvmePowerCycles'] ?? null),
+            'power_on_hours'       => SnmpDecode::intValue($row['smartmonNvmePowerOnHours'] ?? null),
+            'unsafe_shutdowns'     => SnmpDecode::intValue($row['smartmonNvmeUnsafeShutdowns'] ?? null),
+            'media_errors'         => SnmpDecode::intValue($row['smartmonNvmeMediaDataIntegrityErrors'] ?? null),
+            'num_err_log_entries'  => SnmpDecode::intValue($row['smartmonNvmeErrorInformationLogEntries'] ?? null),
+            'warning_temp_time'    => SnmpDecode::intValue($row['smartmonNvmeWarningTemperatureTimeMinutes'] ?? null),
+            'critical_comp_time'   => SnmpDecode::intValue($row['smartmonNvmeCriticalTemperatureTimeMinutes'] ?? null),
             'current_selftest_op'  => $selftestOp,
             'current_selftest_str' => $this->nvmeSelfTestOpLabel($selftestOp),
-            'current_selftest_pct' => $this->intValue($row['smartmonNvmeCurrentSelfTestOperationProgress'] ?? null),
+            'current_selftest_pct' => SnmpDecode::intValue($row['smartmonNvmeCurrentSelfTestOperationProgress'] ?? null),
         ], ['app_id', 'disk_key']);
     }
 
@@ -2431,10 +2432,10 @@ class Common extends Application
                 'device_id'     => $this->deviceId,
                 'disk_key'      => $dev['disk_key'],
                 'ns_id'         => (int) $nsId,
-                'nsze'          => $this->intValue($row['smartmonNvmeNamespaceSizeBlocks'] ?? null),
-                'ncap'          => $this->intValue($row['smartmonNvmeNamespaceCapacityBlocks'] ?? null),
-                'nuse'          => $this->intValue($row['smartmonNvmeNamespaceUtilizationBlocks'] ?? null),
-                'lba_data_size' => $this->intValue($row['smartmonNvmeNamespaceFormattedLbaSizeBytes'] ?? null),
+                'nsze'          => SnmpDecode::intValue($row['smartmonNvmeNamespaceSizeBlocks'] ?? null),
+                'ncap'          => SnmpDecode::intValue($row['smartmonNvmeNamespaceCapacityBlocks'] ?? null),
+                'nuse'          => SnmpDecode::intValue($row['smartmonNvmeNamespaceUtilizationBlocks'] ?? null),
+                'lba_data_size' => SnmpDecode::intValue($row['smartmonNvmeNamespaceFormattedLbaSizeBytes'] ?? null),
             ], ['app_id', 'disk_key', 'ns_id']);
         }
         $this->pruneStaleRows('smart_nvme_namespaces', $dev['disk_key'], 'ns_id', array_keys($rows));
@@ -2448,14 +2449,14 @@ class Common extends Application
                 'device_id'            => $this->deviceId,
                 'disk_key'             => $dev['disk_key'],
                 'entry_num'            => (int) $entryIndex,
-                'test_type'            => $this->intValue($row['smartmonNvmeSelfTestType'] ?? null),
-                'result'               => $this->intValue($row['smartmonNvmeSelfTestResult'] ?? null),
+                'test_type'            => SnmpDecode::intValue($row['smartmonNvmeSelfTestType'] ?? null),
+                'result'               => SnmpDecode::intValue($row['smartmonNvmeSelfTestResult'] ?? null),
                 'result_text'          => isset($row['smartmonNvmeSelfTestResultText'])
                     ? substr((string) $row['smartmonNvmeSelfTestResultText'], 0, 96) : null,
-                'power_on_hours'       => $this->intValue($row['smartmonNvmeSelfTestPowerOnHours'] ?? null),
-                'failing_lba'          => $this->intValue($row['smartmonNvmeSelfTestFailingLba'] ?? null),
-                'nsid'                 => $this->intValue($row['smartmonNvmeSelfTestNamespaceId'] ?? null),
-                'estimated_completion' => $this->parseDateAndTime($row['smartmonNvmeSelfTestEstimatedCompletionTime'] ?? null),
+                'power_on_hours'       => SnmpDecode::intValue($row['smartmonNvmeSelfTestPowerOnHours'] ?? null),
+                'failing_lba'          => SnmpDecode::intValue($row['smartmonNvmeSelfTestFailingLba'] ?? null),
+                'nsid'                 => SnmpDecode::intValue($row['smartmonNvmeSelfTestNamespaceId'] ?? null),
+                'estimated_completion' => SnmpDecode::parseDateAndTime($row['smartmonNvmeSelfTestEstimatedCompletionTime'] ?? null),
             ], ['app_id', 'disk_key', 'entry_num']);
         }
         $this->pruneStaleRows('smart_nvme_selftest_log', $dev['disk_key'], 'entry_num', array_keys($rows));
@@ -2469,16 +2470,16 @@ class Common extends Application
                 'device_id'             => $this->deviceId,
                 'disk_key'              => $dev['disk_key'],
                 'state_id'              => (int) $stateId,
-                'operational'           => $this->snmpTruthValue($row['smartmonNvmePowerStateOperational'] ?? null),
-                'max_power_mw'          => $this->intValue($row['smartmonNvmePowerStateMaxPowerMilliWatts'] ?? null),
-                'active_power_mw'       => $this->intValue($row['smartmonNvmePowerStateActivePowerMilliWatts'] ?? null),
-                'idle_power_mw'         => $this->intValue($row['smartmonNvmePowerStateIdlePowerMilliWatts'] ?? null),
-                'read_latency_rank'     => $this->intValue($row['smartmonNvmePowerStateReadLatencyRank'] ?? null),
-                'read_throughput_rank'  => $this->intValue($row['smartmonNvmePowerStateReadThroughputRank'] ?? null),
-                'write_latency_rank'    => $this->intValue($row['smartmonNvmePowerStateWriteLatencyRank'] ?? null),
-                'write_throughput_rank' => $this->intValue($row['smartmonNvmePowerStateWriteThroughputRank'] ?? null),
-                'entry_latency_us'      => $this->intValue($row['smartmonNvmePowerStateEntryLatencyUsec'] ?? null),
-                'exit_latency_us'       => $this->intValue($row['smartmonNvmePowerStateExitLatencyUsec'] ?? null),
+                'operational'           => SnmpDecode::snmpTruthValue($row['smartmonNvmePowerStateOperational'] ?? null),
+                'max_power_mw'          => SnmpDecode::intValue($row['smartmonNvmePowerStateMaxPowerMilliWatts'] ?? null),
+                'active_power_mw'       => SnmpDecode::intValue($row['smartmonNvmePowerStateActivePowerMilliWatts'] ?? null),
+                'idle_power_mw'         => SnmpDecode::intValue($row['smartmonNvmePowerStateIdlePowerMilliWatts'] ?? null),
+                'read_latency_rank'     => SnmpDecode::intValue($row['smartmonNvmePowerStateReadLatencyRank'] ?? null),
+                'read_throughput_rank'  => SnmpDecode::intValue($row['smartmonNvmePowerStateReadThroughputRank'] ?? null),
+                'write_latency_rank'    => SnmpDecode::intValue($row['smartmonNvmePowerStateWriteLatencyRank'] ?? null),
+                'write_throughput_rank' => SnmpDecode::intValue($row['smartmonNvmePowerStateWriteThroughputRank'] ?? null),
+                'entry_latency_us'      => SnmpDecode::intValue($row['smartmonNvmePowerStateEntryLatencyUsec'] ?? null),
+                'exit_latency_us'       => SnmpDecode::intValue($row['smartmonNvmePowerStateExitLatencyUsec'] ?? null),
             ], ['app_id', 'disk_key', 'state_id']);
         }
         $this->pruneStaleRows('smart_nvme_power_states', $dev['disk_key'], 'state_id', array_keys($rows));
@@ -2498,10 +2499,10 @@ class Common extends Application
                     'disk_key'             => $dev['disk_key'],
                     'ns_id'                => (int) $nsId,
                     'format_id'            => (int) $formatId,
-                    'current'              => $this->snmpTruthValue($row['smartmonNvmeLbaFormatCurrent'] ?? null),
-                    'data_size_bytes'      => $this->intValue($row['smartmonNvmeLbaFormatDataSizeBytes'] ?? null),
-                    'metadata_size_bytes'  => $this->intValue($row['smartmonNvmeLbaFormatMetadataSizeBytes'] ?? null),
-                    'relative_performance' => $this->intValue($row['smartmonNvmeLbaFormatRelativePerformance'] ?? null),
+                    'current'              => SnmpDecode::snmpTruthValue($row['smartmonNvmeLbaFormatCurrent'] ?? null),
+                    'data_size_bytes'      => SnmpDecode::intValue($row['smartmonNvmeLbaFormatDataSizeBytes'] ?? null),
+                    'metadata_size_bytes'  => SnmpDecode::intValue($row['smartmonNvmeLbaFormatMetadataSizeBytes'] ?? null),
+                    'relative_performance' => SnmpDecode::intValue($row['smartmonNvmeLbaFormatRelativePerformance'] ?? null),
                 ], ['app_id', 'disk_key', 'ns_id', 'format_id']);
             }
             $this->pruneStaleRows('smart_nvme_lba_formats', $dev['disk_key'], 'format_id', array_keys($formats), ['ns_id' => (int) $nsId]);
@@ -2517,20 +2518,20 @@ class Common extends Application
                 'device_id'            => $this->deviceId,
                 'disk_key'             => $dev['disk_key'],
                 'entry_num'            => (int) $entryIndex,
-                'error_count'          => $this->intValue($row['smartmonNvmeErrorCount'] ?? null),
-                'sq_id'                => $this->intValue($row['smartmonNvmeErrorSubmissionQueueId'] ?? null),
-                'command_id'           => $this->intValue($row['smartmonNvmeErrorCommandId'] ?? null),
-                'status_field'         => $this->intValue($row['smartmonNvmeErrorStatusField'] ?? null),
-                'param_error_location' => $this->intValue($row['smartmonNvmeErrorParameterErrorLocation'] ?? null),
-                'lba'                  => $this->intValue($row['smartmonNvmeErrorLba'] ?? null),
-                'ns_id'                => $this->intValue($row['smartmonNvmeErrorNamespaceId'] ?? null),
-                'vendor_info'          => $this->intValue($row['smartmonNvmeErrorVendorSpecificInfo'] ?? null),
-                'status_code'          => $this->intValue($row['smartmonNvmeErrorStatusCode'] ?? null),
-                'status_code_type'     => $this->intValue($row['smartmonNvmeErrorStatusCodeType'] ?? null),
-                'do_not_retry'         => $this->snmpTruthValue($row['smartmonNvmeErrorDoNotRetry'] ?? null),
+                'error_count'          => SnmpDecode::intValue($row['smartmonNvmeErrorCount'] ?? null),
+                'sq_id'                => SnmpDecode::intValue($row['smartmonNvmeErrorSubmissionQueueId'] ?? null),
+                'command_id'           => SnmpDecode::intValue($row['smartmonNvmeErrorCommandId'] ?? null),
+                'status_field'         => SnmpDecode::intValue($row['smartmonNvmeErrorStatusField'] ?? null),
+                'param_error_location' => SnmpDecode::intValue($row['smartmonNvmeErrorParameterErrorLocation'] ?? null),
+                'lba'                  => SnmpDecode::intValue($row['smartmonNvmeErrorLba'] ?? null),
+                'ns_id'                => SnmpDecode::intValue($row['smartmonNvmeErrorNamespaceId'] ?? null),
+                'vendor_info'          => SnmpDecode::intValue($row['smartmonNvmeErrorVendorSpecificInfo'] ?? null),
+                'status_code'          => SnmpDecode::intValue($row['smartmonNvmeErrorStatusCode'] ?? null),
+                'status_code_type'     => SnmpDecode::intValue($row['smartmonNvmeErrorStatusCodeType'] ?? null),
+                'do_not_retry'         => SnmpDecode::snmpTruthValue($row['smartmonNvmeErrorDoNotRetry'] ?? null),
                 'status_string'        => isset($row['smartmonNvmeErrorStatusString'])
                     ? substr((string) $row['smartmonNvmeErrorStatusString'], 0, 128) : null,
-                'error_time'           => $this->parseDateAndTime($row['smartmonNvmeErrorTimestamp'] ?? null),
+                'error_time'           => SnmpDecode::parseDateAndTime($row['smartmonNvmeErrorTimestamp'] ?? null),
             ], ['app_id', 'disk_key', 'entry_num']);
         }
         $this->pruneStaleRows('smart_nvme_error_log', $dev['disk_key'], 'entry_num', array_keys($rows));
@@ -2542,12 +2543,12 @@ class Common extends Application
             'app_id'                  => $this->appId,
             'device_id'               => $this->deviceId,
             'disk_key'                => $dev['disk_key'],
-            'firmware_update_raw'     => $this->intValue($row['smartmonNvmeFirmwareUpdateRaw'] ?? null),
-            'firmware_slot_count'     => $this->intValue($row['smartmonNvmeFirmwareSlotCount'] ?? null),
-            'firmware_reset_required' => $this->snmpTruthValue($row['smartmonNvmeFirmwareResetRequired'] ?? null),
-            'optional_admin_cmd_raw'  => $this->bitsValue($row['smartmonNvmeOptionalAdminCommandRaw'] ?? null),
-            'optional_nvm_cmd_raw'    => $this->bitsValue($row['smartmonNvmeOptionalNvmCommandRaw'] ?? null),
-            'log_page_attrs_raw'      => $this->bitsValue($row['smartmonNvmeLogPageAttributesRaw'] ?? null),
+            'firmware_update_raw'     => SnmpDecode::intValue($row['smartmonNvmeFirmwareUpdateRaw'] ?? null),
+            'firmware_slot_count'     => SnmpDecode::intValue($row['smartmonNvmeFirmwareSlotCount'] ?? null),
+            'firmware_reset_required' => SnmpDecode::snmpTruthValue($row['smartmonNvmeFirmwareResetRequired'] ?? null),
+            'optional_admin_cmd_raw'  => SnmpDecode::bitsValue($row['smartmonNvmeOptionalAdminCommandRaw'] ?? null),
+            'optional_nvm_cmd_raw'    => SnmpDecode::bitsValue($row['smartmonNvmeOptionalNvmCommandRaw'] ?? null),
+            'log_page_attrs_raw'      => SnmpDecode::bitsValue($row['smartmonNvmeLogPageAttributesRaw'] ?? null),
             'optional_admin_cmd_text' => isset($row['smartmonNvmeOptionalAdminCommandText'])
                 ? substr((string) $row['smartmonNvmeOptionalAdminCommandText'], 0, 255) : null,
             'optional_nvm_cmd_text'   => isset($row['smartmonNvmeOptionalNvmCommandText'])
@@ -2575,8 +2576,8 @@ class Common extends Application
             $merged = [];
             foreach ($valueRows[(string) $devIdx] ?? [] as $eventId => $value) {
                 $merged[(string) $eventId] = [
-                    'smartmonSataPhyEventValue'    => $this->leafValue($value, 'smartmonSataPhyEventValue'),
-                    'smartmonSataPhyEventOverflow' => $this->leafValue($overflowRows[(string) $devIdx][$eventId] ?? null, 'smartmonSataPhyEventOverflow'),
+                    'smartmonSataPhyEventValue'    => SnmpDecode::leafValue($value, 'smartmonSataPhyEventValue'),
+                    'smartmonSataPhyEventOverflow' => SnmpDecode::leafValue($overflowRows[(string) $devIdx][$eventId] ?? null, 'smartmonSataPhyEventOverflow'),
                 ];
             }
             $this->syncSataPhyEventValueRows($dev, $merged);
@@ -2613,7 +2614,7 @@ class Common extends Application
                         'disk_key'    => $dev['disk_key'],
                         'page_num'    => (int) $pageNum,
                         'stat_offset' => (int) $offset,
-                        'value'       => $this->leafValue($value, 'smartmonSataDevStatValue'),
+                        'value'       => SnmpDecode::leafValue($value, 'smartmonSataDevStatValue'),
                     ];
                 }
             }
@@ -2915,7 +2916,7 @@ class Common extends Application
 
             $config[$dsNorm] = ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
 
-            $format = $this->intValue($row['smartmonSataAttrFormat'] ?? null);
+            $format = SnmpDecode::intValue($row['smartmonSataAttrFormat'] ?? null);
             $rawString = $row['smartmonSataAttrRawString'] ?? null;
             $subValues = $this->attrFormatSubValues($format, $rawString);
             if ($subValues !== []) {
@@ -3031,23 +3032,6 @@ class Common extends Application
         return $nvme;
     }
 
-    /**
-     * Convert a SNMP DateAndTime string (e.g. "2026-6-6,22:15:11.0,+2:0")
-     * to a MySQL-compatible datetime string ("2026-06-06 22:15:11"), or null.
-     */
-    private function parseDateAndTime(mixed $raw): ?string
-    {
-        if ($raw === null || $raw === '') {
-            return null;
-        }
-        $pattern = '/^(\d{4})-(\d{1,2})-(\d{1,2}),(\d{1,2}):(\d{2}):(\d{2})(?:\.\d+)?(?:,[+-]\d+:\d+)?$/';
-        if (! preg_match($pattern, trim((string) $raw), $m)) {
-            return null;
-        }
-
-        return sprintf('%04d-%02d-%02d %02d:%02d:%02d', $m[1], $m[2], $m[3], $m[4], $m[5], $m[6]);
-    }
-
     /** Print a debug line when -vv is active. */
     private function vlog(string $msg): void
     {
@@ -3103,7 +3087,7 @@ class Common extends Application
      */
     private function healthLevel(mixed $overall, iterable $attrStatuses, iterable $rateStatuses = []): int
     {
-        $overall = $this->intValue($overall);
+        $overall = SnmpDecode::intValue($overall);
         if ($overall === 4) {
             return 6; // unavailable
         }
@@ -3111,7 +3095,7 @@ class Common extends Application
         $level = ($overall !== null && $overall !== 1) ? 2 : 1;
 
         foreach ($attrStatuses as $status) {
-            $status = $this->intValue($status);
+            $status = SnmpDecode::intValue($status);
             if ($status === 3) {       // failedInPast
                 $level = max($level, 3);
             } elseif ($status === 2) { // failingNow
@@ -3120,7 +3104,7 @@ class Common extends Application
         }
 
         foreach ($rateStatuses as $rateStatus) {
-            if ($this->intValue($rateStatus) === 2) { // rate-of-change threshold exceeded
+            if (SnmpDecode::intValue($rateStatus) === 2) { // rate-of-change threshold exceeded
                 $level = max($level, 4);
             }
         }
@@ -3189,63 +3173,6 @@ class Common extends Application
         return DiskIdentity::index($key);
     }
 
-    /**
-     * Compute the actual physical value from a SENSOR-MIB row.
-     * Actual value = col × 10^(scale_exponent − precision)
-     */
-    private function applySensorScaleCol(array $row, string $valueCol): ?float
-    {
-        $raw = $row[$valueCol] ?? null;
-        if ($raw === null) {
-            return null;
-        }
-
-        // smartmonSensorScale is an enum returned as a name ("units(9)") when MIBs load.
-        $scaleEnum = $this->intValue($row['smartmonSensorScale'] ?? null) ?? 9; // units(9 = 10^0)
-        $precision = $this->intValue($row['smartmonSensorPrecision'] ?? null) ?? 0;
-        $exp = self::SENSOR_SCALE_EXP[$scaleEnum] ?? 0;
-
-        return (float) $raw * (10 ** ($exp - $precision));
-    }
-
-    /**
-     * Translate smartmonSensorScale + precision into sensor_divisor / sensor_multiplier
-     * so updateSensorValues() can scale the raw smartmonSensorValue at poll time
-     * (e.g. milli(8) precision 0 → divisor 1000: 12169 → 12.169). Both keys are
-     * always returned so a re-discovery resets any stale factor.
-     *
-     * @return array{sensor_divisor: int, sensor_multiplier: int}
-     */
-    private function sensorScaleColumns(array $row): array
-    {
-        $scaleEnum = $this->intValue($row['smartmonSensorScale'] ?? null) ?? 9;
-        $precision = $this->intValue($row['smartmonSensorPrecision'] ?? null) ?? 0;
-        $exp = (self::SENSOR_SCALE_EXP[$scaleEnum] ?? 0) - $precision;
-
-        return $exp >= 0
-            ? ['sensor_divisor' => 1, 'sensor_multiplier' => 10 ** $exp]
-            : ['sensor_divisor' => 10 ** (-$exp), 'sensor_multiplier' => 1];
-    }
-
-    /**
-     * Extract the scalar value from a SnmpQuery table() leaf.
-     *
-     * A single-column walk grouped with table($n) yields leaves of the form
-     * [columnName => value]; return the scalar (preferring the named column),
-     * or the value itself when it is already a scalar.
-     */
-    private function leafValue(mixed $leaf, string $col): mixed
-    {
-        if (! is_array($leaf)) {
-            return $leaf;
-        }
-        if (array_key_exists($col, $leaf)) {
-            return $leaf[$col];
-        }
-
-        return $leaf === [] ? null : reset($leaf);
-    }
-
     private function walkSataTable(string $table, int $group, bool $numericIndex = false): array
     {
         $query = SnmpQuery::mibs(self::SATA_MIBS)->hideMib();
@@ -3304,29 +3231,6 @@ class Common extends Application
     }
 
     /**
-     * Parse a SNMP BITS value to an integer.
-     * Handles hex strings ("E0", "0xE0"), raw integers, and decimal strings.
-     */
-    private function parseBitsValue(mixed $raw): ?int
-    {
-        if ($raw === null) {
-            return null;
-        }
-        if (is_int($raw)) {
-            return $raw;
-        }
-        $str = trim((string) $raw);
-        if ($str === '') {
-            return null;
-        }
-        if (! preg_match('/^(?:0x)?([0-9A-Fa-f]+)$/', $str, $m)) {
-            return null;
-        }
-
-        return (int) hexdec($m[1]);
-    }
-
-    /**
      * Parse smartmonSataAttrFlags (SNMP BITS) into a canonical bitmask where
      * bit N = flag N: prefailure(0), onlineCollection(1), performance(2),
      * errorRate(3), eventCount(4), autoKeep(5).
@@ -3368,103 +3272,6 @@ class Common extends Application
             }
 
             return $mask;
-        }
-
-        return null;
-    }
-
-    /** Convert SNMPv2 TruthValue to 1/0/null. TruthValue enum: true(1), false(2). */
-    private function snmpTruthValue(mixed $value): ?int
-    {
-        $int = $this->intValue($value);
-        if ($int === null) {
-            return null;
-        }
-
-        return $int === 1 ? 1 : 0;
-    }
-
-    /**
-     * Parse an SNMP BITS value (e.g. the OACS/ONCS/LPA bitmaps in SMARTMON-TC-MIB) into a
-     * plain integer where bit N is set iff the MIB's bit(N) is set, directly usable
-     * with `($raw >> $bit) & 1` against the same bit indexes the TEXTUAL-CONVENTION defines.
-     *
-     * net-snmp renders BITS values as e.g. "E8 00 securitySendReceive(0) formatNvm(1) ...":
-     * hex octets (MSB-first per RFC 2578, not directly usable as an integer) followed by
-     * the named set bits. The "(n)" suffixes are the authoritative bit indexes, so prefer
-     * those; fall back to decoding the hex octets if a build's snmp options hide them.
-     */
-    private function bitsValue(mixed $value): ?int
-    {
-        if (is_int($value)) {
-            return $value;
-        }
-
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $value = trim($value);
-        if ($value === '') {
-            return null;
-        }
-
-        if (preg_match_all('/\((\d+)\)/', $value, $matches) > 0) {
-            $raw = 0;
-            foreach ($matches[1] as $bit) {
-                $raw |= 1 << (int) $bit;
-            }
-
-            return $raw;
-        }
-
-        $hex = preg_replace('/^(?:BITS|Hex-STRING|STRING):\s*/i', '', $value);
-        if (! preg_match('/^(?:[0-9A-Fa-f]{2}[\s:]*)+$/', $hex)) {
-            return null;
-        }
-        $hex = preg_replace('/[\s:]+/', '', $hex);
-        if ($hex === '' || strlen($hex) % 2 !== 0) {
-            return null;
-        }
-
-        $raw = 0;
-        foreach (str_split($hex, 2) as $byteIdx => $byteHex) {
-            $byte = hexdec($byteHex);
-            for ($bitInByte = 0; $bitInByte < 8; $bitInByte++) {
-                if (($byte >> (7 - $bitInByte)) & 1) {
-                    $raw |= 1 << ($byteIdx * 8 + $bitInByte);
-                }
-            }
-        }
-
-        return $raw;
-    }
-
-    private function intValue(mixed $value): ?int
-    {
-        if (is_int($value)) {
-            return $value;
-        }
-
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $value = trim($value);
-        if ($value === '' || preg_match('/^(?:STRING:\s*)?\d{4}-\d{1,2}-\d{1,2},/', $value)) {
-            return null;
-        }
-
-        if (preg_match('/\((-?\d+)\)$/', $value, $matches)) {
-            return (int) $matches[1];
-        }
-
-        if (preg_match('/:\s*(-?\d+)/', $value, $matches)) {
-            return (int) $matches[1];
-        }
-
-        if (preg_match('/^(-?\d+)(?:\s|$)/', $value, $matches)) {
-            return (int) $matches[1];
         }
 
         return null;
