@@ -354,6 +354,18 @@ class Common extends Application
         }
     }
 
+    /**
+     * Every per-device-type pipeline, for sweeps that must cover all of them
+     * generically (currently just cleanupStaleMibSensors()). A future
+     * SasHandler is added here and nowhere else needs to change.
+     *
+     * @return array<Handler\DiskTypeHandler>
+     */
+    private function handlers(): array
+    {
+        return [$this->sataHandler, $this->nvmeHandler];
+    }
+
     /** Remove sensors belonging to drives that no longer appear in the device table. */
     private function cleanupStaleMibSensors(): void
     {
@@ -371,14 +383,16 @@ class Common extends Application
                 }
             }
 
-            // Per-type state sensors. SATA and NVMe register the same set of
-            // health + self-test sensors, so the expected OIDs are identical.
+            // Per-type state sensors: ask whichever handler owns this device's
+            // type for the OIDs it expects, so adding a future SasHandler to
+            // handlers() is the only change needed to cover a third type here.
             $deviceType = $dev['device_type'] ?? 0;
-            if (in_array($deviceType, [...SataHandler::TYPES, ...NvmeHandler::TYPES], true)) {
-                $expected[] = "app:smart_mib:{$idx}_health";
-                $expected[] = "app:smart_mib:{$idx}_selftest_status";
-                $expected[] = "app:smart_mib:{$idx}_selftest_short";
-                $expected[] = "app:smart_mib:{$idx}_selftest_long";
+            foreach ($this->handlers() as $handler) {
+                if (in_array($deviceType, $handler::types(), true)) {
+                    foreach ($handler->expectedSensorOids($idx) as $oid) {
+                        $expected[] = "app:smart_mib:{$oid}";
+                    }
+                }
             }
         }
 
