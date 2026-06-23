@@ -81,16 +81,6 @@ try {
 //     echo implode(PHP_EOL, $tail) . PHP_EOL;
 // }
 
-$version = $payload['version'] ?? 'legacy';
-// echo "smart version: {$version}" . PHP_EOL;
-
-if (($payload['version'] ?? 0) >= 2) {
-    $module = new LibreNMS\Agent\Module\smart($device, $app);
-    $module->run($payload);
-
-    return;
-}
-
 $old_data = $app->data;
 if (! isset($old_data['disks_with_failed_tests'])) {
     $old_data['disks_with_failed_tests'] = [];
