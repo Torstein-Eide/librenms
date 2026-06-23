@@ -28,12 +28,12 @@ class Common extends Application
     private const SATA_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SATA-MIB'];
     private const SENSOR_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SENSOR-MIB'];
 
-    // smartSATAChangeByDeviceTable IDs (matches sata_table_meta_for() in the agentx)
-    private const SATA_TID_INFO = 1;
+    // smartSATAChangeByDeviceTable IDs used for change-detection guards (matches
+    // sata_table_meta_for() in the agentx). The full ID space, including the
+    // tables that aren't change-gated (info=1, attr=3, errorCmd=5), is in
+    // SATA_TID_NAMES below; only the IDs referenced as change guards are named here.
     private const SATA_TID_HEALTH = 2;
-    private const SATA_TID_ATTR = 3;
     private const SATA_TID_ERROR_LOG = 4;
-    private const SATA_TID_ERROR_CMD = 5;
     private const SATA_TID_SELFTEST = 6;
     private const SATA_TID_ERC = 7;
     private const SATA_TID_PHY_EVENT = 8;
@@ -234,7 +234,6 @@ class Common extends Application
 
         // SENSOR-MIB values (temperature, NVMe spare/used) for every polled device.
         $this->pollSensorValues();
-        update_application($this->app, 'ok', null);
     }
 
     /**
@@ -613,14 +612,10 @@ class Common extends Application
                 }
             }
 
-            // Per-type state sensors.
+            // Per-type state sensors. SATA and NVMe register the same set of
+            // health + self-test sensors, so the expected OIDs are identical.
             $deviceType = $dev['device_type'] ?? 0;
-            if (in_array($deviceType, self::SATA_TYPES, true)) {
-                $expected[] = "app:smart_mib:{$idx}_health";
-                $expected[] = "app:smart_mib:{$idx}_selftest_status";
-                $expected[] = "app:smart_mib:{$idx}_selftest_short";
-                $expected[] = "app:smart_mib:{$idx}_selftest_long";
-            } elseif (in_array($deviceType, self::NVME_TYPES, true)) {
+            if (in_array($deviceType, [...self::SATA_TYPES, ...self::NVME_TYPES], true)) {
                 $expected[] = "app:smart_mib:{$idx}_health";
                 $expected[] = "app:smart_mib:{$idx}_selftest_status";
                 $expected[] = "app:smart_mib:{$idx}_selftest_short";
@@ -698,8 +693,6 @@ class Common extends Application
                     'power_state'      => $this->intValue($row['smartmonDevicePowerState'] ?? null),
                 ]);
         }
-
-        update_application($this->app, 'ok', null);
     }
 
     /**
@@ -735,7 +728,6 @@ class Common extends Application
         }
 
         $this->persistSataChangeSnapshot();
-        update_application($this->app, 'ok', null);
     }
 
     /** Update the SATA Health, Self-test Status, and Self-test age sensors for one device. */
@@ -997,7 +989,7 @@ class Common extends Application
         }
         $this->addDatasets($rrdFile, $this->commonDeviceRrdDatasets());
 
-        app('Datastore')->put($device, 'app', [
+        app('Datastore')->put($this->os->getDeviceArray(), 'app', [
             'name'                => 'smart',
             'app_id'              => $this->appId,
             'rrd_def'             => $rrd_def,
@@ -1304,10 +1296,9 @@ class Common extends Application
     /** Register NVMe-specific sensor types with the discovery system. */
     private function syncNvmeSensorTypes(): void
     {
-        app('sensor-discovery')->sync(sensor_type: 'smart_nvme_health');
-        app('sensor-discovery')->sync(sensor_type: 'smart_nvme_selftest_status');
-        app('sensor-discovery')->sync(sensor_type: 'smart_nvme_selftest_short');
-        app('sensor-discovery')->sync(sensor_type: 'smart_nvme_selftest_long');
+        foreach (['smart_nvme_health', 'smart_nvme_selftest_status', 'smart_nvme_selftest_short', 'smart_nvme_selftest_long'] as $type) {
+            app('sensor-discovery')->sync(sensor_type: $type);
+        }
     }
 
     /**
@@ -1354,8 +1345,10 @@ class Common extends Application
             ->where('app_id', $this->appId)
             ->where('disk_key', $diskKey)
             ->first(['overall_status', 'critical_warning', 'current_selftest_op']);
+        $currentSelftestOp = 0;
         if ($row !== null) {
             $values["{$idx}_health"] = (float) $this->nvmeHealthLevel($row->overall_status, $row->critical_warning);
+            $currentSelftestOp = (int) ($row->current_selftest_op ?? 0);
         }
 
         // Self-test status from DB (current op, else most recent log result).
@@ -1365,7 +1358,7 @@ class Common extends Application
             ->get(['result', 'power_on_hours'])
             ->map(static fn ($r) => (array) $r)
             ->all();
-        $statusValue = $this->nvmeSelftestStatusValue((int) ($row?->current_selftest_op ?? 0), $entries);
+        $statusValue = $this->nvmeSelftestStatusValue($currentSelftestOp, $entries);
         if ($statusValue !== null) {
             $values["{$idx}_selftest_status"] = (float) $statusValue;
         }
@@ -1417,7 +1410,7 @@ class Common extends Application
         $this->addDatasets($rrd->name($this->device->hostname, $rrdName), $this->commonDeviceRrdDatasets());
 
         // NVME_HEALTH_RRD is a fixed set, plus power_state, so $fields always carries every DS.
-        app('Datastore')->put($this->device, 'app', [
+        app('Datastore')->put($this->os->getDeviceArray(), 'app', [
             'name'                => 'smart_nvme',
             'app_id'              => $this->appId,
             'rrd_def'             => $rrd_def,
@@ -2015,16 +2008,8 @@ class Common extends Application
     }
 
     /**
-     * Resolve smart_sata_attributes.rate_status for one attribute: -1 (no rate-of-change
-     * threshold enabled for this disk/attribute), 1 (enabled, no window exceeds it), or
-     * 2 (enabled, at least one window exceeds it). Independent of the device-reported
-     * `status` column, so polling and discovery never fight over the same field.
-     *
-     * @param  \Illuminate\Support\Collection<int, object>  $thresholdRows  this disk's rows, from loadThresholdRows()
-     */
-    /**
      * Fold rate_status into the displayed `status`: a rate-of-change breach (rate_status=2)
-     * escalates status to 3 (failedInPast) even if the device itself reports the attribute
+     * escalates status to 4 (Rate exceeded) even if the device itself reports the attribute
      * fine. A device-reported notRelevant(-1), meaning the disk has no failure threshold
      * for this attribute, is treated as ok(1) once a rate-of-change threshold is enabled and
      * not breached, since the rate threshold then stands in for the missing device one.
@@ -2042,6 +2027,14 @@ class Common extends Application
         return $rawStatus;
     }
 
+    /**
+     * Resolve smart_sata_attributes.rate_status for one attribute: -1 (no rate-of-change
+     * threshold enabled for this disk/attribute), 1 (enabled, no window exceeds it), or
+     * 2 (enabled, at least one window exceeds it). Independent of the device-reported
+     * `status` column, so polling and discovery never fight over the same field.
+     *
+     * @param  \Illuminate\Support\Collection<int, object>  $thresholdRows  this disk's rows, from loadThresholdRows()
+     */
     private function resolveRateStatus(\Illuminate\Support\Collection $thresholdRows, int $attrId, array $rates): int
     {
         $rows = $thresholdRows->where('attribute_id', $attrId);
