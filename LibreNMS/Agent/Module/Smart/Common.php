@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use LibreNMS\Agent\Application;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
+use LibreNMS\Agent\Module\Smart\Support\RrdReconciler;
 use LibreNMS\Agent\Module\Smart\Support\SnmpDecode;
 use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
@@ -319,7 +320,7 @@ class Common extends Application
         $this->migrateV1Rrds();
 
         // Retrofit any DS missing from pre-existing RRD files (idempotent; no-op once present).
-        $this->reconcileCommonDeviceRrds();
+        RrdReconciler::reconcileCommonDeviceRrds($this->context, $this->sataDevices(), $this->nvmeDevices());
 
         // SENSOR-MIB is common to all device types; walk once before type discovery.
         $this->sensorTable();
@@ -2857,74 +2858,6 @@ class Common extends Application
     // ── RRD dataset reconciliation ───────────────────────────────────────────
 
     /**
-     * Reconcile an existing RRD file's datasets against a statically defined
-     * set, adding whatever's missing. Used at discovery time to retrofit new
-     * DS onto RRD files created by an older version of this module. For
-     * example, power_state didn't exist as a DS before this was added, so disks
-     * polled by a prior version have files missing it.
-     *
-     * Skipped if the file doesn't exist yet: a brand-new device gets every
-     * currently-defined DS the first time poll() writes to it, since the
-     * write path always builds its RrdDefinition from the same static set.
-     *
-     * @param array<int, array{name:string,type:string,heartbeat:int,min?:int|float|string|null,max?:int|float|string|null}> $datasets
-     */
-    private function addDatasets(string $rrdFile, array $datasets): void
-    {
-        $rrd = app(Rrd::class);
-        if (! $rrd->checkRrdExists($rrdFile)) {
-            return;
-        }
-        $rrd->addDatasets($rrdFile, $datasets);
-    }
-
-    /**
-     * Like addDatasets(), but for a config array keyed by dataset name (see
-     * Rrd::addDatasetsFromConfig()) -- used where the dataset set is built up
-     * incrementally per attribute, so keying by name naturally dedupes.
-     *
-     * @param array<string, array{type:string,heartbeat:int,min?:int|float|string|null,max?:int|float|string|null}> $config
-     */
-    private function addDatasetsFromConfig(string $rrdFile, array $config): void
-    {
-        $rrd = app(Rrd::class);
-        if (! $rrd->checkRrdExists($rrdFile)) {
-            return;
-        }
-        $rrd->addDatasetsFromConfig($rrdFile, $config);
-    }
-
-    /** Statically defined DS that the per-device RRD families must always carry. */
-    private function commonDeviceRrdDatasets(): array
-    {
-        return [
-            ['name' => 'power_state', 'type' => 'GAUGE', 'heartbeat' => LibrenmsConfig::get('rrd.heartbeat'), 'min' => 0, 'max' => 8],
-        ];
-    }
-
-    /** Retrofit commonDeviceRrdDatasets() onto every existing SATA and NVMe per-disk RRD file. */
-    private function reconcileCommonDeviceRrds(): void
-    {
-        $deviceModel = Device::find($this->context->deviceId);
-        if ($deviceModel === null) {
-            return;
-        }
-
-        $rrd = app(Rrd::class);
-        $datasets = $this->commonDeviceRrdDatasets();
-
-        foreach ($this->sataDevices() as $dev) {
-            $idx = $this->mibDiskIndex($dev['disk_key']);
-            $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart', $this->context->appId, $idx]), $datasets);
-        }
-
-        foreach ($this->nvmeDevices() as $dev) {
-            $idx = $this->mibDiskIndex($dev['disk_key']);
-            $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart_nvme', $this->context->appId, $idx]), $datasets);
-        }
-    }
-
-    /**
      * Retrofit each attribute's *current* smartmonSataAttrFormat-implied RRD
      * dataset set onto an already-existing per-disk RRD file, via
      * Rrd::addDatasetsFromConfig() (a no-op tune for DS that already exist).
@@ -2983,7 +2916,7 @@ class Common extends Application
         }
 
         if ($config !== []) {
-            $this->addDatasetsFromConfig($rrdFile, $config);
+            RrdReconciler::addDatasetsFromConfig($rrdFile, $config);
         }
     }
 
