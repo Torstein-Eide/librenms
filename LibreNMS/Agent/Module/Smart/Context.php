@@ -18,6 +18,7 @@ final class Context
         public readonly int $appId,
         public readonly int $deviceId,
         public readonly Device $device,
+        public readonly array $deviceArray,
         private readonly Common $app,
     ) {
     }
