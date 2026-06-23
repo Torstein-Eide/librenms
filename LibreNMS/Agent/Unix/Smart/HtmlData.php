@@ -8,7 +8,7 @@ use App\Models\Sensor;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use LibreNMS\Agent\Smart\DiskIdentity;
+use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Util\Number;
 
 /**

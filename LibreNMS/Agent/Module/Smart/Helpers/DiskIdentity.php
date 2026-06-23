@@ -1,6 +1,6 @@
 <?php
 
-namespace LibreNMS\Agent\Smart;
+namespace LibreNMS\Agent\Module\Smart\Helpers;
 
 /**
  * Disk identity formatting shared between the SMART poller/discovery side

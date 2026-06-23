@@ -9,7 +9,7 @@ use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use LibreNMS\Agent\Application;
-use LibreNMS\Agent\Smart\DiskIdentity;
+use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
