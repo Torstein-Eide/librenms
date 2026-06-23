@@ -76,4 +76,102 @@ final class RrdtoolTest extends TestCase
 
         return $mock->buildCommand($command, $filename, $options);
     }
+
+    /**
+     * rrdtool aligns a requested [start, end] xport window to step boundaries and can
+     * return more rows than requested. When that alignment pushes the window past the
+     * most recent sample, the trailing row is an unwritten future bucket (NaN) while the
+     * real averaged value sits in an earlier row -- reproduces a real xport response seen
+     * in production where this caused every rate-of-change value to come back null.
+     */
+    public function testParseXportRatesSkipsTrailingNanRow(): void
+    {
+        $xml = <<<'XML'
+            <?xml version="1.0" encoding="ISO-8859-1"?>
+            <xport>
+              <meta>
+                <start>1782236400</start>
+                <end>1782237000</end>
+                <step>600</step>
+                <rows>2</rows>
+                <columns>1</columns>
+                <legend>
+                  <entry>id5</entry>
+                </legend>
+              </meta>
+              <data>
+                <row><v>0.0000000000e+00</v></row>
+                <row><v>NaN</v></row>
+              </data>
+            </xport>
+            XML;
+
+        $this->assertSame(['id5' => 0.0], $this->parseXportRatesProxy($xml, ['id5']));
+    }
+
+    /** Per dataset, not per row: one column's last row can be NaN while another's is valid. */
+    public function testParseXportRatesBackfillsPerDataset(): void
+    {
+        $xml = <<<'XML'
+            <?xml version="1.0" encoding="ISO-8859-1"?>
+            <xport>
+              <meta>
+                <start>1782236400</start>
+                <end>1782237000</end>
+                <step>600</step>
+                <rows>2</rows>
+                <columns>2</columns>
+                <legend>
+                  <entry>id5</entry>
+                  <entry>id197</entry>
+                </legend>
+              </meta>
+              <data>
+                <row><v>1.2300000000e+02</v><v>4.0000000000e+00</v></row>
+                <row><v>NaN</v><v>5.0000000000e+00</v></row>
+              </data>
+            </xport>
+            XML;
+
+        $rates = $this->parseXportRatesProxy($xml, ['id5', 'id197']);
+        ksort($rates);
+        $this->assertSame(['id197' => 5.0, 'id5' => 123.0], $rates);
+    }
+
+    /** All rows NaN for a dataset (no data in range yet) legitimately yields no rate. */
+    public function testParseXportRatesAllNanYieldsEmpty(): void
+    {
+        $xml = <<<'XML'
+            <?xml version="1.0" encoding="ISO-8859-1"?>
+            <xport>
+              <meta>
+                <start>1782236400</start>
+                <end>1782237000</end>
+                <step>600</step>
+                <rows>2</rows>
+                <columns>1</columns>
+                <legend>
+                  <entry>id5</entry>
+                </legend>
+              </meta>
+              <data>
+                <row><v>NaN</v></row>
+                <row><v>NaN</v></row>
+              </data>
+            </xport>
+            XML;
+
+        $this->assertSame([], $this->parseXportRatesProxy($xml, ['id5']));
+    }
+
+    private function parseXportRatesProxy(string $xportOutput, array $datasets): array
+    {
+        // parseXportRates() touches no instance state, so a bare, uninitialized
+        // instance (skipping the constructor/loadConfig) is fine here; a Mockery
+        // partial mock can't call through to a private method on the real class.
+        $rrd = (new \ReflectionClass(Rrd::class))->newInstanceWithoutConstructor();
+        $method = new \ReflectionMethod($rrd, 'parseXportRates');
+
+        return $method->invoke($rrd, $xportOutput, $datasets);
+    }
 }

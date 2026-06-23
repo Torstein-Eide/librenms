@@ -534,7 +534,6 @@ class Rrd extends BaseDatastore
      */
     private function parseXportRates(string $xportOutput, array $datasets): array
     {
-        // Parse xport XML once and return only requested datasets from the last row.
         $xml = simplexml_load_string($xportOutput);
         if (! $xml instanceof SimpleXMLElement) {
             return [];
@@ -550,34 +549,35 @@ class Rrd extends BaseDatastore
             return [];
         }
 
-        $lastRow = $rows[count($rows) - 1];
         $allowedDatasets = array_flip($datasets);
         $rates = [];
-        $index = 0;
 
-        foreach ($lastRow->v ?? [] as $value) {
-            if (! isset($legend[$index], $allowedDatasets[$legend[$index]])) {
+        // rrdtool aligns the requested [start, end] to PDP/step boundaries and can
+        // expand it into more rows than asked for -- a single-bucket request can
+        // come back as two rows when the window doesn't land exactly on a step
+        // boundary (the common case, since callers compute it from time()). When
+        // that push lands past the most recent sample, the trailing row is an
+        // unwritten future bucket (NaN) while the real averaged value sits in an
+        // earlier row. Walk rows newest-first and take each dataset's most recent
+        // non-NaN value instead of assuming the last row is always the right one.
+        for ($r = count($rows) - 1; $r >= 0 && count($rates) < count($allowedDatasets); $r--) {
+            $index = 0;
+            foreach ($rows[$r]->v ?? [] as $value) {
+                $ds = $legend[$index] ?? null;
                 $index++;
 
-                continue;
+                if ($ds === null || ! isset($allowedDatasets[$ds]) || isset($rates[$ds])) {
+                    continue;
+                }
+
+                $rawValue = trim((string) $value);
+                if ($rawValue === '' || strcasecmp($rawValue, 'nan') === 0 || strcasecmp($rawValue, '-nan') === 0 || ! is_numeric($rawValue)) {
+                    continue;
+                }
+
+                // Cast to native float so callers do not handle scientific-notation strings.
+                $rates[$ds] = (float) $rawValue;
             }
-
-            $rawValue = trim((string) $value);
-            if ($rawValue === '' || strcasecmp($rawValue, 'nan') === 0 || strcasecmp($rawValue, '-nan') === 0) {
-                $index++;
-
-                continue;
-            }
-
-            if (! is_numeric($rawValue)) {
-                $index++;
-
-                continue;
-            }
-
-            // Cast to native float so callers do not handle scientific-notation strings.
-            $rates[$legend[$index]] = (float) $rawValue;
-            $index++;
         }
 
         return $rates;
