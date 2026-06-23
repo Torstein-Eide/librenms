@@ -11,36 +11,6 @@ namespace LibreNMS\Agent\Module\Smart\Support;
  */
 final class SnmpDecode
 {
-    public static function intValue(mixed $value): ?int
-    {
-        if (is_int($value)) {
-            return $value;
-        }
-
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $value = trim($value);
-        if ($value === '' || preg_match('/^(?:STRING:\s*)?\d{4}-\d{1,2}-\d{1,2},/', $value)) {
-            return null;
-        }
-
-        if (preg_match('/\((-?\d+)\)$/', $value, $matches)) {
-            return (int) $matches[1];
-        }
-
-        if (preg_match('/:\s*(-?\d+)/', $value, $matches)) {
-            return (int) $matches[1];
-        }
-
-        if (preg_match('/^(-?\d+)(?:\s|$)/', $value, $matches)) {
-            return (int) $matches[1];
-        }
-
-        return null;
-    }
-
     /**
      * Extract the scalar value from a SnmpQuery table() leaf.
      *
@@ -63,12 +33,11 @@ final class SnmpDecode
     /** Convert SNMPv2 TruthValue to 1/0/null. TruthValue enum: true(1), false(2). */
     public static function snmpTruthValue(mixed $value): ?int
     {
-        $int = self::intValue($value);
-        if ($int === null) {
+        if ($value === null || $value === '') {
             return null;
         }
 
-        return $int === 1 ? 1 : 0;
+        return (int) $value === 1 ? 1 : 0;
     }
 
     /**

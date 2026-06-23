@@ -412,7 +412,7 @@ final class SataHandler implements DiskTypeHandler
                     ?? ($this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(self::ATA_COUNTER_ATTRS[$id])
                         ? 'COUNTER' : 'GAUGE');
 
-                $format = SmartSnmpDecode::intValue($meta->format ?? null);
+                $format = (int) ($meta->format ?? null);
                 $rawString = $row['smartmonSataAttrRawString'] ?? null;
 
                 $rrd_def->addDataset($dsNorm, 'GAUGE', 0);
@@ -451,7 +451,7 @@ final class SataHandler implements DiskTypeHandler
         }
 
         $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
-        $fields['power_state'] = SmartSnmpDecode::intValue($dev['power_state'] ?? null);
+        $fields['power_state'] = (int) ($dev['power_state'] ?? null);
 
         $rrdName = ['app', 'smart', $this->ctx->appId, $idx];
         $rrd = app(Rrd::class);
@@ -626,10 +626,10 @@ final class SataHandler implements DiskTypeHandler
             'app_id'                               => $this->ctx->appId,
             'device_id'                            => $this->ctx->deviceId,
             'disk_key'                             => $dev['disk_key'],
-            'ata_version'                          => SmartSnmpDecode::intValue($row['smartmonSataAtaVersion'] ?? null),
-            'sata_version'                         => SmartSnmpDecode::intValue($row['smartmonSataVersion'] ?? null),
+            'ata_version'                          => (int) ($row['smartmonSataAtaVersion'] ?? null),
+            'sata_version'                         => (int) ($row['smartmonSataVersion'] ?? null),
             'rotation_rate'                        => $row['smartmonSataRotationRate'] ?? null,
-            'form_factor'                          => SmartSnmpDecode::intValue($row['smartmonSataFormFactor'] ?? null),
+            'form_factor'                          => (int) ($row['smartmonSataFormFactor'] ?? null),
             'logical_block_size'                   => $row['smartmonSataLogicalBlockSize'] ?? null,
             'physical_block_size'                  => $row['smartmonSataPhysicalBlockSize'] ?? null,
             'user_capacity_bytes'                  => $row['smartmonSataUserCapacityBytes'] ?? null,
@@ -638,8 +638,8 @@ final class SataHandler implements DiskTypeHandler
             'sct_hist_limit_min'                   => $row['smartmonSataSctHistLimitMin'] ?? null,
             'sct_hist_limit_max'                   => $row['smartmonSataSctHistLimitMax'] ?? null,
             // New columns
-            'ata_version_major'                    => SmartSnmpDecode::intValue($row['smartmonSataAtaVersionMajor'] ?? null),
-            'ata_version_minor'                    => SmartSnmpDecode::intValue($row['smartmonSataAtaVersionMinor'] ?? null),
+            'ata_version_major'                    => (int) ($row['smartmonSataAtaVersionMajor'] ?? null),
+            'ata_version_minor'                    => (int) ($row['smartmonSataAtaVersionMinor'] ?? null),
             'user_capacity_blocks'                 => $row['smartmonSataUserCapacityBlocks'] ?? null,
             'in_smartctl_database'                 => SmartSnmpDecode::snmpTruthValue($row['smartmonSataInSmartctlDatabase'] ?? null),
             'smart_available'                      => SmartSnmpDecode::snmpTruthValue($row['smartmonSataSmartAvailable'] ?? null),
@@ -648,7 +648,7 @@ final class SataHandler implements DiskTypeHandler
             'write_cache_enabled'                  => SmartSnmpDecode::snmpTruthValue($row['smartmonSataWriteCacheEnabled'] ?? null),
             'read_lookahead_enabled'               => SmartSnmpDecode::snmpTruthValue($row['smartmonSataReadLookaheadEnabled'] ?? null),
             'apm_enabled'                          => SmartSnmpDecode::snmpTruthValue($row['smartmonSataApmEnabled'] ?? null),
-            'apm_level'                            => SmartSnmpDecode::intValue($row['smartmonSataApmLevel'] ?? null),
+            'apm_level'                            => (int) ($row['smartmonSataApmLevel'] ?? null),
             'security_state'                       => $row['smartmonSataSecurityState'] ?? null,
             'security_enabled'                     => SmartSnmpDecode::snmpTruthValue($row['smartmonSataSecurityEnabled'] ?? null),
             'security_frozen'                      => SmartSnmpDecode::snmpTruthValue($row['smartmonSataSecurityFrozen'] ?? null),
@@ -728,7 +728,7 @@ final class SataHandler implements DiskTypeHandler
                     ? substr((string) $row['smartmonSataAttrRawString'], 0, 32)
                     : null,
                 'status'           => $row['smartmonSataAttrStatus'] ?? null,
-                'format'           => SmartSnmpDecode::intValue($row['smartmonSataAttrFormat'] ?? null),
+                'format'           => (int) ($row['smartmonSataAttrFormat'] ?? null),
                 'flags'            => SmartSnmpDecode::bitsValue($row['smartmonSataAttrFlags'] ?? null),
                 'rrd_type'         => $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null)
                     ? 'COUNTER' : 'GAUGE',
@@ -802,7 +802,7 @@ final class SataHandler implements DiskTypeHandler
                 '168h' => $ratesByDs[$ds]['168h'] ?? ($failedWindows['168h'] ?? false ? $previous?->rate_168h : null),
                 '672h' => $ratesByDs[$ds]['672h'] ?? ($failedWindows['672h'] ?? false ? $previous?->rate_672h : null),
             ];
-            $rawStatus = SmartSnmpDecode::intValue($row['smartmonSataAttrStatus'] ?? null);
+            $rawStatus = (int) ($row['smartmonSataAttrStatus'] ?? null);
             $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
 
             DbSync::upsert('smart_sata_attributes', [
@@ -830,7 +830,7 @@ final class SataHandler implements DiskTypeHandler
      */
     private function rateDsForAttribute(int $id, array $row): ?string
     {
-        $format = SmartSnmpDecode::intValue($row['smartmonSataAttrFormat'] ?? null);
+        $format = (int) ($row['smartmonSataAttrFormat'] ?? null);
         $rawString = $row['smartmonSataAttrRawString'] ?? null;
         $subValues = $this->attrFormatSubValues($format, $rawString);
 
@@ -1054,7 +1054,7 @@ final class SataHandler implements DiskTypeHandler
                 '168h' => $existing->rate_168h ?? null,
                 '672h' => $existing->rate_672h ?? null,
             ];
-            $rawStatus = SmartSnmpDecode::intValue($row['smartmonSataAttrStatus'] ?? null);
+            $rawStatus = (int) ($row['smartmonSataAttrStatus'] ?? null);
             $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
 
             DbSync::upsert('smart_sata_attributes', [
@@ -1415,7 +1415,7 @@ final class SataHandler implements DiskTypeHandler
 
             $config[$dsNorm] = ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
 
-            $format = SmartSnmpDecode::intValue($row['smartmonSataAttrFormat'] ?? null);
+            $format = (int) ($row['smartmonSataAttrFormat'] ?? null);
             $rawString = $row['smartmonSataAttrRawString'] ?? null;
             $subValues = $this->attrFormatSubValues($format, $rawString);
             if ($subValues !== []) {
@@ -1457,15 +1457,15 @@ final class SataHandler implements DiskTypeHandler
      */
     private function healthLevel(mixed $overall, iterable $attrStatuses, iterable $rateStatuses = []): int
     {
-        $overall = SmartSnmpDecode::intValue($overall);
+        $overall = (int) ($overall);
         if ($overall === 4) {
             return 6; // unavailable
         }
 
-        $level = ($overall !== null && $overall !== 1) ? 2 : 1;
+        $level = $overall !== 1 ? 2 : 1;
 
         foreach ($attrStatuses as $status) {
-            $status = SmartSnmpDecode::intValue($status);
+            $status = (int) ($status);
             if ($status === 3) {       // failedInPast
                 $level = max($level, 3);
             } elseif ($status === 2) { // failingNow
@@ -1474,7 +1474,7 @@ final class SataHandler implements DiskTypeHandler
         }
 
         foreach ($rateStatuses as $rateStatus) {
-            if (SmartSnmpDecode::intValue($rateStatus) === 2) { // rate-of-change threshold exceeded
+            if ((int) ($rateStatus) === 2) { // rate-of-change threshold exceeded
                 $level = max($level, 4);
             }
         }

@@ -79,7 +79,7 @@ class Common extends Application
 
     public function shouldDiscover(): bool
     {
-        $rowCount = SmartSnmpDecode::intValue(
+        $rowCount = (int) (
             SnmpQuery::mibs(self::COMMON_MIBS)->hideMib()
                 ->get('SMARTMON-COMMON-MIB::smartmonDeviceTableRowCount.0')
                 ->value('smartmonDeviceTableRowCount.0')
@@ -260,7 +260,7 @@ class Common extends Application
             $devName = $this->sensorLabel($dev, (string) $devIdx);
             foreach ($this->sensorRows[$devIdx] ?? [] as $sensorIdx => $row) {
                 // smartmonSensorType is an enum returned as a name ("celsius(3)") when MIBs load.
-                $type = SmartSnmpDecode::intValue($row['smartmonSensorType'] ?? null);
+                $type = (int) ($row['smartmonSensorType'] ?? null);
                 $value = SnmpDecode::applySensorScaleCol($row, 'smartmonSensorValue', 'smartmonSensorScale', 'smartmonSensorPrecision', self::SENSOR_SCALE_EXP);
                 if ($value === null) {
                     $this->vlog("discoverMib sensor: devIdx={$devIdx} sub-index={$sensorIdx} type=" . var_export($type, true) . ' has null value, skipped');
@@ -377,7 +377,7 @@ class Common extends Application
 
             // Generic SENSOR-MIB sensors (temperature, NVMe spare/used). Applies to all device types.
             foreach ($this->sensorRows[$snmpIndex] ?? [] as $sensorIdx => $row) {
-                $type = SmartSnmpDecode::intValue($row['smartmonSensorType'] ?? null);
+                $type = (int) ($row['smartmonSensorType'] ?? null);
                 $meta = self::SENSOR_TYPE_MAP[$type] ?? null;
                 if ($meta !== null) {
                     $expected[] = "app:smart_mib:{$idx}_{$meta[2]}_{$sensorIdx}";
@@ -463,9 +463,9 @@ class Common extends Application
                 ->where('app_id', $this->context->appId)
                 ->where('snmp_index', (int) $snmpIndex)
                 ->update([
-                    'last_poll_result' => SmartSnmpDecode::intValue($row['smartmonDeviceLastPollResult'] ?? null),
+                    'last_poll_result' => (int) ($row['smartmonDeviceLastPollResult'] ?? null),
                     'last_poll_time'   => SnmpDecode::parseDateAndTime($row['smartmonDeviceLastPollTime'] ?? null),
-                    'power_state'      => SmartSnmpDecode::intValue($row['smartmonDevicePowerState'] ?? null),
+                    'power_state'      => (int) ($row['smartmonDevicePowerState'] ?? null),
                 ]);
         }
     }
@@ -536,9 +536,9 @@ class Common extends Application
         foreach ($walked as $sensorIdx => $rawValue) {
             if ($sensor = $bySuffix[(string) $sensorIdx] ?? null) {
                 $raw = SmartSnmpDecode::leafValue($rawValue, 'smartmonSensorValue');
-                $operStatus = SmartSnmpDecode::intValue(SmartSnmpDecode::leafValue($rawValue, 'smartmonSensorOperStatus'));
+                $operStatus = (int) (SmartSnmpDecode::leafValue($rawValue, 'smartmonSensorOperStatus'));
                 // SmartmonSensorStatus: ok(1) = value reported; unavailable(2)/nonoperational(3) = no trustworthy reading.
-                if ($operStatus !== null && $operStatus !== 1) {
+                if ($operStatus !== 1) {
                     $this->vlog("matchSensorMibValues: sub-index {$sensorIdx} -> {$sensor->sensor_index} operStatus={$operStatus} (not ok), skipped");
                     continue;
                 }
