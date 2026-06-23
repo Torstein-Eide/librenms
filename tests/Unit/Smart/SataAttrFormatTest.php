@@ -2,7 +2,7 @@
 
 namespace LibreNMS\Tests\Unit\Smart;
 
-use LibreNMS\Agent\Module\Smart\Common;
+use LibreNMS\Agent\Module\Smart\Handler\SataHandler;
 use LibreNMS\Tests\TestCase;
 use ReflectionClass;
 
@@ -21,8 +21,8 @@ final class SataAttrFormatTest extends TestCase
 {
     private function callPrivate(string $method, ?int $format, ?string $rawString): mixed
     {
-        $instance = (new ReflectionClass(Common::class))->newInstanceWithoutConstructor();
-        $reflMethod = (new ReflectionClass(Common::class))->getMethod($method);
+        $instance = (new ReflectionClass(SataHandler::class))->newInstanceWithoutConstructor();
+        $reflMethod = (new ReflectionClass(SataHandler::class))->getMethod($method);
         $reflMethod->setAccessible(true);
 
         return $reflMethod->invoke($instance, $format, $rawString);
