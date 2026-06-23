@@ -1872,10 +1872,17 @@ class Common extends Application
 
         $counterDs = [];
         $gaugeDs = [];
+        $dsByAttrId = [];
         foreach ($attrRows as $attrId => $row) {
             $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
-            $ds = 'id' . $id;
-            if (($rrdTypes[$id] ?? null) === 'COUNTER') {
+            $ds = $this->rateDsForAttribute($id, $row);
+            $dsByAttrId[$id] = $ds;
+            if ($ds === null) {
+                continue;
+            }
+            // id{N}Hi (div-format sub-DS) is always written GAUGE by pollSataDeviceRrd(),
+            // regardless of what rrd_type says about the base attribute.
+            if ($ds === 'id' . $id && ($rrdTypes[$id] ?? null) === 'COUNTER') {
                 $counterDs[] = $ds;
             } else {
                 $gaugeDs[] = $ds;
@@ -1898,9 +1905,12 @@ class Common extends Application
 
         foreach ($attrRows as $attrId => $row) {
             $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
-            $ds = 'id' . $id;
+            $ds = $dsByAttrId[$id] ?? null;
             $previous = $previousRates->get($id);
-            $rates = [
+            // No trackable single-valued dataset for this attribute's format (e.g. raw8/raw16
+            // split into independent id{N}P0..P5 byte/word counters) -- leave rates null rather
+            // than guessing at a combined value.
+            $rates = $ds === null ? ['8h' => null, '24h' => null, '168h' => null, '672h' => null] : [
                 '8h' => $ratesByDs[$ds]['8h'] ?? ($failedWindows['8h'] ?? false ? $previous?->rate_8h : null),
                 '24h' => $ratesByDs[$ds]['24h'] ?? ($failedWindows['24h'] ?? false ? $previous?->rate_24h : null),
                 '168h' => $ratesByDs[$ds]['168h'] ?? ($failedWindows['168h'] ?? false ? $previous?->rate_168h : null),
@@ -1924,6 +1934,27 @@ class Common extends Application
                 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h', 'status', 'rate_status',
             ]);
         }
+    }
+
+    /**
+     * The single RRD dataset name to track for rate-of-change, or null if this
+     * attribute's format has no one meaningful value to trend. Mirrors the DS
+     * naming pollSataDeviceRrd() actually writes: single-value formats keep the
+     * base id{N}; div formats (raw24div24/32) track id{N}Hi; multi-part formats
+     * (raw8/raw16/raw16raw16/raw24raw8 -> id{N}P0..P5) have no single counter to
+     * point at, so rate tracking is skipped for them.
+     */
+    private function rateDsForAttribute(int $id, array $row): ?string
+    {
+        $format = $this->intValue($row['smartmonSataAttrFormat'] ?? null);
+        $rawString = $row['smartmonSataAttrRawString'] ?? null;
+        $subValues = $this->attrFormatSubValues($format, $rawString);
+
+        if ($subValues !== []) {
+            return array_key_exists('Hi', $subValues) ? 'id' . $id . 'Hi' : null;
+        }
+
+        return 'id' . $id;
     }
 
     /**
