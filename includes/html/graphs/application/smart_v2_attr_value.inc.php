@@ -2,13 +2,79 @@
 
 use App\Facades\LibrenmsConfig;
 use App\Facades\Rrd;
+use Illuminate\Support\Facades\DB;
 use LibreNMS\Exceptions\RrdGraphException;
+use LibreNMS\Util\Number;
 
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
 $attrId = isset($vars['attr_id']) ? (int) $vars['attr_id'] : 0;
 if ($attrId <= 0) {
     throw new RrdGraphException('Missing SMART attribute id');
 }
+
+$attrName = (string) (DB::table('smart_sata_attributes')
+    ->where('app_id', $app->app_id)
+    ->where('disk_key', $vars['disk'])
+    ->where('attribute_id', $attrId)
+    ->value('name') ?? '');
+
+/**
+ * Keyword -> [vertical-axis description, unit] for the Raw line's label.
+ * SMART attribute names are vendor-defined text, not a typed unit -- this is
+ * a best-effort guess from well-known ATA attribute name patterns
+ * (smartmontools' drivedb.h naming). Order matters: most specific pattern
+ * first, since e.g. "Seek Time Performance" must match /performance/ before
+ * a generic time/hours rule below it would otherwise misfire, and
+ * "Uncorrectable Error Cnt" must match /uncorrect/ as an error, not get
+ * caught by a broader sector rule.
+ */
+$attrUnitRules = [
+    '/temperature/i'                                 => ['Temperature', '°C'],
+    '/load-in time/i'                                 => ['Load Time', 'ms'],
+    '/spin.?up.?time/i'                                 => ['Spin-up Time', 'ms'],
+    '/performance/i'                                  => ['Performance', ''],
+    '/helium level/i'                                 => ['Helium Level', '%'],
+ #   '/helium condition/i'                             => ['Helium Level', ''],
+    '/(health monitor|head health)/i'                 => ['Health', ''],
+    '/(wear leveling|media wear)/i'                   => ['Wear', '%'],
+    '/rdwr ratio/i'                                   => ['Ratio', '%'],
+    '/workld timer/i'                                 => ['Time', 'min'],
+    '/(hours)/i'                                      => ['Time', 'h'],
+    '/(total.?lbas.?(written|read)|nand.?writes)/i'      => ['Data', ''],
+#    '/disk shift/i'                                   => ['Shift', ''],
+#    '/pressure limit/i'                               => ['Pressure', ''],
+#    '/(exception mode|throttle)/i'                    => ['Status', ''],
+#    '/sector/i'                                       => ['Sectors', ''],
+#    '/(rsvd blk|bad block)/i'                         => ['Blocks', ''],
+#    '/(error|crc|g-sense|timeout|fail|uncorrect)/i'   => ['Errors', ''],
+#    '/(count|cycle|retry|retract|recovery|downshift)/i' => ['Count', ''],
+];
+
+$unit_text = 'Raw';
+$unit_label = '';
+foreach ($attrUnitRules as $pattern => $textLabel) {
+    if (preg_match($pattern, $attrName)) {
+        [$unit_text, $unit_label] = $textLabel;
+        break;
+    }
+}
+
+$verticalLabel = $unit_label !== '' ? "{$unit_text} ({$unit_label})" : $unit_text;
+
+/**
+ * Left axis tick format, SI-suffixed to match the period's raw magnitude
+ * (e.g. "433.7M" instead of rrdtool's default raw digit count) with
+ * $unit_label tacked on, mirroring the sensor graphs' left_axis_format
+ * convention. No-op when there's no usable peak (raw is 0/unavailable
+ * across the whole graphed period) -- rrdtool's default formatting is fine
+ * for that case.
+ */
+$applyLeftAxisFormat = function (?float $rawMax) use (&$graph_params, $unit_label): void {
+    if ($rawMax === null || $rawMax <= 0) {
+        return;
+    }
+    $graph_params->left_axis_format = '%5.1lf' . trim(substr(Number::formatSi($rawMax, 0, 0, ''), -1) . $unit_label);
+};
 
 require 'includes/html/graphs/common.inc.php';
 
@@ -155,7 +221,8 @@ if ($hasDiv) {
     }
 
     $graph_params->right_axis_label = 'Normalized';
-    $graph_params->vertical_label = 'Raw' . $rawLabelSuffix;
+    $graph_params->vertical_label = $verticalLabel . $rawLabelSuffix;
+    $applyLeftAxisFormat($rawMax);
 
     $rrd_options[] = "DEF:hi_raw={$rrd_filename}:{$dsHi}:AVERAGE";
     $rrd_options[] = "DEF:lo_raw={$rrd_filename}:{$dsLo}:AVERAGE";
@@ -196,7 +263,8 @@ if ($hasDiv) {
     }
 
     $graph_params->right_axis_label = 'Normalized';
-    $graph_params->vertical_label = 'Raw' . $rawLabelSuffix;
+    $graph_params->vertical_label = $verticalLabel . $rawLabelSuffix;
+    $applyLeftAxisFormat($rawMax);
 
     $colors = ['#ff9a9a', '#9aff9a', '#9a9aff', '#ffff9a', '#ff9aff', '#9affff'];
     if (is_numeric($thresh)) {
@@ -231,12 +299,13 @@ if ($hasDiv) {
     }
 
     $graph_params->right_axis_label = 'Normalized';
-    $graph_params->vertical_label = 'Raw' . $rawLabelSuffix;
+    $graph_params->vertical_label = $verticalLabel . $rawLabelSuffix;
 
     $rawMax = $fetchMaxAcross([$dsRaw]);
     if ($rawMax !== null) {
         $rawMax *= $rateMultiplier;
     }
+    $applyLeftAxisFormat($rawMax);
 
     if ($rawMax !== null && $rawMax > 0) {
         // Lock the left axis to the actual period max so right-axis top = 255 exactly.
@@ -296,7 +365,12 @@ if ($hasDiv) {
         $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
     }
 } elseif ($hasRaw) {
-    $graph_params->vertical_label = 'Raw' . $rawLabelSuffix;
+    $graph_params->vertical_label = $verticalLabel . $rawLabelSuffix;
+    $rawMax = $fetchMaxAcross([$dsRaw]);
+    if ($rawMax !== null) {
+        $rawMax *= $rateMultiplier;
+    }
+    $applyLeftAxisFormat($rawMax);
 
     $rrd_options[] = "DEF:raw={$rrd_filename}:{$dsRaw}:AVERAGE";
     $rrd_options[] = "CDEF:rawDisplay=raw,{$rateMultiplier},*";
