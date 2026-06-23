@@ -167,9 +167,7 @@ class Common extends Application
     private array  $sensorRows = [];
 
     // Stable per-run identity context, initialized at the top of discover()/poll().
-    private int     $appId;
-    private int     $deviceId;
-    private Device  $device;
+    private Context $context;
     // SATA / NVMe device lists for the current run, keyed by snmp_index.
     private array   $sataDeviceList = [];
     private array   $nvmeDeviceList = [];
@@ -257,9 +255,57 @@ class Common extends Application
     /** Cache the stable identity context used throughout discovery and polling. */
     private function initContext(): void
     {
-        $this->appId = $this->app->app_id;
-        $this->deviceId = $this->os->getDeviceId();
-        $this->device = $this->os->getDevice();
+        $this->context = new Context(
+            $this->app->app_id,
+            $this->os->getDeviceId(),
+            $this->os->getDevice(),
+            $this,
+        );
+    }
+
+    /** @internal public delegate for Context; only Context should call this. */
+    public function discoverSensorPublic(
+        string $class,
+        string $type,
+        string $index,
+        string $oid,
+        string $descr,
+        int|float $current = 0,
+        string $poller_type = 'agent',
+        ?string $group = null,
+        ?string $navigation = null,
+        int|float $divisor = 1,
+        int|float $multiplier = 1,
+        int|float|null $lowLimit = null,
+        int|float|null $lowWarnLimit = null,
+        int|float|null $warnLimit = null,
+        int|float|null $highLimit = null,
+        string $rrd_type = 'GAUGE',
+    ): static {
+        return $this->discoverSensor(
+            class: $class, type: $type, index: $index, oid: $oid, descr: $descr, current: $current,
+            poller_type: $poller_type, group: $group, navigation: $navigation, divisor: $divisor,
+            multiplier: $multiplier, lowLimit: $lowLimit, lowWarnLimit: $lowWarnLimit,
+            warnLimit: $warnLimit, highLimit: $highLimit, rrd_type: $rrd_type,
+        );
+    }
+
+    /** @internal public delegate for Context; only Context should call this. */
+    public function withStateTranslationsPublic(string $stateName, array $translations): static
+    {
+        return $this->withStateTranslations($stateName, $translations);
+    }
+
+    /** @internal public delegate for Context; only Context should call this. */
+    public function updateSensorValuesPublic(array $values, string $oidPrefix): void
+    {
+        $this->updateSensorValues($values, $oidPrefix);
+    }
+
+    /** @internal public delegate for Context; only Context should call this. */
+    public function vlogPublic(string $msg): void
+    {
+        $this->vlog($msg);
     }
 
     // ── Discovery ─────────────────────────────────────────────────────────────
@@ -289,7 +335,7 @@ class Common extends Application
         // $this->discoverSas();
 
         // SENSOR-MIB sensors: register for every discovered device.
-        $device = $this->device;
+        $device = $this->context->device;
         $group = 'SMART';
         // Source-defined limits per sensor_oid. LibreNMS guesses limits for some
         // classes (e.g. temperature low = current - 10) when a column is null, so
@@ -430,7 +476,7 @@ class Common extends Application
         array $health,
         array $attrRows
     ): void {
-        $device = $this->device;
+        $device = $this->context->device;
         $diskKey = $dev['disk_key'];
         $devName = $this->sensorLabel($dev, $dev['snmp_index']);
         $idx = $this->mibDiskIndex($diskKey);
@@ -494,7 +540,7 @@ class Common extends Application
     private function selftestAgeHours(string $healthTable, string $logTable, string $diskKey, int $testType): ?int
     {
         $currentPoh = DB::table($healthTable)
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->value('power_on_hours');
         if ($currentPoh === null) {
@@ -502,7 +548,7 @@ class Common extends Application
         }
 
         $lastTestPoh = DB::table($logTable)
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->where('test_type', $testType)
             ->max('power_on_hours');
@@ -590,7 +636,7 @@ class Common extends Application
     {
         foreach ($intendedLimits as $oid => $limits) {
             DB::table('sensors')
-                ->where('device_id', $this->device['device_id'])
+                ->where('device_id', $this->context->device['device_id'])
                 ->where('sensor_oid', $oid)
                 ->where('sensor_custom', 'No') // never override user-customized limits
                 ->update($limits);
@@ -600,7 +646,7 @@ class Common extends Application
     /** Remove sensors belonging to drives that no longer appear in the device table. */
     private function cleanupStaleMibSensors(): void
     {
-        $device = $this->device;
+        $device = $this->context->device;
         $expected = [];
         foreach ($this->commonDevices ?? [] as $snmpIndex => $dev) {
             $idx = $this->mibDiskIndex($dev['disk_key']);
@@ -655,7 +701,7 @@ class Common extends Application
 
         // Disk-keyed child tables + the device table itself.
         foreach ([...self::DEVICE_CHILD_TABLES, 'smart_devices'] as $table) {
-            $query = DB::table($table)->where('app_id', $this->appId);
+            $query = DB::table($table)->where('app_id', $this->context->appId);
             if ($keepKeys !== []) {
                 $query->whereNotIn('disk_key', $keepKeys);
             }
@@ -663,7 +709,7 @@ class Common extends Application
         }
 
         // smart_sata_change is keyed by device_idx (snmp_index), not disk_key.
-        $changeQuery = DB::table('smart_sata_change')->where('app_id', $this->appId);
+        $changeQuery = DB::table('smart_sata_change')->where('app_id', $this->context->appId);
         if ($keepIdx !== []) {
             $changeQuery->whereNotIn('device_idx', $keepIdx);
         }
@@ -687,7 +733,7 @@ class Common extends Application
 
         foreach ($rows as $snmpIndex => $row) {
             DB::table('smart_devices')
-                ->where('app_id', $this->appId)
+                ->where('app_id', $this->context->appId)
                 ->where('snmp_index', (int) $snmpIndex)
                 ->update([
                     'last_poll_result' => SnmpDecode::intValue($row['smartmonDeviceLastPollResult'] ?? null),
@@ -747,7 +793,7 @@ class Common extends Application
 
         // Self-test execution status from DB
         $raw = DB::table('smart_sata_health')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->value('selftest_exec_status_raw');
         if ($raw !== null) {
@@ -857,7 +903,7 @@ class Common extends Application
     /** Load this device's app:smart_mib sensors and update the generic SENSOR-MIB ones from the walked values (matched by trailing index). */
     private function matchSensorMibValues(string $idx, string $devIdx, array $sensorValues): void
     {
-        $sensors = Sensor::where('device_id', $this->device['device_id'])
+        $sensors = Sensor::where('device_id', $this->context->device['device_id'])
             ->where('sensor_oid', 'like', "app:smart_mib:{$idx}_%")
             ->get()
             ->keyBy('sensor_index');
@@ -908,7 +954,7 @@ class Common extends Application
     /** Write per-disk RRDs for one SATA device. */
     private function pollSataDeviceRrd(array $dev, array $attrRows): void
     {
-        $device = $this->device;
+        $device = $this->context->device;
         $diskKey = $dev['disk_key'];
         $idx = $this->mibDiskIndex($diskKey);
 
@@ -924,7 +970,7 @@ class Common extends Application
             // between discovery cycles, so read the copy discovery already persisted,
             // alongside rrd_type, in a single query.
             $attrMeta = DB::table('smart_sata_attributes')
-                ->where('app_id', $this->appId)
+                ->where('app_id', $this->context->appId)
                 ->where('disk_key', $diskKey)
                 ->get(['attribute_id', 'rrd_type', 'format'])
                 ->keyBy('attribute_id');
@@ -982,7 +1028,7 @@ class Common extends Application
         $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
         $fields['power_state'] = SnmpDecode::intValue($dev['power_state'] ?? null);
 
-        $rrdName = ['app', 'smart', $this->appId, $idx];
+        $rrdName = ['app', 'smart', $this->context->appId, $idx];
         $rrd = app(Rrd::class);
         $rrdFile = $rrd->name($device->hostname, $rrdName);
         $hasRrd = $rrd->checkRrdExists($rrdFile);
@@ -995,7 +1041,7 @@ class Common extends Application
         // get every DS at create time from $rrd_def. No tune at poll time.
         app('Datastore')->put($this->os->getDeviceArray(), 'app', [
             'name'                => 'smart',
-            'app_id'              => $this->appId,
+            'app_id'              => $this->context->appId,
             'rrd_def'             => $rrd_def,
             'rrd_name'            => $rrdName,
             'rrd_update_template' => true,
@@ -1181,7 +1227,7 @@ class Common extends Application
             return;
         }
 
-        $device = $this->device;
+        $device = $this->context->device;
         $idx = $this->mibDiskIndex($dev['disk_key']);
         $devName = $this->sensorLabel($dev, $dev['snmp_index']);
         $group = 'SMART';
@@ -1223,7 +1269,7 @@ class Common extends Application
             return;
         }
 
-        $device = $this->device;
+        $device = $this->context->device;
         $idx = $this->mibDiskIndex($dev['disk_key']);
         $devName = $this->sensorLabel($dev, $dev['snmp_index']);
         $group = 'SMART';
@@ -1346,7 +1392,7 @@ class Common extends Application
 
         // Merged health state: overall status plus critical warning, stored at poll time.
         $row = DB::table('smart_nvme_health')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->first(['overall_status', 'critical_warning', 'current_selftest_op']);
         $currentSelftestOp = 0;
@@ -1357,7 +1403,7 @@ class Common extends Application
 
         // Self-test status from DB (current op, else most recent log result).
         $entries = DB::table('smart_nvme_selftest_log')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->get(['result', 'power_on_hours'])
             ->map(static fn ($r) => (array) $r)
@@ -1409,7 +1455,7 @@ class Common extends Application
         $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
         $fields['power_state'] = SnmpDecode::intValue($dev['power_state'] ?? null);
 
-        $rrdName = ['app', 'smart_nvme', $this->appId, $idx];
+        $rrdName = ['app', 'smart_nvme', $this->context->appId, $idx];
 
         // DS reconciliation (retrofitting power_state onto older files) is a
         // discovery concern, handled by reconcileCommonDeviceRrds(); new files
@@ -1418,7 +1464,7 @@ class Common extends Application
         // NVME_HEALTH_RRD is a fixed set, plus power_state, so $fields always carries every DS.
         app('Datastore')->put($this->os->getDeviceArray(), 'app', [
             'name'                => 'smart_nvme',
-            'app_id'              => $this->appId,
+            'app_id'              => $this->context->appId,
             'rrd_def'             => $rrd_def,
             'rrd_name'            => $rrdName,
             'rrd_update_template' => true,
@@ -1670,7 +1716,7 @@ class Common extends Application
     private function pruneStaleRows(string $table, string $diskKey, string $keyCol, array $keepKeys, array $extra = []): void
     {
         $query = DB::table($table)
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey);
 
         foreach ($extra as $col => $val) {
@@ -1686,8 +1732,8 @@ class Common extends Application
         $this->vlog('syncDeviceRows: upserting ' . count($this->commonDevices) . ' device(s)');
         foreach ($this->commonDevices as $snmpIndex => $dev) {
             $this->upsert('smart_devices', [
-                'app_id'           => $this->appId,
-                'device_id'        => $this->deviceId,
+                'app_id'           => $this->context->appId,
+                'device_id'        => $this->context->deviceId,
                 'disk_key'         => $dev['disk_key'],
                 'snmp_index'       => (int) $snmpIndex,
                 'device_name'      => $dev['device_name'],
@@ -1711,8 +1757,8 @@ class Common extends Application
     private function syncSataInfoRow(array $dev, array $row): void
     {
         $this->upsert('smart_sata_info', [
-            'app_id'                               => $this->appId,
-            'device_id'                            => $this->deviceId,
+            'app_id'                               => $this->context->appId,
+            'device_id'                            => $this->context->deviceId,
             'disk_key'                             => $dev['disk_key'],
             'ata_version'                          => SnmpDecode::intValue($row['smartmonSataAtaVersion'] ?? null),
             'sata_version'                         => SnmpDecode::intValue($row['smartmonSataVersion'] ?? null),
@@ -1770,8 +1816,8 @@ class Common extends Application
     private function syncSataHealthRow(array $dev, array $row): void
     {
         $this->upsert('smart_sata_health', [
-            'app_id'                     => $this->appId,
-            'device_id'                  => $this->deviceId,
+            'app_id'                     => $this->context->appId,
+            'device_id'                  => $this->context->deviceId,
             'disk_key'                   => $dev['disk_key'],
             'overall_status'             => SnmpDecode::snmpTruthValue($row['smartmonSataHealthOverallStatus'] ?? null),
             'offline_collection_status'  => $row['smartmonSataOfflineCollectionStatusValue'] ?? null,
@@ -1803,8 +1849,8 @@ class Common extends Application
     {
         foreach ($attrRows as $attrId => $row) {
             $this->upsert('smart_sata_attributes', [
-                'app_id'           => $this->appId,
-                'device_id'        => $this->deviceId,
+                'app_id'           => $this->context->appId,
+                'device_id'        => $this->context->deviceId,
                 'disk_key'         => $dev['disk_key'],
                 'attribute_id'     => (int) ($row['smartmonSataAttrId'] ?? $attrId),
                 'name'             => $row['smartmonSataAttrName'] ?? null,
@@ -1836,11 +1882,11 @@ class Common extends Application
         $diskKey = $dev['disk_key'];
         $idx = $this->mibDiskIndex($diskKey);
         $rrd = app(Rrd::class);
-        $rrdFilename = $rrd->name($this->device['hostname'], ['app', 'smart', $this->appId, $idx]);
+        $rrdFilename = $rrd->name($this->context->device['hostname'], ['app', 'smart', $this->context->appId, $idx]);
         $now = time();
 
         $rrdTypes = DB::table('smart_sata_attributes')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->pluck('rrd_type', 'attribute_id');
 
@@ -1871,7 +1917,7 @@ class Common extends Application
         // transient fetch failure must not be indistinguishable from "no data".
         $previousRates = $failedWindows !== []
             ? DB::table('smart_sata_attributes')
-                ->where('app_id', $this->appId)
+                ->where('app_id', $this->context->appId)
                 ->where('disk_key', $diskKey)
                 ->get(['attribute_id', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'])
                 ->keyBy('attribute_id')
@@ -1894,8 +1940,8 @@ class Common extends Application
             $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
 
             $this->upsert('smart_sata_attributes', [
-                'app_id'       => $this->appId,
-                'device_id'    => $this->deviceId,
+                'app_id'       => $this->context->appId,
+                'device_id'    => $this->context->deviceId,
                 'disk_key'     => $diskKey,
                 'attribute_id' => $id,
                 'rate_8h'      => $rates['8h'],
@@ -2046,7 +2092,7 @@ class Common extends Application
     {
         return DB::table('smart_attribute_thresholds')
             ->where(function ($q) use ($diskKey) {
-                $q->where(['app_id' => $this->appId, 'disk_key' => $diskKey])
+                $q->where(['app_id' => $this->context->appId, 'disk_key' => $diskKey])
                     ->orWhere(['app_id' => 0, 'disk_key' => '']);
             })
             ->get();
@@ -2127,7 +2173,7 @@ class Common extends Application
         $diskKey = $dev['disk_key'];
 
         $existingRates = DB::table('smart_sata_attributes')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->get(['attribute_id', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'])
             ->keyBy('attribute_id');
@@ -2146,8 +2192,8 @@ class Common extends Application
             $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
 
             $this->upsert('smart_sata_attributes', [
-                'app_id'           => $this->appId,
-                'device_id'        => $this->deviceId,
+                'app_id'           => $this->context->appId,
+                'device_id'        => $this->context->deviceId,
                 'disk_key'         => $diskKey,
                 'attribute_id'     => $id,
                 'value_norm'       => $row['smartmonSataAttrValue'] ?? null,
@@ -2165,8 +2211,8 @@ class Common extends Application
     {
         foreach ($rows as $direction => $row) {
             $this->upsert('smart_sata_erc', [
-                'app_id'      => $this->appId,
-                'device_id'   => $this->deviceId,
+                'app_id'      => $this->context->appId,
+                'device_id'   => $this->context->deviceId,
                 'disk_key'    => $dev['disk_key'],
                 'direction'   => (int) $direction,
                 'enabled'     => SnmpDecode::snmpTruthValue($row['smartmonSataErcEnabled'] ?? null),
@@ -2181,8 +2227,8 @@ class Common extends Application
     {
         foreach ($rows as $eventId => $row) {
             $this->upsert('smart_sata_phy_events', [
-                'app_id'     => $this->appId,
-                'device_id'  => $this->deviceId,
+                'app_id'     => $this->context->appId,
+                'device_id'  => $this->context->deviceId,
                 'disk_key'   => $dev['disk_key'],
                 'event_id'   => (int) $eventId,
                 'name'       => isset($row['smartmonSataPhyEventName'])
@@ -2201,8 +2247,8 @@ class Common extends Application
         $upsertRows = [];
         foreach ($rows as $eventId => $row) {
             $upsertRows[] = [
-                'app_id'    => $this->appId,
-                'device_id' => $this->deviceId,
+                'app_id'    => $this->context->appId,
+                'device_id' => $this->context->deviceId,
                 'disk_key'  => $dev['disk_key'],
                 'event_id'  => (int) $eventId,
                 'value'     => $row['smartmonSataPhyEventValue'] ?? null,
@@ -2218,8 +2264,8 @@ class Common extends Application
     {
         foreach ($rows as $errorIndex => $row) {
             $this->upsert('smart_sata_error_log', [
-                'app_id'          => $this->appId,
-                'device_id'       => $this->deviceId,
+                'app_id'          => $this->context->appId,
+                'device_id'       => $this->context->deviceId,
                 'disk_key'        => $dev['disk_key'],
                 'entry_num'       => (int) $errorIndex,
                 'error_count'     => $row['smartmonSataErrorNumber'] ?? null,
@@ -2242,8 +2288,8 @@ class Common extends Application
             }
             foreach ($cmdRows as $cmdIndex => $row) {
                 $this->upsert('smart_sata_error_cmd', [
-                    'app_id'          => $this->appId,
-                    'device_id'       => $this->deviceId,
+                    'app_id'          => $this->context->appId,
+                    'device_id'       => $this->context->deviceId,
                     'disk_key'        => $dev['disk_key'],
                     'error_entry_num' => (int) $errorIndex,
                     'cmd_slot'        => (int) $cmdIndex,
@@ -2267,8 +2313,8 @@ class Common extends Application
     {
         foreach ($rows as $testIndex => $row) {
             $this->upsert('smart_sata_selftest_log', [
-                'app_id'          => $this->appId,
-                'device_id'       => $this->deviceId,
+                'app_id'          => $this->context->appId,
+                'device_id'       => $this->context->deviceId,
                 'disk_key'        => $dev['disk_key'],
                 'entry_num'       => (int) $testIndex,
                 'test_type'       => $row['smartmonSataSelfTestType'] ?? null,
@@ -2286,8 +2332,8 @@ class Common extends Application
     {
         foreach ($rows as $slot => $row) {
             $this->upsert('smart_sata_selective_test', [
-                'app_id'       => $this->appId,
-                'device_id'    => $this->deviceId,
+                'app_id'       => $this->context->appId,
+                'device_id'    => $this->context->deviceId,
                 'disk_key'     => $dev['disk_key'],
                 'slot'         => (int) $slot,
                 'lba_min'      => $row['smartmonSataSelectiveLbaMin'] ?? null,
@@ -2302,8 +2348,8 @@ class Common extends Application
     {
         foreach ($rows as $address => $row) {
             $this->upsert('smart_sata_log_dir', [
-                'app_id'        => $this->appId,
-                'device_id'     => $this->deviceId,
+                'app_id'        => $this->context->appId,
+                'device_id'     => $this->context->deviceId,
                 'disk_key'      => $dev['disk_key'],
                 'log_address'   => (int) $address,
                 'name'          => isset($row['smartmonSataLogDirName'])
@@ -2333,8 +2379,8 @@ class Common extends Application
                 $normalized = $flagsRaw !== null ? (bool) ($flagsRaw & 0x20) : null;
 
                 $this->upsert('smart_sata_dev_stats', [
-                    'app_id'      => $this->appId,
-                    'device_id'   => $this->deviceId,
+                    'app_id'      => $this->context->appId,
+                    'device_id'   => $this->context->deviceId,
                     'disk_key'    => $dev['disk_key'],
                     'page_num'    => (int) $pageNum,
                     'stat_offset' => (int) $offset,
@@ -2357,8 +2403,8 @@ class Common extends Application
     {
         foreach ($rows as $entryIndex => $row) {
             $this->upsert('smart_sata_pending_defects', [
-                'app_id'    => $this->appId,
-                'device_id' => $this->deviceId,
+                'app_id'    => $this->context->appId,
+                'device_id' => $this->context->deviceId,
                 'disk_key'  => $dev['disk_key'],
                 'entry_num' => (int) $entryIndex,
                 'lba'       => $row['smartmonSataPendingDefectsLba'] ?? null,
@@ -2372,8 +2418,8 @@ class Common extends Application
     private function syncNvmeInfoRow(array $dev, array $row): void
     {
         $this->upsert('smart_nvme_info', [
-            'app_id'                         => $this->appId,
-            'device_id'                      => $this->deviceId,
+            'app_id'                         => $this->context->appId,
+            'device_id'                      => $this->context->deviceId,
             'disk_key'                       => $dev['disk_key'],
             'pci_vendor_id'                  => SnmpDecode::intValue($row['smartmonNvmePciVendorId'] ?? null),
             'pci_device_id'                  => SnmpDecode::intValue($row['smartmonNvmePciVendorSubsystemId'] ?? null),
@@ -2399,8 +2445,8 @@ class Common extends Application
         $selftestOp = SnmpDecode::intValue($row['smartmonNvmeCurrentSelfTestOperationValue'] ?? null);
 
         $this->upsert('smart_nvme_health', [
-            'app_id'               => $this->appId,
-            'device_id'            => $this->deviceId,
+            'app_id'               => $this->context->appId,
+            'device_id'            => $this->context->deviceId,
             'disk_key'             => $dev['disk_key'],
             'overall_status'       => $this->healthStatusValue($row['smartmonNvmeHealthOverallStatus'] ?? null),
             'critical_warning'     => SnmpDecode::parseBitsValue($row['smartmonNvmeCriticalWarning'] ?? null),
@@ -2428,8 +2474,8 @@ class Common extends Application
     {
         foreach ($rows as $nsId => $row) {
             $this->upsert('smart_nvme_namespaces', [
-                'app_id'        => $this->appId,
-                'device_id'     => $this->deviceId,
+                'app_id'        => $this->context->appId,
+                'device_id'     => $this->context->deviceId,
                 'disk_key'      => $dev['disk_key'],
                 'ns_id'         => (int) $nsId,
                 'nsze'          => SnmpDecode::intValue($row['smartmonNvmeNamespaceSizeBlocks'] ?? null),
@@ -2445,8 +2491,8 @@ class Common extends Application
     {
         foreach ($rows as $entryIndex => $row) {
             $this->upsert('smart_nvme_selftest_log', [
-                'app_id'               => $this->appId,
-                'device_id'            => $this->deviceId,
+                'app_id'               => $this->context->appId,
+                'device_id'            => $this->context->deviceId,
                 'disk_key'             => $dev['disk_key'],
                 'entry_num'            => (int) $entryIndex,
                 'test_type'            => SnmpDecode::intValue($row['smartmonNvmeSelfTestType'] ?? null),
@@ -2466,8 +2512,8 @@ class Common extends Application
     {
         foreach ($rows as $stateId => $row) {
             $this->upsert('smart_nvme_power_states', [
-                'app_id'                => $this->appId,
-                'device_id'             => $this->deviceId,
+                'app_id'                => $this->context->appId,
+                'device_id'             => $this->context->deviceId,
                 'disk_key'              => $dev['disk_key'],
                 'state_id'              => (int) $stateId,
                 'operational'           => SnmpDecode::snmpTruthValue($row['smartmonNvmePowerStateOperational'] ?? null),
@@ -2494,8 +2540,8 @@ class Common extends Application
             }
             foreach ($formats as $formatId => $row) {
                 $this->upsert('smart_nvme_lba_formats', [
-                    'app_id'               => $this->appId,
-                    'device_id'            => $this->deviceId,
+                    'app_id'               => $this->context->appId,
+                    'device_id'            => $this->context->deviceId,
                     'disk_key'             => $dev['disk_key'],
                     'ns_id'                => (int) $nsId,
                     'format_id'            => (int) $formatId,
@@ -2514,8 +2560,8 @@ class Common extends Application
     {
         foreach ($rows as $entryIndex => $row) {
             $this->upsert('smart_nvme_error_log', [
-                'app_id'               => $this->appId,
-                'device_id'            => $this->deviceId,
+                'app_id'               => $this->context->appId,
+                'device_id'            => $this->context->deviceId,
                 'disk_key'             => $dev['disk_key'],
                 'entry_num'            => (int) $entryIndex,
                 'error_count'          => SnmpDecode::intValue($row['smartmonNvmeErrorCount'] ?? null),
@@ -2540,8 +2586,8 @@ class Common extends Application
     private function syncNvmeCapabilityRow(array $dev, array $row): void
     {
         $this->upsert('smart_nvme_capability', [
-            'app_id'                  => $this->appId,
-            'device_id'               => $this->deviceId,
+            'app_id'                  => $this->context->appId,
+            'device_id'               => $this->context->deviceId,
             'disk_key'                => $dev['disk_key'],
             'firmware_update_raw'     => SnmpDecode::intValue($row['smartmonNvmeFirmwareUpdateRaw'] ?? null),
             'firmware_slot_count'     => SnmpDecode::intValue($row['smartmonNvmeFirmwareSlotCount'] ?? null),
@@ -2609,8 +2655,8 @@ class Common extends Application
                 }
                 foreach ($offsets as $offset => $value) {
                     $upsertRows[] = [
-                        'app_id'      => $this->appId,
-                        'device_id'   => $this->deviceId,
+                        'app_id'      => $this->context->appId,
+                        'device_id'   => $this->context->deviceId,
                         'disk_key'    => $dev['disk_key'],
                         'page_num'    => (int) $pageNum,
                         'stat_offset' => (int) $offset,
@@ -2688,7 +2734,7 @@ class Common extends Application
     private function loadStoredSataChangeSnapshot(): ?array
     {
         $rows = DB::table('smart_sata_change')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->get(['device_idx', 'table_id', 'subindex', 'last_change']);
 
         if ($rows->isEmpty()) {
@@ -2714,7 +2760,7 @@ class Common extends Application
             foreach ($tables as $tableId => $ts) {
                 if ($ts !== null) {
                     $upsertRows[] = [
-                        'app_id'      => $this->appId,
+                        'app_id'      => $this->context->appId,
                         'device_idx'  => (int) $devIdx,
                         'table_id'    => (int) $tableId,
                         'subindex'    => 0,
@@ -2729,7 +2775,7 @@ class Common extends Application
                 foreach ($subindexes as $subindex => $ts) {
                     if ($ts !== null) {
                         $upsertRows[] = [
-                            'app_id'      => $this->appId,
+                            'app_id'      => $this->context->appId,
                             'device_idx'  => (int) $devIdx,
                             'table_id'    => (int) $tableId,
                             'subindex'    => (int) $subindex,
@@ -2768,7 +2814,7 @@ class Common extends Application
      */
     private function migrateV1Rrds(): void
     {
-        $deviceModel = Device::find($this->deviceId);
+        $deviceModel = Device::find($this->context->deviceId);
         if ($deviceModel === null) {
             return;
         }
@@ -2779,7 +2825,7 @@ class Common extends Application
             $diskKey = $dev['disk_key'];
 
             $alreadyDone = DB::table('smart_devices')
-                ->where('app_id', $this->appId)
+                ->where('app_id', $this->context->appId)
                 ->where('disk_key', $diskKey)
                 ->value('v1_rrd_migrated');
 
@@ -2788,12 +2834,12 @@ class Common extends Application
             }
 
             $v2Idx = $this->mibDiskIndex($diskKey);
-            $v2Name = ['app', 'smart', $this->appId, $v2Idx];
+            $v2Name = ['app', 'smart', $this->context->appId, $v2Idx];
 
             // V1 used the raw device path as the disk ID (e.g. /dev/sda).
             $v1DiskId = $dev['device_path'];
             if (! empty($v1DiskId)) {
-                $v1Name = ['app', 'smart', $this->appId, $v1DiskId];
+                $v1Name = ['app', 'smart', $this->context->appId, $v1DiskId];
                 $rrd->renameFile($deviceModel, $v1Name, $v2Name);
             }
 
@@ -2802,7 +2848,7 @@ class Common extends Application
             $rrd->discardDatasets($rrdFile, self::V1_SATA_DISCARD_DS);
 
             DB::table('smart_devices')
-                ->where('app_id', $this->appId)
+                ->where('app_id', $this->context->appId)
                 ->where('disk_key', $diskKey)
                 ->update(['v1_rrd_migrated' => 1]);
         }
@@ -2859,7 +2905,7 @@ class Common extends Application
     /** Retrofit commonDeviceRrdDatasets() onto every existing SATA and NVMe per-disk RRD file. */
     private function reconcileCommonDeviceRrds(): void
     {
-        $deviceModel = Device::find($this->deviceId);
+        $deviceModel = Device::find($this->context->deviceId);
         if ($deviceModel === null) {
             return;
         }
@@ -2869,12 +2915,12 @@ class Common extends Application
 
         foreach ($this->sataDevices() as $dev) {
             $idx = $this->mibDiskIndex($dev['disk_key']);
-            $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart', $this->appId, $idx]), $datasets);
+            $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart', $this->context->appId, $idx]), $datasets);
         }
 
         foreach ($this->nvmeDevices() as $dev) {
             $idx = $this->mibDiskIndex($dev['disk_key']);
-            $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart_nvme', $this->appId, $idx]), $datasets);
+            $this->addDatasets($rrd->name($deviceModel->hostname, ['app', 'smart_nvme', $this->context->appId, $idx]), $datasets);
         }
     }
 
@@ -2901,7 +2947,7 @@ class Common extends Application
         $diskKey = $dev['disk_key'];
         $idx = $this->mibDiskIndex($diskKey);
         $rrd = app(Rrd::class);
-        $rrdFile = $rrd->name($this->device->hostname, ['app', 'smart', $this->appId, $idx]);
+        $rrdFile = $rrd->name($this->context->device->hostname, ['app', 'smart', $this->context->appId, $idx]);
 
         $heartbeat = LibrenmsConfig::get('rrd.heartbeat');
         $config = [];
@@ -2947,7 +2993,7 @@ class Common extends Application
     private function detectAndPersistHandler(): string
     {
         $handler = DB::table('smart_app_state')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->value('handler') ?: null;
 
         if ($handler !== null) {
@@ -2965,7 +3011,7 @@ class Common extends Application
 
         $this->vlog("detectAndPersistHandler: detected handler={$handler} (MIB valid=" . ($response->isValid() ? 'true' : 'false') . ')');
 
-        $this->upsert('smart_app_state', ['app_id' => $this->appId, 'handler' => $handler], ['app_id']);
+        $this->upsert('smart_app_state', ['app_id' => $this->context->appId, 'handler' => $handler], ['app_id']);
 
         return $handler;
     }
@@ -2988,7 +3034,7 @@ class Common extends Application
             ->value('smartmonDeviceTableLastChange.0');
 
         $storedTs = DB::table('smart_app_state')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->value('device_table_last_change');
 
         $this->commonDeviceTable();
@@ -2997,7 +3043,7 @@ class Common extends Application
             $this->vlog("ensureCommonDevices: device table changed (snmp={$snmpTs}, stored={$storedTs}), syncing");
             $this->syncDeviceRows();
             DB::table('smart_app_state')
-                ->where('app_id', $this->appId)
+                ->where('app_id', $this->context->appId)
                 ->update(['device_table_last_change' => $snmpTs]);
         } else {
             $this->vlog("ensureCommonDevices: device table unchanged (ts={$snmpTs})");
@@ -3044,7 +3090,7 @@ class Common extends Application
     private function devicesFromDb(array $protocolTypes): array
     {
         $rows = DB::table('smart_devices')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->whereIn('protocol_type', $protocolTypes)
             ->whereNotNull('snmp_index')
             ->get(['snmp_index', 'disk_key', 'power_state']);
@@ -3130,7 +3176,7 @@ class Common extends Application
         }
 
         $rateStatuses = DB::table('smart_sata_attributes')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->pluck('rate_status');
 
@@ -3145,7 +3191,7 @@ class Common extends Application
     private function synthesizeHealthFromDb(string $diskKey): ?int
     {
         $health = DB::table('smart_sata_health')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->first(['overall_status']);
 
@@ -3154,7 +3200,7 @@ class Common extends Application
         }
 
         $attrs = DB::table('smart_sata_attributes')
-            ->where('app_id', $this->appId)
+            ->where('app_id', $this->context->appId)
             ->where('disk_key', $diskKey)
             ->get(['status', 'rate_status']);
 
