@@ -61,10 +61,39 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
             $labelModesForList = $htmlData->labelModes();
             $labelModeForList = isset($_COOKIE[$labelCookieForList], $labelModesForList[$_COOKIE[$labelCookieForList]])
                 ? $_COOKIE[$labelCookieForList] : 'device';
+            // Some disk_* subtypes only apply to SATA drives with specific attributes.
+            $requiredSataAttr = match ($subtype) {
+                'disk_pwr_hours'  => 9,   // ATA attribute 9  = Power_On_Hours
+                'disk_pwr_cycles' => 12,  // ATA attribute 12 = Power_Cycle_Count
+                default           => null,
+            };
+            // disk_errors/disk_unsafe_shut apply to SATA drives with matching attribute names.
+            $sataNameFilter = match ($subtype) {
+                'disk_errors'      => '/error/i',
+                'disk_unsafe_shut' => '/shutdown/i',
+                default            => null,
+            };
             foreach ($htmlData->diskKeys() as $dk) {
                 $dkDisk = $htmlData->disk($dk);
                 if ($allowedKind !== null && $dkDisk['kind'] !== $allowedKind) {
                     continue;
+                }
+                if ($dkDisk['kind'] === 'sata') {
+                    if ($requiredSataAttr !== null && ! isset($htmlData->attributeGraphSpecs($dk)[$requiredSataAttr])) {
+                        continue;
+                    }
+                    if ($sataNameFilter !== null) {
+                        $hasMatch = false;
+                        foreach ($htmlData->attributeGraphSpecs($dk) as $spec) {
+                            if (preg_match($sataNameFilter, (string) ($spec['raw_name'] ?? ''))) {
+                                $hasMatch = true;
+                                break;
+                            }
+                        }
+                        if (! $hasMatch) {
+                            continue;
+                        }
+                    }
                 }
                 $diskOptions[] = [
                     'url'      => LibreNMS\Util\Url::generate($vars, [
@@ -85,8 +114,13 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
         if ($disk !== null && str_contains($subtype, 'attr')) {
             $attrSpecs = $htmlData->attributeGraphSpecs((string) $diskKey);
             $currentAttr = isset($vars['attr_id']) ? (int) $vars['attr_id'] : null;
+            // sata_attr_div only plots attributes with id{N}Hi/Lo DS (format 12 = raw24div24, 13 = raw24div32).
+            $divOnly = $subtype === 'sata_attr_div';
             $attrOptions = [];
             foreach ($attrSpecs as $attrId => $spec) {
+                if ($divOnly && ! in_array($spec['format'] ?? null, [12, 13], true)) {
+                    continue;
+                }
                 $attrOptions[] = [
                     'url'      => LibreNMS\Util\Url::generate($vars, [
                         'page'        => 'graphs',

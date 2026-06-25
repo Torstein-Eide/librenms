@@ -15,6 +15,8 @@
     $hasBig5      = $data->hasBig5Rrd($selectedDisk);
     $hasOther     = $data->hasOtherRrd($selectedDisk);
     $hasPowerState = $data->hasPowerStateRrd($selectedDisk);
+    $errorSpecs    = array_filter($specs, static fn ($spec) => preg_match('/error/i', $spec['raw_name']));
+    $shutdownSpecs = array_filter($specs, static fn ($spec) => preg_match('/shutdown/i', $spec['raw_name']));
     $graphBase    = $smartUrl((string) $selectedDisk);
 
     $diskSensors  = $data->diskSensors($selectedDisk);
@@ -36,8 +38,12 @@
     if ($hasSelftest)  { $sections[] = [$anchorPrefix . 'selftest', 'Self-test Age']; }
     if ($hasPowerState) { $sections[] = [$anchorPrefix . 'power-state', 'Power State']; }
     if ($powerSpec)    { $sections[] = [$anchorPrefix . 'power', 'Power-on Hours']; }
-    if ($hasBig5)  { $sections[] = [$anchorPrefix . 'big5', 'Reliability / Age (Big 5 ATA Attributes)']; }
-    if ($hasOther) { $sections[] = [$anchorPrefix . 'other', 'Other']; }
+    if ($hasBig5)       { $sections[] = [$anchorPrefix . 'big5', 'Reliability / Age (Big 5 ATA Attributes)']; }
+    if ($hasOther)      { $sections[] = [$anchorPrefix . 'other', 'Other']; }
+    if ($errorSpecs !== [])    { $sections[] = [$anchorPrefix . 'errors', 'Error Attributes']; }
+    if ($shutdownSpecs !== []) { $sections[] = [$anchorPrefix . 'unsafe-shut', 'Unsafe Shutdowns']; }
+    $sections[] = [$anchorPrefix . 'lba-units', 'LBA Units'];
+    $sections[] = [$anchorPrefix . 'diskio', 'Disk I/O'];
     foreach ($specs as $spec) {
         if ($spec['id'] === 9) { continue; }
         $sections[] = [$anchorPrefix . 'attr-' . $spec['id'], $spec['title']];
@@ -122,6 +128,14 @@
     if ($hasOther) {
         $appGraph('sata_other', 'Other', $anchorPrefix . 'other');
     }
+    if ($errorSpecs !== []) {
+        $appGraph('disk_errors', 'Error Attributes', $anchorPrefix . 'errors');
+    }
+    if ($shutdownSpecs !== []) {
+        $appGraph('disk_unsafe_shut', 'Unsafe Shutdowns', $anchorPrefix . 'unsafe-shut');
+    }
+    $appGraph('disk_lba_units', 'LBA Units', $anchorPrefix . 'lba-units');
+    $appGraph('disk_diskio', 'Disk I/O', $anchorPrefix . 'diskio');
 
     // Per-attribute graphs with a "Scale from zero" toggle (id 9 is shown above as Power-on Hours).
     $attrSpecs = array_filter($specs, static fn ($spec) => $spec['id'] !== 9);

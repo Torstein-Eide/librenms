@@ -1,14 +1,16 @@
 <?php
 
-// NVMe power-on hours, GAUGE counter.
+// Power cycle count: NVMe via smart_nvme/pwr_cycles DS; SATA via smart/id12 DS (ATA attribute 12).
 
 use App\Facades\Rrd;
 
-$rrd_filename = Rrd::name($device['hostname'], ['app', 'smart_nvme', $app->app_id, $vars['disk']]);
+$isNvme = ($vars['rrd'] ?? '') === 'smart_nvme';
+$rrd_filename = Rrd::name($device['hostname'], ['app', $isNvme ? 'smart_nvme' : 'smart', $app->app_id, $vars['disk']]);
+$ds = $isNvme ? 'pwr_cycles' : 'id12';
 
 $name = 'smart';
-$unit_text = 'h';
-$unitlen = 3;
+$unit_text = 'cycles';
+$unitlen = 20;
 $bigdescrlen = 22;
 $smalldescrlen = 22;
 $colours = 'mega';
@@ -21,8 +23,8 @@ $rrd_list = [];
 if (Rrd::checkRrdExists($rrd_filename)) {
     $point = Rrd::lastUpdate($rrd_filename);
     $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
-    if ($avail === [] || in_array('pwr_hours', $avail, true)) {
-        $rrd_list[] = ['filename' => $rrd_filename, 'descr' => 'Power-on Hours', 'ds' => 'pwr_hours'];
+    if ($avail === [] || in_array($ds, $avail, true)) {
+        $rrd_list[] = ['filename' => $rrd_filename, 'descr' => 'Power Cycles', 'ds' => $ds];
     }
 }
 

@@ -1097,13 +1097,14 @@ class HtmlData
                 . ' Raw:' . $this->numericString($rawValue);
 
             $specs[$id] = [
-                'id'       => $id,
-                'name'     => $name,
-                'raw_name' => $rawName,
-                'title'    => 'ID# ' . $id . ', ' . $name,
-                'header'   => $header,
-                'thresh'   => is_numeric($attr['value_threshold'] ?? null) ? (float) $attr['value_threshold'] : null,
+                'id'        => $id,
+                'name'      => $name,
+                'raw_name'  => $rawName,
+                'title'     => 'ID# ' . $id . ', ' . $name,
+                'header'    => $header,
+                'thresh'    => is_numeric($attr['value_threshold'] ?? null) ? (float) $attr['value_threshold'] : null,
                 'rate_unit' => $attr['rate_unit'] ?? null,
+                'format'    => isset($attr['format']) ? (int) $attr['format'] : null,
             ];
         }
 

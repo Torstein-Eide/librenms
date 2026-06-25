@@ -46,6 +46,24 @@ if ($candidates === []) {
     throw new RrdGraphException('No device name for disk');
 }
 
+// NVMe: the controller device (e.g. nvme0) lives in smart_devices, but
+// ucd_diskio tracks the namespace device (e.g. nvme0n1). Find matching
+// namespace entries and prepend them so they are preferred over the
+// controller name, which ucd_diskio never sees.
+if (($vars['rrd'] ?? '') === 'smart_nvme') {
+    $nsExtras = [];
+    foreach ($candidates as $cand) {
+        foreach (DB::table('ucd_diskio')
+            ->where('device_id', $device['device_id'])
+            ->where('diskio_descr', 'like', $cand . 'n%')
+            ->orderBy('diskio_descr')
+            ->pluck('diskio_descr') as $descr) {
+            $nsExtras[] = (string) $descr;
+        }
+    }
+    $candidates = array_values(array_unique(array_merge($nsExtras, $candidates)));
+}
+
 $rrd_list = app_diskio_build_rrd_list($device, [$candidates], 'disk');
 
 $units = 'bps';

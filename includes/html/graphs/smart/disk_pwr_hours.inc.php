@@ -1,14 +1,16 @@
 <?php
 
-// NVMe media error count, GAUGE counter.
+// Power-on hours: NVMe via smart_nvme/pwr_hours DS; SATA via smart/id9 DS (ATA attribute 9).
 
 use App\Facades\Rrd;
 
-$rrd_filename = Rrd::name($device['hostname'], ['app', 'smart_nvme', $app->app_id, $vars['disk']]);
+$isNvme = ($vars['rrd'] ?? '') === 'smart_nvme';
+$rrd_filename = Rrd::name($device['hostname'], ['app', $isNvme ? 'smart_nvme' : 'smart', $app->app_id, $vars['disk']]);
+$ds = $isNvme ? 'pwr_hours' : 'id9';
 
 $name = 'smart';
-$unit_text = 'errors';
-$unitlen = 20;
+$unit_text = 'h';
+$unitlen = 3;
 $bigdescrlen = 22;
 $smalldescrlen = 22;
 $colours = 'mega';
@@ -21,11 +23,8 @@ $rrd_list = [];
 if (Rrd::checkRrdExists($rrd_filename)) {
     $point = Rrd::lastUpdate($rrd_filename);
     $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
-    foreach (['media_errors' => 'Media Errors'] as $ds => $descr) {
-        if ($avail !== [] && ! in_array($ds, $avail, true)) {
-            continue;
-        }
-        $rrd_list[] = ['filename' => $rrd_filename, 'descr' => $descr, 'ds' => $ds];
+    if ($avail === [] || in_array($ds, $avail, true)) {
+        $rrd_list[] = ['filename' => $rrd_filename, 'descr' => 'Power-on Hours', 'ds' => $ds];
     }
 }
 
