@@ -105,7 +105,8 @@ if (! $hasRaw && ! $hasNormalized && ! $hasDiv && $partSuffixes === []) {
 
 $normalizedColor = session('applied_site_style') == 'dark' ? '#f2f2f2' : '#272b30';
 $rawColor = '#ff9a9a66';
-$thresh = $vars['attr_thresh'] ?? null;
+$threshRaw = $vars['attr_thresh'] ?? null;
+$thresh = (is_numeric($threshRaw) && (float) $threshRaw > 0) ? $threshRaw : null;
 $normMax = 100.0;
 
 // rate_unit: 'second' for COUNTER attributes whose average rate exceeds

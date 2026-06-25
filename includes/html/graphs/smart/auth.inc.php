@@ -73,6 +73,7 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
                 'disk_unsafe_shut' => '/shutdown/i',
                 default            => null,
             };
+            $firstDiskKey = null;
             foreach ($htmlData->diskKeys() as $dk) {
                 $dkDisk = $htmlData->disk($dk);
                 if ($allowedKind !== null && $dkDisk['kind'] !== $allowedKind) {
@@ -95,6 +96,7 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
                         }
                     }
                 }
+                $firstDiskKey ??= $dk;
                 $diskOptions[] = [
                     'url'      => LibreNMS\Util\Url::generate($vars, [
                         'page' => 'graphs',
@@ -104,6 +106,15 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
                     'label'    => $htmlData->displayLabel($dkDisk, $labelModeForList),
                     'selected' => $dk === $diskKey,
                 ];
+            }
+            // If the URL's disk isn't in the eligible list, fall back to the first.
+            if ($diskOptions !== [] && $firstDiskKey !== null
+                && ! array_filter($diskOptions, fn ($o) => $o['selected'])) {
+                $diskKey = $firstDiskKey;
+                $disk    = $htmlData->disk($diskKey);
+                $vars['disk'] = $htmlData->diskIndex($diskKey);
+                $vars['rrd']  = $disk['kind'] === 'nvme' ? 'smart_nvme' : 'smart';
+                $diskOptions[0]['selected'] = true;
             }
             if ($diskOptions !== []) {
                 $object_array[1] = ['options' => $diskOptions];
@@ -117,9 +128,15 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
             // sata_attr_div only plots attributes with id{N}Hi/Lo DS (format 12 = raw24div24, 13 = raw24div32).
             $divOnly = $subtype === 'sata_attr_div';
             $attrOptions = [];
+            $firstAttrId = null;
+            $firstAttrSpec = null;
             foreach ($attrSpecs as $attrId => $spec) {
                 if ($divOnly && ! in_array($spec['format'] ?? null, [12, 13], true)) {
                     continue;
+                }
+                if ($firstAttrId === null) {
+                    $firstAttrId   = $attrId;
+                    $firstAttrSpec = $spec;
                 }
                 $attrOptions[] = [
                     'url'      => LibreNMS\Util\Url::generate($vars, [
@@ -132,6 +149,15 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
                     'label'    => $spec['title'],
                     'selected' => $attrId === $currentAttr,
                 ];
+            }
+            // If the URL's attr_id isn't in the eligible list, fall back to the first.
+            if ($attrOptions !== [] && $firstAttrId !== null
+                && ! array_filter($attrOptions, fn ($o) => $o['selected'])) {
+                $vars['attr_id']     = (string) $firstAttrId;
+                $vars['attr_name']   = $firstAttrSpec['raw_name'];
+                $vars['attr_thresh'] = $firstAttrSpec['thresh'] !== null ? (string) $firstAttrSpec['thresh'] : '';
+                $vars['rate_unit']   = $firstAttrSpec['rate_unit'] ?? '';
+                $attrOptions[0]['selected'] = true;
             }
             if ($attrOptions !== []) {
                 $object_array[2] = ['options' => $attrOptions];
