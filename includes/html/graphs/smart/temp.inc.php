@@ -48,15 +48,15 @@ $vertical_label = '°C';
 require 'includes/html/graphs/common.inc.php';
 
 // Dark-mode aware colors matching sensor/generic.inc.php.
-$sensor_color     = session('applied_site_style') === 'dark' ? '#f2f2f2' : '#272b30';
+$sensor_color = session('applied_site_style') === 'dark' ? '#f2f2f2' : '#272b30';
 $background_color = session('applied_site_style') === 'dark' ? '#272b30' : '#ffffff';
-$variance_color   = session('applied_site_style') === 'dark' ? '#3e444c'  : '#c5c5c5';
+$variance_color = session('applied_site_style') === 'dark' ? '#3e444c' : '#c5c5c5';
 
-$colours  = \App\Facades\LibrenmsConfig::get('graph_colours.mega') ?? [];
+$colours = App\Facades\LibrenmsConfig::get('graph_colours.mega') ?? [];
 $nColours = count($colours);
 
-$warn    = null;
-$crit    = null;
+$warn = null;
+$crit = null;
 $entries = [];
 foreach ($tempSensors as $sensor) {
     $fn = Rrd::name($device['hostname'], ['sensor', $sensor->sensor_class, $sensor->sensor_type, $sensor->sensor_index]);
@@ -116,7 +116,7 @@ $rrd_options[] = 'COMMENT:' . RrdStore::fixedSafeDescr('', 26) . '       Now    
 // Lines + GPRINT per sensor.
 foreach ($entries as $idx => $e) {
     $colour = $isSingle ? $sensor_color : ('#' . ($colours[$idx % $nColours] ?? '272b30'));
-    $descr  = RrdStore::fixedSafeDescr($e['descr'], 25);
+    $descr = RrdStore::fixedSafeDescr($e['descr'], 25);
     $rrd_options[] = "LINE2:avg{$idx}{$colour}:{$descr}";
     $rrd_options[] = "GPRINT:avg{$idx}:LAST:%7.1lf%S°C";
     $rrd_options[] = "GPRINT:avg{$idx}:AVERAGE:%7.1lf%S°C";

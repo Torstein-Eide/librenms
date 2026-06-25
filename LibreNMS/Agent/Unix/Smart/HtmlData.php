@@ -186,6 +186,18 @@ class HtmlData
         return DiskIdentity::index($diskKey);
     }
 
+    /** Reverse of diskIndex(): find the disk_key whose index matches a graph URL's 'disk' param. */
+    public function diskKeyForIndex(string $idx): ?string
+    {
+        foreach ($this->diskKeys() as $key) {
+            if ($this->diskIndex($key) === $idx) {
+                return $key;
+            }
+        }
+
+        return null;
+    }
+
     public function diskNavigation(string $diskKey): string
     {
         return 'tab=apps/app=smart/disk=' . rawurlencode($diskKey) . '/';
@@ -1055,8 +1067,9 @@ class HtmlData
      *
      * Which DS actually exist for a given attribute (plain id{N}/id{N}Normalized,
      * vs. the multi-part/div sub-DS variants) is decided by the graph itself
-     * (smart_v2_attr_value.inc.php, via Rrd::listDatasets()) at render time, not
-     * here. This method only carries the DB-sourced display/threshold context.
+     * (includes/html/graphs/smart/attr_value.inc.php, via Rrd::listDatasets())
+     * at render time, not here. This method only carries the DB-sourced
+     * display/threshold context.
      *
      * @return array<int, array{id:int, name:string, raw_name:string, title:string, header:string, thresh:?float, rate_unit:?string}>
      */

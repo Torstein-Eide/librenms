@@ -111,7 +111,7 @@
             $luFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $luGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
                 'id'         => $data->app->app_id,
-                'type'       => 'application_smart_v2_lba_units',
+                'type'       => 'smart_lba_units',
                 'disk'       => $idx,
                 'block_size' => $blockSize,
                 'from'       => $luFrom,
@@ -168,7 +168,7 @@
             $dioFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $dioGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
                 'id'     => $data->app->app_id,
-                'type'   => 'application_smart_v2_diskio',
+                'type'   => 'smart_diskio',
                 'disk'   => $idx,
                 'from'   => $dioFrom,
                 'to'     => $dioNow,
@@ -282,7 +282,7 @@
                 $powerState = $data->decode('power_state', $disk['power_state']);
                 $powerStateGraphArgs = [
                     'id'          => $data->app->app_id,
-                    'type'        => 'application_smart_v2_powerState',
+                    'type'        => 'smart_powerState',
                     'disk'        => $idx,
                     'from'        => $hFrom,
                     'to'          => $hNow,
@@ -536,13 +536,13 @@
         $rate168h = $attr['rate_168h'] ?? null;
         $rate672h = $attr['rate_672h'] ?? null;
 
-        // In-row mini graph: the same smart_v2_attr_value graph, 60x15.
+        // In-row mini graph: the same smart_attr_value graph, 60x15.
         // Click → graphs page, hover → day/week/month/year popup (as on device overview).
         $mini = '';
         if ($attrId > 0) {
             $mini = \LibreNMS\Util\Url::graphPopup([
                 'id'          => $attrAppId,
-                'type'        => 'application_smart_v2_attr_value',
+                'type'        => 'smart_attr_value',
                 'disk'        => $idx,
                 'attr_id'     => $attrId,
                 'rate_unit'   => $attr['rate_unit'] ?? '',
@@ -556,13 +556,13 @@
         }
 
         // raw24div24/raw24div32 (Hi/Lo split into two separate graphs, see
-        // smart_v2_attr_value.inc.php) get a second mini graph here for Lo's
+        // attr_value.inc.php) get a second mini graph here for Lo's
         // own scale, since Hi and Lo often differ by orders of magnitude.
         $miniDiv = '';
         if ($attrId > 0 && in_array($rawFormat, [12, 13], true)) {
             $miniDiv = \LibreNMS\Util\Url::graphPopup([
                 'id'          => $attrAppId,
-                'type'        => 'application_smart_v2_attr_div',
+                'type'        => 'smart_attr_div',
                 'disk'        => $idx,
                 'attr_id'     => $attrId,
                 'rate_unit'   => $attr['rate_unit'] ?? '',

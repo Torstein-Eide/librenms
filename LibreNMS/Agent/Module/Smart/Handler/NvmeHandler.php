@@ -26,7 +26,7 @@ final class NvmeHandler implements DiskTypeHandler
     private const NVME_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-NVME-MIB'];
 
     // NVMe SMART/Health columns written to the per-disk smart_nvme RRD: MIB column => [DS name, type].
-    // DS names + types MUST match the V1 nvmeDsMap (smart.php) and smart_v2_nvme.inc.php graph,
+    // DS names + types MUST match the V1 nvmeDsMap (smart.php) and includes/html/graphs/smart/nvme.inc.php graph,
     // since V1 and V2 share the same smart_nvme RRD file. Rate-style figures are DERIVE.
     private const NVME_HEALTH_RRD = [
         'smartmonNvmeDataUnitsRead'                  => ['du_rd',        'DERIVE'],

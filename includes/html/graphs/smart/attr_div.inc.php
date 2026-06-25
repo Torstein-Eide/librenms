@@ -22,7 +22,7 @@ $dsLo = $dsRaw . 'Lo';
 
 // raw24div24/raw24div32 only -- pollSataDeviceRrd() (Common.php) writes
 // id{N}Hi/Lo/Sum for these attributes (no plain id{N}); everything else
-// is handled by smart_v2_attr_value.inc.php.
+// is handled by attr_value.inc.php.
 $existingDs = Rrd::listDatasets($rrd_filename);
 if (! in_array($dsHi, $existingDs, true) || ! in_array($dsLo, $existingDs, true)) {
     throw new RrdGraphException('Requested SMART attribute is not a div-format attribute');
@@ -93,7 +93,7 @@ $rrd_options[] = 'COMMENT:Series               Last      Min      Max\n';
 // raw24div24/raw24div32: Hi and Lo are independent 24/32-bit counters that
 // often differ by orders of magnitude, so Lo is plotted against its own
 // right axis (peak-locked to Lo's own fetched range) instead of sharing
-// Hi/Div's left axis. No Normalized line here -- see smart_v2_attr_value.inc.php
+// Hi/Div's left axis. No Normalized line here -- see attr_value.inc.php
 // for the attribute's other graph (Hi + Div only, against Normalized).
 $hiMax = $fetchDsMax($rrd_filename, $dsHi, $graph_params->from, $graph_params->to);
 if ($hiMax !== null) {
@@ -139,7 +139,7 @@ $graph_params->scale_max = (int) ceil($leftMax);
 $graph_params->scale_rigid = true;
 
 if ($loMax !== null && $loMax > 0) {
-    // Same peak-lock trick used for Normalized in smart_v2_attr_value.inc.php,
+    // Same peak-lock trick used for Normalized in attr_value.inc.php,
     // just with Lo's own fetched peak as the right-axis target range
     // instead of a fixed 0-255 normalized scale.
     //

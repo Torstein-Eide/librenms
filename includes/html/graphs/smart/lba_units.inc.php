@@ -3,7 +3,7 @@
 // SATA/SAS Total LBAs Written/Read (ATA attributes 241/242), COUNTER rate (LBA/s).
 // Reads above axis (green), writes below axis (blue). A second set of GPRINTs
 // converts the same rate to B/s using the disk's logical block size.
-// Follows the same visual pattern as smart_v2_nvme_data_units.
+// Follows the same visual pattern as nvme_data_units.inc.php.
 
 use App\Facades\Rrd;
 use LibreNMS\Data\Store\Rrd as RrdStore;

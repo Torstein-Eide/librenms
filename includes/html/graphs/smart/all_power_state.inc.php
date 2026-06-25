@@ -2,7 +2,7 @@
 
 // Live power-saving state per disk, read directly from each disk's app RRD
 // (power_state is an app-level dataset, not a SENSOR-MIB sensor).
-// See includes/html/graphs/application/smart_v2_powerState.inc.php for the
+// See includes/html/graphs/smart/powerState.inc.php for the
 // per-disk single-line version and its state-code legend.
 // Values map to SmartmonDevicePowerState: 0 unknown, 1 active, 2 idleA,
 // 3 idleB, 4 idleC, 5 standbyY, 6 standbyZ, 7 sleeping, 8 standby.

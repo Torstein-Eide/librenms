@@ -82,7 +82,7 @@
             $duFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $duGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
                 'id'     => $data->app->app_id,
-                'type'   => 'application_smart_v2_nvme_data_units',
+                'type'   => 'smart_nvme_data_units',
                 'disk'   => $disk['idx'],
                 'from'   => $duFrom,
                 'to'     => $duNow,
@@ -182,10 +182,10 @@
 
             // NVMe health stats to show as plain rows (no sensor, no limits).
             static $dsToType = [
-                'media_errors' => 'smart_v2_nvme_errors',
-                'unsafe_shut'  => 'smart_v2_nvme_unsafe_shut',
-                'pwr_hours'    => 'smart_v2_nvme_pwr_hours',
-                'pwr_cycles'   => 'smart_v2_nvme_pwr_cycles',
+                'media_errors' => 'nvme_errors',
+                'unsafe_shut'  => 'nvme_unsafe_shut',
+                'pwr_hours'    => 'nvme_pwr_hours',
+                'pwr_cycles'   => 'nvme_pwr_cycles',
             ];
             $statLink = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $dsToType): string {
                 $type = $dsToType[$ds] ?? null;
@@ -193,7 +193,7 @@
 
                 return \LibreNMS\Util\Url::generate([
                     'id'   => $data->app->app_id,
-                    'type' => 'application_' . $type,
+                    'type' => 'smart_' . $type,
                     'disk' => $disk['idx'],
                     'from' => $hFrom,
                     'to'   => $hNow,
@@ -207,7 +207,7 @@
                 if ($type === null) { return $content; }
                 $g = [
                     'id'     => $data->app->app_id,
-                    'type'   => 'application_' . $type,
+                    'type'   => 'smart_' . $type,
                     'disk'   => $disk['idx'],
                     'from'   => $hFrom,
                     'to'     => $hNow,
@@ -224,7 +224,7 @@
                 if ($type === null) { return ''; }
                 $g = [
                     'id'     => $data->app->app_id,
-                    'type'   => 'application_' . $type,
+                    'type'   => 'smart_' . $type,
                     'disk'   => $disk['idx'],
                     'from'   => $hFrom,
                     'to'     => $hNow,

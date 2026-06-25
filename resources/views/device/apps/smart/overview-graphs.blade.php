@@ -14,14 +14,14 @@
 
     // Combined sections first (already first by construction order), then per-attribute.
     $sections = [
-        ['id' => 'smart-overview-all-temp', 'title' => 'All Temperatures', 'type' => 'smart_v2_all_temp'],
-        ['id' => 'smart-overview-all-wear', 'title' => 'Wear Used', 'type' => 'smart_v2_all_wear'],
-        ['id' => 'smart-overview-all-spare', 'title' => 'Available Spare', 'type' => 'smart_v2_all_spare'],
-        ['id' => 'smart-overview-all-health', 'title' => 'Health', 'type' => 'smart_v2_all_health'],
-        ['id' => 'smart-overview-all-selftest-status', 'title' => 'Self-test Status', 'type' => 'smart_v2_all_selftest_status'],
-        ['id' => 'smart-overview-all-selftest-short', 'title' => 'Self-test Age (Short)', 'type' => 'smart_v2_all_selftest_short'],
-        ['id' => 'smart-overview-all-selftest-long', 'title' => 'Self-test Age (Extended)', 'type' => 'smart_v2_all_selftest_long'],
-        ['id' => 'smart-overview-all-power-state', 'title' => 'Power State', 'type' => 'smart_v2_all_power_state'],
+        ['id' => 'smart-overview-all-temp', 'title' => 'All Temperatures', 'type' => 'all_temp'],
+        ['id' => 'smart-overview-all-wear', 'title' => 'Wear Used', 'type' => 'all_wear'],
+        ['id' => 'smart-overview-all-spare', 'title' => 'Available Spare', 'type' => 'all_spare'],
+        ['id' => 'smart-overview-all-health', 'title' => 'Health', 'type' => 'all_health'],
+        ['id' => 'smart-overview-all-selftest-status', 'title' => 'Self-test Status', 'type' => 'all_selftest_status'],
+        ['id' => 'smart-overview-all-selftest-short', 'title' => 'Self-test Age (Short)', 'type' => 'all_selftest_short'],
+        ['id' => 'smart-overview-all-selftest-long', 'title' => 'Self-test Age (Extended)', 'type' => 'all_selftest_long'],
+        ['id' => 'smart-overview-all-power-state', 'title' => 'Power State', 'type' => 'all_power_state'],
     ];
     foreach ($data->overviewAttributeIds() as $attr) {
         // Vendor-defined attribute IDs can mean different things on different
@@ -31,7 +31,7 @@
         $sections[] = [
             'id'        => 'smart-overview-attr-' . $attr['id'] . '-' . $nameSlug,
             'title'     => 'ID# ' . $attr['id'] . ', ' . $attr['name'],
-            'type'      => 'smart_v2_attr_multi',
+            'type'      => 'attr_multi',
             'attr_id'   => $attr['id'],
             'attr_name' => $attr['raw_name'],
         ];
@@ -95,7 +95,7 @@
                     'key' => $key, 'disk' => $disk,
                     'badge' => isset($spec['header']) ? '<span class="text-muted" style="font-size:12px">' . htmlspecialchars($spec['header']) . '</span>' : '',
                     'graph_array' => [
-                        'type'        => 'application_smart_v2_attr_value',
+                        'type'        => 'smart_attr_value',
                         'id'          => $data->app->app_id,
                         'disk'        => $disk['idx'],
                         'scale_min'   => '0',
@@ -110,7 +110,7 @@
             // Power State has no SENSOR-MIB sensor. It's an app-level RRD
             // dataset (same RRD the per-disk attributes live in), so it's
             // handled separately from the sensor-based types below.
-            if ($active['type'] === 'smart_v2_all_power_state') {
+            if ($active['type'] === 'all_power_state') {
                 if (! $data->hasPowerStateRrd($key)) {
                     continue;
                 }
@@ -122,7 +122,7 @@
                     'key' => $key, 'disk' => $disk,
                     'badge' => $badge,
                     'graph_array' => [
-                        'type' => 'application_smart_v2_powerState',
+                        'type' => 'smart_powerState',
                         'id'   => $data->app->app_id,
                         'disk' => $disk['idx'],
                         'rrd'  => $data->isNvme($disk) ? 'smart_nvme' : 'smart',
@@ -132,23 +132,23 @@
             }
 
             $sensor = match ($active['type']) {
-                'smart_v2_all_temp'            => $data->temperatureSensor($key),
-                'smart_v2_all_wear'            => $data->percentageUsedSensor($key),
-                'smart_v2_all_spare'           => $data->availableSpareSensor($key),
-                'smart_v2_all_health'          => $data->healthSensor($key),
-                'smart_v2_all_selftest_status' => $data->selftestStatusSensor($key),
-                'smart_v2_all_selftest_short'  => $data->selftestAgeSensor($key, 'short'),
-                'smart_v2_all_selftest_long'   => $data->selftestAgeSensor($key, 'long'),
+                'all_temp'            => $data->temperatureSensor($key),
+                'all_wear'            => $data->percentageUsedSensor($key),
+                'all_spare'           => $data->availableSpareSensor($key),
+                'all_health'          => $data->healthSensor($key),
+                'all_selftest_status' => $data->selftestStatusSensor($key),
+                'all_selftest_short'  => $data->selftestAgeSensor($key, 'short'),
+                'all_selftest_long'   => $data->selftestAgeSensor($key, 'long'),
                 default                        => null,
             };
             if ($sensor === null) {
                 continue;
             }
             $badge = match ($active['type']) {
-                'smart_v2_all_temp'  => $tempBadge($sensor),
-                'smart_v2_all_wear', 'smart_v2_all_spare' => $percentBadge($sensor),
-                'smart_v2_all_health', 'smart_v2_all_selftest_status' => $stateBadge($sensor),
-                'smart_v2_all_selftest_short', 'smart_v2_all_selftest_long' => $selftestBadge($sensor),
+                'all_temp'  => $tempBadge($sensor),
+                'all_wear', 'all_spare' => $percentBadge($sensor),
+                'all_health', 'all_selftest_status' => $stateBadge($sensor),
+                'all_selftest_short', 'all_selftest_long' => $selftestBadge($sensor),
                 default              => '',
             };
             $devices[] = [
@@ -164,7 +164,7 @@
         // Aggregate (all-disk) graph for the active type.
         $graph_array = [
             'height' => '100', 'width' => '215', 'from' => $from, 'to' => $now,
-            'id'     => $appId, 'type' => 'application_' . $active['type'],
+            'id'     => $appId, 'type' => 'smart_' . $active['type'],
             'page_title' => 'All Drives: ' . $active['title'],
         ];
         if (isset($active['attr_id'])) {

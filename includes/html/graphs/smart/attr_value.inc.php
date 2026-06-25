@@ -211,7 +211,7 @@ if ($hasDiv) {
     // stored Sum (=Hi+Lo) DS, which isn't plotted. Right axis peak-locks to
     // Hi's max -- Div is a ratio, not a raw magnitude, so it's excluded from
     // that calculation. Lo isn't shown here at all -- it's on its own
-    // separate graph (smart_v2_attr_div.inc.php), since Hi/Lo often differ
+    // separate graph (attr_div.inc.php), since Hi/Lo often differ
     // by orders of magnitude and don't share an axis well.
     $dsHi = $dsRaw . 'Hi';
     $dsLo = $dsRaw . 'Lo';

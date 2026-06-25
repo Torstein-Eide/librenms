@@ -2,9 +2,9 @@
 
 // V2 NVMe health log graph. Generic multi-metric fallback / "all" dashboard.
 // Dedicated single-metric files exist for each named metric group:
-//   smart_v2_nvme_ctrl_busy, smart_v2_nvme_temp_time, smart_v2_nvme_data_units,
-//   smart_v2_nvme_host_io, smart_v2_nvme_errors, smart_v2_nvme_pwr_hours,
-//   smart_v2_nvme_pwr_cycles, smart_v2_nvme_unsafe_shut.
+//   nvme_ctrl_busy, nvme_temp_time, nvme_data_units,
+//   nvme_host_io, nvme_errors, nvme_pwr_hours,
+//   nvme_pwr_cycles, nvme_unsafe_shut.
 //
 // $vars['disk'] is the pre-computed diskIndex (safe chars only, max 80).
 

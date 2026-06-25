@@ -33,7 +33,7 @@ foreach ($dsMap as $ds => $info) {
     }
 
     $colour = $info['colour'];
-    $label  = str_pad($info['label'], 20);
+    $label = str_pad($info['label'], 20);
 
     $rrd_options[] = "DEF:{$ds}={$rrd_filename}:{$ds}:AVERAGE";
     $rrd_options[] = "DEF:{$ds}min={$rrd_filename}:{$ds}:MIN";
@@ -49,5 +49,5 @@ foreach ($dsMap as $ds => $info) {
 }
 
 if ($wearLimit !== null) {
-    $rrd_options[] = 'HRULE:' . $wearLimit . '#005bdf:Available spare limit = ' . $wearLimit . "%\\l:dashes";
+    $rrd_options[] = 'HRULE:' . $wearLimit . '#005bdf:Available spare limit = ' . $wearLimit . '%\\l:dashes';
 }

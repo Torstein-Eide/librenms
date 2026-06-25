@@ -7,4 +7,4 @@ $smalldescrlen = 15;
 
 $rrdVar = 'id188';
 
-require 'smart-common.inc.php';
+require 'common.inc.php';

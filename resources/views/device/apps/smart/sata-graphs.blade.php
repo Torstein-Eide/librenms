@@ -61,7 +61,7 @@
     $appGraph = static function (string $type, string $title, string $anchorId, string $headerBadge = '', array $extra = []) use ($appId, $idx, $now, $panelStart, $panelEnd, $anchor) {
         $graph_array = array_merge([
             'height' => '100', 'width' => '215', 'to' => $now,
-            'id'     => $appId, 'type' => "application_{$type}",
+            'id'     => $appId, 'type' => "smart_{$type}",
             'disk'   => $idx, 'scale_min' => '0',
         ], $extra);
         $badge = $headerBadge !== '' ? '<span class="text-muted">' . htmlspecialchars($headerBadge) . '</span>' : '';
@@ -102,25 +102,25 @@
         $stParts = [];
         if ($shortSensor) { $stParts[] = 'Short: ' . $shortSensor->formatValue(); }
         if ($longSensor)  { $stParts[] = 'Long: '  . $longSensor->formatValue(); }
-        $appGraph('smart_v2_selftest', 'Self-test Age', $anchorPrefix . 'selftest', $stParts !== [] ? implode(' | ', $stParts) : '');
+        $appGraph('selftest', 'Self-test Age', $anchorPrefix . 'selftest', $stParts !== [] ? implode(' | ', $stParts) : '');
     }
     if ($hasPowerState) {
         $powerState = $disk['power_state'] ?? null;
         $powerStateBadge = $powerState !== null ? $data->decode('power_state', $powerState) : '';
-        $appGraph('smart_v2_powerState', 'Power State', $anchorPrefix . 'power-state', $powerStateBadge);
+        $appGraph('powerState', 'Power State', $anchorPrefix . 'power-state', $powerStateBadge);
     }
     if ($powerSpec) {
-        $appGraph('smart_v2_attr_value', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk), [
+        $appGraph('attr_value', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk), [
             'attr_id'     => '9',
             'attr_thresh' => $powerSpec['thresh'] !== null ? (string) $powerSpec['thresh'] : '',
             'rate_unit'   => $powerSpec['rate_unit'] ?? '',
         ]);
     }
     if ($hasBig5) {
-        $appGraph('smart_v2_big5', 'Reliability / Age (Big 5 ATA Attributes)', $anchorPrefix . 'big5', $data->reliabilityHeader($disk));
+        $appGraph('big5', 'Reliability / Age (Big 5 ATA Attributes)', $anchorPrefix . 'big5', $data->reliabilityHeader($disk));
     }
     if ($hasOther) {
-        $appGraph('smart_v2_other', 'Other', $anchorPrefix . 'other');
+        $appGraph('other', 'Other', $anchorPrefix . 'other');
     }
 
     // Per-attribute graphs with a "Scale from zero" toggle (id 9 is shown above as Power-on Hours).
@@ -144,7 +144,7 @@ function smartAttrScaleToggle(cb, wrapperId) {
             . '<input type="checkbox" id="' . $toggleId . '" checked onchange="smartAttrScaleToggle(this,\'' . $wrapperId . '\')"> Scale from zero</label></h4>';
         echo '<div id="' . $wrapperId . '">';
         foreach ($attrSpecs as $spec) {
-            $appGraph('smart_v2_attr_value', $spec['title'], $anchorPrefix . 'attr-' . $spec['id'], $spec['header'], [
+            $appGraph('attr_value', $spec['title'], $anchorPrefix . 'attr-' . $spec['id'], $spec['header'], [
                 'attr_id'     => (string) $spec['id'],
                 'attr_thresh' => $spec['thresh'] !== null ? (string) $spec['thresh'] : '',
                 'rate_unit'   => $spec['rate_unit'] ?? '',
