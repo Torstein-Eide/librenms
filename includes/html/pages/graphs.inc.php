@@ -15,8 +15,24 @@ if (session('widescreen')) {
     $thumb_width = 113;
 }
 
-$vars['from'] = Time::parseAt($vars['from'] ?? '') ?: LibrenmsConfig::get('time.day');
-$vars['to'] = Time::parseAt($vars['to'] ?? '') ?: LibrenmsConfig::get('time.now');
+// Handle time-mode toggle: URL param sets cookie, then determines parse path.
+if (isset($vars['time_mode'])) {
+    $cookieMode = in_array($vars['time_mode'], ['relative', 'absolute'], true) ? $vars['time_mode'] : 'absolute';
+    setcookie('graph_time_mode', $cookieMode, ['expires' => time() + 365 * 24 * 3600, 'path' => '/']);
+    $_COOKIE['graph_time_mode'] = $cookieMode;
+    unset($vars['time_mode'], $vars['from'], $vars['to']);
+}
+$relativeMode = ($_COOKIE['graph_time_mode'] ?? 'absolute') === 'relative';
+
+if ($relativeMode) {
+    // New path (Option B): pass raw rrdtool time expressions through unchanged.
+    $vars['from'] = (isset($vars['from']) && $vars['from'] !== '') ? (string) $vars['from'] : '-1d';
+    $vars['to'] = (isset($vars['to']) && $vars['to'] !== '') ? (string) $vars['to'] : 'now';
+} else {
+    // Old path: resolve to absolute unix timestamps immediately.
+    $vars['from'] = Time::parseAt($vars['from'] ?? '') ?: LibrenmsConfig::get('time.day');
+    $vars['to'] = Time::parseAt($vars['to'] ?? '') ?: LibrenmsConfig::get('time.now');
+}
 
 preg_match('/^(?P<type>[A-Za-z0-9]+)_(?P<subtype>.+)/', (string) $vars['type'], $graphtype);
 
@@ -43,7 +59,7 @@ if (! $auth) {
     } elseif (LibrenmsConfig::has("graph_types.$type.$subtype.descr")) {
         $title .= ' :: ' . LibrenmsConfig::get("graph_types.$type.$subtype.descr");
     } elseif ($type == 'device' && $subtype == 'collectd') {
-        $title .= ' :: ' . \LibreNMS\Util\StringHelpers::niceCase($subtype) . ' :: ' . $vars['c_plugin'];
+        $title .= ' :: ' . LibreNMS\Util\StringHelpers::niceCase($subtype) . ' :: ' . $vars['c_plugin'];
         if (isset($vars['c_plugin_instance'])) {
             $title .= ' - ' . $vars['c_plugin_instance'];
         }
@@ -52,7 +68,7 @@ if (! $auth) {
             $title .= ' - ' . $vars['c_type_instance'];
         }
     } else {
-        $title .= ' :: ' . \LibreNMS\Util\StringHelpers::niceCase($subtype);
+        $title .= ' :: ' . LibreNMS\Util\StringHelpers::niceCase($subtype);
     }
 
     $graph_array = $vars;
@@ -62,7 +78,9 @@ if (! $auth) {
     $graph_array['to'] = LibrenmsConfig::get('time.now');
 
     print_optionbar_start();
-    echo $title;
+    if (! isset($vars['show_title']) || $vars['show_title'] !== 'no') {
+        echo $title;
+    }
 
     // FIXME allow switching between types for sensor and wireless also restrict types to ones that have data
     if (! in_array($type, ['sensor', 'wireless'])) {
@@ -73,12 +91,31 @@ if (! $auth) {
             echo "<select name='type' id='type' onchange=\"window.open(this.options[this.selectedIndex].value,'_top')\" class='devices-graphs-select'>";
 
             foreach ($graph_subtypes as $avail_type) {
-                echo "<option value='" . \LibreNMS\Util\Url::generate($vars, ['type' => $type . '_' . $avail_type, 'page' => 'graphs']) . "'";
+                echo "<option value='" . LibreNMS\Util\Url::generate($vars, ['type' => $type . '_' . $avail_type, 'page' => 'graphs']) . "'";
                 if ($avail_type == $subtype) {
                     echo ' selected';
                 }
-                $display_type = \LibreNMS\Util\StringHelpers::niceCase($avail_type);
+                $display_type = LibreNMS\Util\StringHelpers::niceCase($avail_type);
                 echo ">$display_type</option>";
+            }
+            echo '</select></form></div>';
+        }
+    }
+
+    // object_array: optional ordered dropdowns defined by each graph type's auth.inc.php.
+    // Rendered in reverse key order so float:right stacks them left-to-right (1, 2, ...).
+    if (isset($object_array) && $object_array !== []) {
+        foreach (array_reverse($object_array, true) as $obj) {
+            if (empty($obj['options'])) {
+                continue;
+            }
+            echo '<div style="float: right; margin-left: 4px;"><form action="">';
+            echo csrf_field();
+            echo "<select onchange=\"window.open(this.options[this.selectedIndex].value,'_top')\" class='devices-graphs-select'>";
+            foreach ($obj['options'] as $option) {
+                echo "<option value='" . $option['url'] . "'" . ($option['selected'] ? ' selected' : '') . '>';
+                echo htmlspecialchars($option['label']);
+                echo '</option>';
             }
             echo '</select></form></div>';
         }
@@ -99,12 +136,12 @@ if (! $auth) {
             $link_array['from'] = $graph_array['from'];
             $link_array['to'] = $graph_array['to'];
             $link_array['page'] = 'graphs';
-            $link = \LibreNMS\Util\Url::generate($link_array);
+            $link = LibreNMS\Util\Url::generate($link_array);
 
             echo '<td style="text-align: center;">';
             echo '<b>' . $text . '</b>';
             echo '<a href="' . $link . '">';
-            echo \LibreNMS\Util\Url::lazyGraphTag($graph_array);
+            echo LibreNMS\Util\Url::lazyGraphTag($graph_array);
             echo '</a>';
             echo '</td>';
         }
@@ -161,6 +198,20 @@ if (! $auth) {
         echo generate_link('Show RRD Command', $vars, ['page' => 'graphs', 'showcommand' => 'yes']);
     }
 
+    echo ' | ';
+    if (isset($vars['show_title']) && $vars['show_title'] === 'no') {
+        echo generate_link('Show Title', $vars, ['page' => 'graphs', 'show_title' => null]);
+    } else {
+        echo generate_link('Hide Title', $vars, ['page' => 'graphs', 'show_title' => 'no']);
+    }
+
+    echo ' | ';
+    if ($relativeMode) {
+        echo generate_link('Absolute Time', $vars, ['page' => 'graphs', 'time_mode' => 'absolute']);
+    } else {
+        echo generate_link('Relative Time', $vars, ['page' => 'graphs', 'time_mode' => 'relative']);
+    }
+
     if ($vars['type'] == 'port_bits') {
         echo ' | ';
         if ($vars['port_speed_zoom'] ?? LibrenmsConfig::get('graphs.port_speed_zoom')) {
@@ -184,7 +235,7 @@ if (! $auth) {
         echo generate_dynamic_graph_js($graph_array);
         echo generate_dynamic_graph_tag($graph_array);
     } else {
-        echo \LibreNMS\Util\Url::lazyGraphTag($graph_array);
+        echo LibreNMS\Util\Url::lazyGraphTag($graph_array);
     }
     echo '</center></div>';
 

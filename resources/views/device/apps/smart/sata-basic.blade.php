@@ -111,7 +111,7 @@
             $luFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $luGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
                 'id'         => $data->app->app_id,
-                'type'       => 'smart_lba_units',
+                'type'       => 'smart_disk_lba_units',
                 'disk'       => $idx,
                 'block_size' => $blockSize,
                 'from'       => $luFrom,
@@ -168,7 +168,7 @@
             $dioFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $dioGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
                 'id'     => $data->app->app_id,
-                'type'   => 'smart_diskio',
+                'type'   => 'smart_disk_diskio',
                 'disk'   => $idx,
                 'from'   => $dioFrom,
                 'to'     => $dioNow,
@@ -282,7 +282,7 @@
                 $powerState = $data->decode('power_state', $disk['power_state']);
                 $powerStateGraphArgs = [
                     'id'          => $data->app->app_id,
-                    'type'        => 'smart_powerState',
+                    'type'        => 'smart_disk_power_state',
                     'disk'        => $idx,
                     'from'        => $hFrom,
                     'to'          => $hNow,
@@ -542,7 +542,7 @@
         if ($attrId > 0) {
             $mini = \LibreNMS\Util\Url::graphPopup([
                 'id'          => $attrAppId,
-                'type'        => 'smart_attr_value',
+                'type'        => 'smart_sata_attr_value',
                 'disk'        => $idx,
                 'attr_id'     => $attrId,
                 'rate_unit'   => $attr['rate_unit'] ?? '',
@@ -562,7 +562,7 @@
         if ($attrId > 0 && in_array($rawFormat, [12, 13], true)) {
             $miniDiv = \LibreNMS\Util\Url::graphPopup([
                 'id'          => $attrAppId,
-                'type'        => 'smart_attr_div',
+                'type'        => 'smart_sata_attr_div',
                 'disk'        => $idx,
                 'attr_id'     => $attrId,
                 'rate_unit'   => $attr['rate_unit'] ?? '',

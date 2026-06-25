@@ -43,5 +43,64 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
         }
 
         $auth = true;
+
+        // object_array[1]: drive selector — drives on this device compatible with the current subtype.
+        // Omitted for all_* subtypes which graph every disk at once.
+        // Prefix determines compatible disk kind:
+        //   nvme_*          → NVMe drives only
+        //   sata_*/legacy_* → SATA/ATA drives only
+        //   disk_*          → both (shared graphs)
+        if (! str_starts_with($subtype, 'all_')) {
+            $allowedKind = match (true) {
+                str_starts_with($subtype, 'nvme')                                         => 'nvme',
+                str_starts_with($subtype, 'sata_') || str_starts_with($subtype, 'legacy') => 'sata',
+                default                                                                    => null,
+            };
+            $diskOptions = [];
+            $labelCookieForList = $labelCookie ?? ('smart_label_mode_' . $device['device_id']);
+            $labelModesForList = $htmlData->labelModes();
+            $labelModeForList = isset($_COOKIE[$labelCookieForList], $labelModesForList[$_COOKIE[$labelCookieForList]])
+                ? $_COOKIE[$labelCookieForList] : 'device';
+            foreach ($htmlData->diskKeys() as $dk) {
+                $dkDisk = $htmlData->disk($dk);
+                if ($allowedKind !== null && $dkDisk['kind'] !== $allowedKind) {
+                    continue;
+                }
+                $diskOptions[] = [
+                    'url'      => LibreNMS\Util\Url::generate($vars, [
+                        'page' => 'graphs',
+                        'disk' => $htmlData->diskIndex($dk),
+                    ]),
+                    'label'    => $htmlData->displayLabel($dkDisk, $labelModeForList),
+                    'selected' => $dk === $diskKey,
+                ];
+            }
+            if ($diskOptions !== []) {
+                $object_array[1] = ['options' => $diskOptions];
+            }
+        }
+
+        // object_array[2]: attribute selector — only for attr graph subtypes when a disk is selected.
+        if ($disk !== null && str_contains($subtype, 'attr')) {
+            $attrSpecs = $htmlData->attributeGraphSpecs((string) $diskKey);
+            $currentAttr = isset($vars['attr_id']) ? (int) $vars['attr_id'] : null;
+            $attrOptions = [];
+            foreach ($attrSpecs as $attrId => $spec) {
+                $attrOptions[] = [
+                    'url'      => LibreNMS\Util\Url::generate($vars, [
+                        'page'        => 'graphs',
+                        'attr_id'     => (string) $attrId,
+                        'attr_name'   => $spec['raw_name'],
+                        'attr_thresh' => $spec['thresh'] !== null ? (string) $spec['thresh'] : '',
+                        'rate_unit'   => $spec['rate_unit'] ?? '',
+                    ]),
+                    'label'    => $spec['title'],
+                    'selected' => $attrId === $currentAttr,
+                ];
+            }
+            if ($attrOptions !== []) {
+                $object_array[2] = ['options' => $attrOptions];
+            }
+        }
     }
 }

@@ -99,7 +99,7 @@
     }
     $tempBadge = ($compositeTemp && is_numeric($compositeTemp->sensor_current))
         ? number_format((float) $compositeTemp->sensor_current, 1) . '°C' : '';
-    $nvAppGraph('temp', 'Temperature', $anchorPrefix . 'temperature', [], $tempBadge);
+    $nvAppGraph('disk_temp', 'Temperature', $anchorPrefix . 'temperature', [], $tempBadge);
 
     // Available Spare - sensor graph (includes limit/threshold lines).
     if ($spareSensor) {

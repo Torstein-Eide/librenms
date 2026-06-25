@@ -31,7 +31,7 @@
         $sections[] = [
             'id'        => 'smart-overview-attr-' . $attr['id'] . '-' . $nameSlug,
             'title'     => 'ID# ' . $attr['id'] . ', ' . $attr['name'],
-            'type'      => 'attr_multi',
+            'type'      => 'sata_attr_multi',
             'attr_id'   => $attr['id'],
             'attr_name' => $attr['raw_name'],
         ];
@@ -95,7 +95,7 @@
                     'key' => $key, 'disk' => $disk,
                     'badge' => isset($spec['header']) ? '<span class="text-muted" style="font-size:12px">' . htmlspecialchars($spec['header']) . '</span>' : '',
                     'graph_array' => [
-                        'type'        => 'smart_attr_value',
+                        'type'        => 'smart_sata_attr_value',
                         'id'          => $data->app->app_id,
                         'disk'        => $disk['idx'],
                         'scale_min'   => '0',
@@ -122,7 +122,7 @@
                     'key' => $key, 'disk' => $disk,
                     'badge' => $badge,
                     'graph_array' => [
-                        'type' => 'smart_powerState',
+                        'type' => 'smart_disk_power_state',
                         'id'   => $data->app->app_id,
                         'disk' => $disk['idx'],
                         'rrd'  => $data->isNvme($disk) ? 'smart_nvme' : 'smart',

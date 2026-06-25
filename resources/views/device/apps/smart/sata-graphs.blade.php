@@ -102,25 +102,25 @@
         $stParts = [];
         if ($shortSensor) { $stParts[] = 'Short: ' . $shortSensor->formatValue(); }
         if ($longSensor)  { $stParts[] = 'Long: '  . $longSensor->formatValue(); }
-        $appGraph('selftest', 'Self-test Age', $anchorPrefix . 'selftest', $stParts !== [] ? implode(' | ', $stParts) : '');
+        $appGraph('disk_selftest', 'Self-test Age', $anchorPrefix . 'selftest', $stParts !== [] ? implode(' | ', $stParts) : '');
     }
     if ($hasPowerState) {
         $powerState = $disk['power_state'] ?? null;
         $powerStateBadge = $powerState !== null ? $data->decode('power_state', $powerState) : '';
-        $appGraph('powerState', 'Power State', $anchorPrefix . 'power-state', $powerStateBadge);
+        $appGraph('disk_power_state', 'Power State', $anchorPrefix . 'power-state', $powerStateBadge);
     }
     if ($powerSpec) {
-        $appGraph('attr_value', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk), [
+        $appGraph('sata_attr_value', 'Power-on Hours', $anchorPrefix . 'power', $data->powerHeader($disk), [
             'attr_id'     => '9',
             'attr_thresh' => $powerSpec['thresh'] !== null ? (string) $powerSpec['thresh'] : '',
             'rate_unit'   => $powerSpec['rate_unit'] ?? '',
         ]);
     }
     if ($hasBig5) {
-        $appGraph('big5', 'Reliability / Age (Big 5 ATA Attributes)', $anchorPrefix . 'big5', $data->reliabilityHeader($disk));
+        $appGraph('sata_big5', 'Reliability / Age (Big 5 ATA Attributes)', $anchorPrefix . 'big5', $data->reliabilityHeader($disk));
     }
     if ($hasOther) {
-        $appGraph('other', 'Other', $anchorPrefix . 'other');
+        $appGraph('sata_other', 'Other', $anchorPrefix . 'other');
     }
 
     // Per-attribute graphs with a "Scale from zero" toggle (id 9 is shown above as Power-on Hours).
@@ -144,7 +144,7 @@ function smartAttrScaleToggle(cb, wrapperId) {
             . '<input type="checkbox" id="' . $toggleId . '" checked onchange="smartAttrScaleToggle(this,\'' . $wrapperId . '\')"> Scale from zero</label></h4>';
         echo '<div id="' . $wrapperId . '">';
         foreach ($attrSpecs as $spec) {
-            $appGraph('attr_value', $spec['title'], $anchorPrefix . 'attr-' . $spec['id'], $spec['header'], [
+            $appGraph('sata_attr_value', $spec['title'], $anchorPrefix . 'attr-' . $spec['id'], $spec['header'], [
                 'attr_id'     => (string) $spec['id'],
                 'attr_thresh' => $spec['thresh'] !== null ? (string) $spec['thresh'] : '',
                 'rate_unit'   => $spec['rate_unit'] ?? '',
