@@ -1,33 +1,50 @@
 <?php
 
-// SATA/SAS Total LBAs Written/Read (ATA attributes 241/242), COUNTER rate (LBA/s).
-// Reads above axis (green), writes below axis (blue). A second set of GPRINTs
-// converts the same rate to B/s using the disk's logical block size.
+// Disk throughput: Total LBAs Written/Read (SATA ATA attributes 241/242) or
+// NVMe Data Units Read/Written (1 DU = 512 000 B). Rate graph, reads above
+// axis (green), writes below axis (blue).
 // Follows the same visual pattern as nvme_data_units.inc.php.
 
 use App\Facades\Rrd;
 use LibreNMS\Data\Store\Rrd as RrdStore;
 
-$rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
+$isNvme = ($vars['rrd'] ?? '') === 'smart_nvme';
 
-if (! Rrd::checkRrdExists($rrd_filename)) {
-    return;
+if ($isNvme) {
+    $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart_nvme', $app->app_id, $vars['disk']]);
+    if (! Rrd::checkRrdExists($rrd_filename)) {
+        return;
+    }
+    $point = Rrd::lastUpdate($rrd_filename);
+    $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
+    $hasRd = $avail === [] || in_array('du_rd', $avail, true);
+    $hasWr = $avail === [] || in_array('du_wr', $avail, true);
+    $dsRd = 'du_rd';
+    $dsWr = 'du_wr';
+} else {
+    $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
+    if (! Rrd::checkRrdExists($rrd_filename)) {
+        return;
+    }
+    $point = Rrd::lastUpdate($rrd_filename);
+    $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
+    $hasRd = $avail === [] || in_array('id242', $avail, true);
+    $hasWr = $avail === [] || in_array('id241', $avail, true);
+    $dsRd = 'id242';
+    $dsWr = 'id241';
 }
-$point = Rrd::lastUpdate($rrd_filename);
-$avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
-$hasRd = $avail === [] || in_array('id242', $avail, true);
-$hasWr = $avail === [] || in_array('id241', $avail, true);
+
 if (! $hasRd && ! $hasWr) {
     return;
 }
 
-$blockSize = isset($vars['block_size']) && is_numeric($vars['block_size']) ? (float) $vars['block_size'] : 512.0;
+$blockSize = isset($vars['block_size']) && is_numeric($vars['block_size']) ? (float) $vars['block_size'] : ($isNvme ? 512000.0 : 512.0);
 
 // Allow negative Y values for writes rendered below the axis.
 unset($vars['scale_min']);
 
-$unit_text = 'Logical block address';
-$unit_label = 'LBA/S';
+$unit_text = $isNvme ? 'Data units (512 KB each)' : 'Logical block address';
+$unit_label = $isNvme ? 'DU/s' : 'LBA/S';
 require 'includes/html/graphs/common.inc.php';
 
 $stacked = generate_stacked_graphs();
@@ -59,7 +76,7 @@ $descr_rd = RrdStore::fixedSafeDescr('Read', $descr_len) . '  In';
 $descr_wr = RrdStore::fixedSafeDescr('Write', $descr_len) . ' Out';
 
 if ($hasRd) {
-    $rrd_options[] = 'DEF:in0=' . $rrd_filename . ':id242:AVERAGE';
+    $rrd_options[] = 'DEF:in0=' . $rrd_filename . ':' . $dsRd . ':AVERAGE';
     $rrd_options[] = 'CDEF:inB0=in0,' . $blockSize . ',*';
     $rrd_options[] = 'AREA:in0#' . $colour_in . $stacked['transparency'] . ':' . $descr_rd;
     $rrd_options[] = 'GPRINT:in0:LAST:%6.2lf%s';
@@ -71,7 +88,7 @@ if ($hasRd) {
 }
 
 if ($hasWr) {
-    $rrd_options[] = 'DEF:out0=' . $rrd_filename . ':id241:AVERAGE';
+    $rrd_options[] = 'DEF:out0=' . $rrd_filename . ':' . $dsWr . ':AVERAGE';
     $rrd_options[] = 'CDEF:outB0=out0,' . $blockSize . ',*';
     $rrd_options[] = 'CDEF:out0_neg=out0,-1,*';
     $rrd_options[] = 'HRULE:0#' . $colour_out . ':' . $descr_wr;

@@ -70,6 +70,7 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
                     'url'      => LibreNMS\Util\Url::generate($vars, [
                         'page' => 'graphs',
                         'disk' => $htmlData->diskIndex($dk),
+                        'rrd'  => $dkDisk['kind'] === 'nvme' ? 'smart_nvme' : 'smart',
                     ]),
                     'label'    => $htmlData->displayLabel($dkDisk, $labelModeForList),
                     'selected' => $dk === $diskKey,

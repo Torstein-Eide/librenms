@@ -25,11 +25,11 @@ if (isset($vars['time_mode'])) {
 $relativeMode = ($_COOKIE['graph_time_mode'] ?? 'absolute') === 'relative';
 
 if ($relativeMode) {
-    // New path (Option B): pass raw rrdtool time expressions through unchanged.
+    // Keep the raw rrdtool expression in $vars['from']; GraphParameters resolves it at render time.
+    // No 'to' → GraphParameters defaults to time().
     $vars['from'] = (isset($vars['from']) && $vars['from'] !== '') ? (string) $vars['from'] : '-1d';
-    $vars['to'] = (isset($vars['to']) && $vars['to'] !== '') ? (string) $vars['to'] : 'now';
+    unset($vars['to']);
 } else {
-    // Old path: resolve to absolute unix timestamps immediately.
     $vars['from'] = Time::parseAt($vars['from'] ?? '') ?: LibrenmsConfig::get('time.day');
     $vars['to'] = Time::parseAt($vars['to'] ?? '') ?: LibrenmsConfig::get('time.now');
 }
@@ -126,6 +126,7 @@ if (! $auth) {
     $show_command = isset($vars['showcommand']) && $vars['showcommand'] == 'yes';
     if (! $show_command) {
         $thumb_array = LibrenmsConfig::get('graphs.row.normal');
+        $relPeriodMap = ['sixhour' => '-6h', 'day' => '-1d', 'week' => '-1w', 'month' => '-1mo', 'year' => '-1y'];
 
         echo '<table width=100% class="thumbnail_graph_table"><tr>';
 
@@ -133,8 +134,13 @@ if (! $auth) {
             $graph_array['from'] = LibrenmsConfig::get("time.$period");
 
             $link_array = $vars;
-            $link_array['from'] = $graph_array['from'];
-            $link_array['to'] = $graph_array['to'];
+            if ($relativeMode) {
+                $link_array['from'] = $relPeriodMap[$period] ?? $vars['from'];
+                unset($link_array['to']);
+            } else {
+                $link_array['from'] = $graph_array['from'];
+                $link_array['to'] = $graph_array['to'];
+            }
             $link_array['page'] = 'graphs';
             $link = LibreNMS\Util\Url::generate($link_array);
 

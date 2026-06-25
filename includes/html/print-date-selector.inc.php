@@ -4,44 +4,9 @@ use Illuminate\Support\Facades\Request;
 use LibreNMS\Util\Time;
 
 ?>
-<?php if ($relativeMode ?? false): ?>
-<div style="text-align: center;">
-    <?php
-    // Build a GET action URL carrying all current vars except from/to (those are the editable fields).
-    $relActionParams = array_filter($vars, static fn ($k) => ! in_array($k, ['from', 'to'], true), ARRAY_FILTER_USE_KEY);
-    $relActionParams['page'] = 'graphs';
-    $relAction = url('/') . '?' . http_build_query($relActionParams);
-    ?>
-    <form class="form-inline" method="get" action="<?= htmlspecialchars($relAction) ?>">
-        <div class="form-group">
-            <label for="relfrom"><?= __('From') ?></label>
-            <input type="text"
-                   class="form-control"
-                   id="relfrom"
-                   name="from"
-                   value="<?= htmlspecialchars((string) ($graph_array['from'] ?? '-1d')) ?>"
-                   style="width: 8em;"
-                   placeholder="-1d">
-        </div>
-        <div class="form-group">
-            <label for="relto"><?= __('To') ?></label>
-            <input type="text"
-                   class="form-control"
-                   id="relto"
-                   name="to"
-                   value="<?= htmlspecialchars((string) ($graph_array['to'] ?? 'now')) ?>"
-                   style="width: 8em;"
-                   placeholder="now">
-        </div>
-        <input type="submit"
-               class="btn btn-default"
-               value="<?= __('Update') ?>">
-    </form>
-</div>
-<?php else: ?>
 <div style="text-align: center;">
     <form class="form-inline" id="customrange">
-        <input type="hidden" id="selfaction" value="<?php echo Request::url(); ?>">
+        <input type="hidden" id="selfaction" value="<?php echo htmlspecialchars(preg_replace('#/(?:from|to)=[^/]*#', '', Request::url())); ?>">
         <div class="form-group">
         <label for="dtpickerfrom"><?= __('From') ?></label>
             <input type="text"
@@ -68,7 +33,7 @@ use LibreNMS\Util\Time;
     <script type="text/javascript">
         $(function () {
             var ds_datefrom = new Date(<?= Time::parseAt($graph_array['from']) ?>*1000);
-            var ds_dateto = new Date(<?= Time::parseAt($graph_array['to']) ?>*1000);
+            var ds_dateto = new Date(<?= Time::parseAt($graph_array['to'] ?? '') ?: time() ?>*1000);
             var ds_tz = '<?php echo session('preferences.timezone'); ?>';
             if (ds_tz) {
                 ds_datefrom = moment.tz(ds_datefrom, ds_tz);
@@ -83,4 +48,3 @@ use LibreNMS\Util\Time;
         });
     </script>
 </div>
-<?php endif; ?>
