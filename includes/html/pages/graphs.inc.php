@@ -15,24 +15,15 @@ if (session('widescreen')) {
     $thumb_width = 113;
 }
 
-// Handle time-mode toggle: URL param sets cookie, then determines parse path.
 if (isset($vars['time_mode'])) {
     $cookieMode = in_array($vars['time_mode'], ['relative', 'absolute'], true) ? $vars['time_mode'] : 'absolute';
-    setcookie('graph_time_mode', $cookieMode, ['expires' => time() + 365 * 24 * 3600, 'path' => '/']);
-    $_COOKIE['graph_time_mode'] = $cookieMode;
-    unset($vars['time_mode'], $vars['from'], $vars['to']);
+    session(['graph_time_mode' => $cookieMode]);
+    unset($vars['time_mode']);
 }
-$relativeMode = ($_COOKIE['graph_time_mode'] ?? 'absolute') === 'relative';
+$relativeMode = session('graph_time_mode', 'absolute') === 'relative';
 
-if ($relativeMode) {
-    // Keep the raw rrdtool expression in $vars['from']; GraphParameters resolves it at render time.
-    // No 'to' → GraphParameters defaults to time().
-    $vars['from'] = (isset($vars['from']) && $vars['from'] !== '') ? (string) $vars['from'] : '-1d';
-    unset($vars['to']);
-} else {
-    $vars['from'] = Time::parseAt($vars['from'] ?? '') ?: LibrenmsConfig::get('time.day');
-    $vars['to'] = Time::parseAt($vars['to'] ?? '') ?: LibrenmsConfig::get('time.now');
-}
+$vars['from'] = Time::parseAt($vars['from'] ?? '') ?: LibrenmsConfig::get('time.day');
+$vars['to'] = Time::parseAt($vars['to'] ?? '') ?: LibrenmsConfig::get('time.now');
 
 preg_match('/^(?P<type>[A-Za-z0-9]+)_(?P<subtype>.+)/', (string) $vars['type'], $graphtype);
 
@@ -126,7 +117,17 @@ if (! $auth) {
     $show_command = isset($vars['showcommand']) && $vars['showcommand'] == 'yes';
     if (! $show_command) {
         $thumb_array = LibrenmsConfig::get('graphs.row.normal');
-        $relPeriodMap = ['sixhour' => '-6h', 'day' => '-1d', 'week' => '-1w', 'month' => '-1mo', 'year' => '-1y'];
+        $relPeriodMap = [
+            'sixhour'  => '-6h',
+            'day'      => '-1d',
+            'twoday'   => '-2d',
+            'week'     => '-1w',
+            'twoweek'  => '-2w',
+            'month'    => '-1mo',
+            'twomonth' => '-2mo',
+            'year'     => '-1y',
+            'twoyear'  => '-2y',
+        ];
 
         echo '<table width=100% class="thumbnail_graph_table"><tr>';
 
@@ -135,18 +136,17 @@ if (! $auth) {
 
             $link_array = $vars;
             if ($relativeMode) {
-                $link_array['from'] = $relPeriodMap[$period] ?? $vars['from'];
+                $link_array['from'] = $relPeriodMap[$period];
                 unset($link_array['to']);
             } else {
                 $link_array['from'] = $graph_array['from'];
                 $link_array['to'] = $graph_array['to'];
             }
             $link_array['page'] = 'graphs';
-            $link = LibreNMS\Util\Url::generate($link_array);
 
             echo '<td style="text-align: center;">';
             echo '<b>' . $text . '</b>';
-            echo '<a href="' . $link . '">';
+            echo '<a href="' . LibreNMS\Util\Url::generate($link_array) . '">';
             echo LibreNMS\Util\Url::lazyGraphTag($graph_array);
             echo '</a>';
             echo '</td>';
