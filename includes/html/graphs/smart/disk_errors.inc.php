@@ -47,8 +47,7 @@ if ($isNvme) {
     if ($diskKey !== null) {
         $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
         if (Rrd::checkRrdExists($rrd_filename)) {
-            $point = Rrd::lastUpdate($rrd_filename);
-            $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
+            $avail = Rrd::listDatasets($rrd_filename);
 
             $errorAttrs = DB::table('smart_sata_attributes')
                 ->where('app_id', $app->app_id)
@@ -58,9 +57,18 @@ if ($isNvme) {
                 ->get(['attribute_id', 'name']);
 
             foreach ($errorAttrs as $attr) {
-                $ds = 'id' . (int) $attr->attribute_id;
-                if ($avail !== [] && ! in_array($ds, $avail, true)) {
-                    continue;
+                $dsBase = 'id' . (int) $attr->attribute_id;
+                $dsHi   = $dsBase . 'Hi';
+                if ($avail !== []) {
+                    if (in_array($dsBase, $avail, true)) {
+                        $ds = $dsBase;
+                    } elseif (in_array($dsHi, $avail, true)) {
+                        $ds = $dsHi;
+                    } else {
+                        continue;
+                    }
+                } else {
+                    $ds = $dsBase;
                 }
                 $rrd_list[] = [
                     'filename' => $rrd_filename,
