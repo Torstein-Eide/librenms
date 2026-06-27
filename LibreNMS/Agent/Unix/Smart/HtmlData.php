@@ -153,9 +153,10 @@ class HtmlData
     }
 
     /**
-     * Resolve a URL disk identifier to its canonical disk_key. Accepts either the disk_key
-     * itself (old links/bookmarks) or the disk's device_name (e.g. "sda", "nvme0"), which is
-     * what diskUrlId() now hands out for new links.
+     * Resolve a URL disk identifier to its canonical disk_key. Accepts, in order:
+     *   1. disk_key directly (old bookmarks / internal links)
+     *   2. device_name (e.g. "sda", "nvme0n1") — case-insensitive; preferred for new URLs
+     *   3. RRD/sensor index (sanitized disk_key) — backward compat for old graph links
      */
     public function resolveDiskKey(string $id): ?string
     {
@@ -165,6 +166,12 @@ class HtmlData
 
         foreach ($this->disks as $key => $disk) {
             if (strcasecmp((string) ($disk['device_name'] ?? ''), $id) === 0) {
+                return $key;
+            }
+        }
+
+        foreach ($this->diskKeys() as $key) {
+            if ($this->diskIndex($key) === $id) {
                 return $key;
             }
         }

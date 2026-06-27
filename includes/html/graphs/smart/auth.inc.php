@@ -14,8 +14,13 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
         $graph_title = $device['hostname'] . '::smart';
 
         $htmlData = HtmlData::forDevice($app, $device);
-        $diskKey = isset($vars['disk']) ? $htmlData->diskKeyForIndex((string) $vars['disk']) : null;
+        $diskKey = isset($vars['disk']) ? $htmlData->resolveDiskKey((string) $vars['disk']) : null;
         $disk = $diskKey !== null ? $htmlData->disk($diskKey) : null;
+        // Normalize to RRD index so downstream graph files see the expected format regardless
+        // of whether the URL used device_name ("sda"), disk_key, or the old RRD index form.
+        if ($diskKey !== null) {
+            $vars['disk'] = $htmlData->diskIndex($diskKey);
+        }
 
         if ($disk !== null) {
             // Respects the same per-device label-mode cookie the SMART app pages use,
@@ -100,7 +105,7 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
                 $diskOptions[] = [
                     'url'      => LibreNMS\Util\Url::generate($vars, [
                         'page' => 'graphs',
-                        'disk' => $htmlData->diskIndex($dk),
+                        'disk' => $htmlData->diskUrlId($dk),
                         'rrd'  => $dkDisk['kind'] === 'nvme' ? 'smart_nvme' : 'smart',
                     ]),
                     'label'    => $htmlData->displayLabel($dkDisk, $labelModeForList),
