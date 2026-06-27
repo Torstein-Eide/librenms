@@ -22,7 +22,7 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
             $vars['disk'] = $htmlData->diskIndex($diskKey);
         }
 
-        if ($disk !== null) {
+        if ($disk !== null && ! str_starts_with($subtype, 'all_')) {
             // Respects the same per-device label-mode cookie the SMART app pages use,
             // so a graph title names a disk the same way the app's nav does.
             $labelCookie = 'smart_label_mode_' . $device['device_id'];
@@ -120,6 +120,14 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
                 $vars['disk'] = $htmlData->diskIndex($diskKey);
                 $vars['rrd']  = $disk['kind'] === 'nvme' ? 'smart_nvme' : 'smart';
                 $diskOptions[0]['selected'] = true;
+                // Resync titles: the fallback picked a different disk than the URL specified (or
+                // no disk was in the URL at all), so rebuild both display strings from scratch.
+                $diskLabelFinal = $htmlData->displayLabel($disk, $labelModeForList);
+                $title = generate_device_link($device) . ' :: SMART :: ' . generate_link($diskLabelFinal, [
+                    'page' => 'device', 'device' => $device['device_id'], 'tab' => 'apps', 'app' => 'smart',
+                    'disk' => $htmlData->diskUrlId($diskKey),
+                ]);
+                $graph_title = $device['hostname'] . '::smart::' . $diskLabelFinal;
             }
             if ($diskOptions !== []) {
                 $object_array[1] = ['options' => $diskOptions];

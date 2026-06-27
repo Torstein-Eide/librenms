@@ -99,16 +99,15 @@
             $duOverlibArray['width'] = 210;
             $duOverlib = generate_overlib_content($duOverlibArray, $device['hostname'] . ' - LBAs Written/Read');
 
-            // Current rate (LBA/s + B/s) from the last RRD interval. 1 NVMe data unit = 512 000 B.
+            // Current rate (B/s) from the last RRD interval. 1 NVMe data unit = 512 000 B.
             $du = 512000;
             $duRrdFile = \App\Facades\Rrd::name($device['hostname'], ['app', 'smart_nvme', $data->app->app_id, $disk['idx']]);
             $duRates   = \App\Facades\Rrd::getLastRates($duRrdFile, ['du_rd', 'du_wr']);
-            $fmtLbaRate = static fn (float $r): string => \LibreNMS\Util\Number::formatSi($r, 2, 0, 'LBA') . '/s ('
-                . \LibreNMS\Util\Number::formatSi($r * $du, 2, 0, 'B') . '/s)';
+            $fmtDuRate = static fn (float $r): string => \LibreNMS\Util\Number::formatSi($r * $du, 2, 0, 'B') . '/s';
             $duRdRate = $duRates?->get('du_rd');
             $duWrRate = $duRates?->get('du_wr');
-            $duRd = is_numeric($duRdRate) ? $fmtLbaRate((float) $duRdRate) : null;
-            $duWr = is_numeric($duWrRate) ? $fmtLbaRate((float) $duWrRate) : null;
+            $duRd = is_numeric($duRdRate) ? $fmtDuRate((float) $duRdRate) : null;
+            $duWr = is_numeric($duWrRate) ? $fmtDuRate((float) $duWrRate) : null;
             $duParts = array_filter([$duRd !== null ? 'R: ' . $duRd : null, $duWr !== null ? 'W: ' . $duWr : null]);
             $duBadge = $duParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $duParts)) . '</span>' : '';
 

@@ -110,13 +110,12 @@
             $luNow  = \App\Facades\LibrenmsConfig::get('time.now');
             $luFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $luGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
-                'id'         => $data->app->app_id,
-                'type'       => 'smart_disk_lba_units',
-                'disk'       => $idx,
-                'block_size' => $blockSize,
-                'from'       => $luFrom,
-                'to'         => $luNow,
-                'legend'     => 'no',
+                'id'     => $data->app->app_id,
+                'type'   => 'smart_disk_lba_units',
+                'disk'   => $idx,
+                'from'   => $luFrom,
+                'to'     => $luNow,
+                'legend' => 'no',
             ]);
             $luGraph = \LibreNMS\Util\Url::lazyGraphTag($luGraphArray, 'tw:w-full tw:h-auto');
 
@@ -129,13 +128,12 @@
             $luOverlibArray['width'] = 210;
             $luOverlib = generate_overlib_content($luOverlibArray, $device['hostname'] . ' - LBAs Written/Read');
 
-            // Current rate (LBA/s + B/s) from the last RRD interval, not the lifetime total.
+            // Current rate (B/s) from the last RRD interval, not the lifetime total.
             $luRrdFile = \App\Facades\Rrd::name($device['hostname'], ['app', 'smart', $data->app->app_id, $idx]);
             $luRates   = \App\Facades\Rrd::getLastRates($luRrdFile, ['id241', 'id242']);
             $luRdRate  = $lbaReadAttr !== null ? $luRates?->get('id242') : null;
             $luWrRate  = $lbaWriteAttr !== null ? $luRates?->get('id241') : null;
-            $fmtLbaRate = static fn (float $r): string => \LibreNMS\Util\Number::formatSi($r, 2, 0, 'LBA') . '/s ('
-                . \LibreNMS\Util\Number::formatSi($r * $blockSize, 2, 0, 'B') . '/s)';
+            $fmtLbaRate = static fn (float $r): string => \LibreNMS\Util\Number::formatSi($r * $blockSize, 2, 0, 'B') . '/s';
             $luRd = is_numeric($luRdRate) ? $fmtLbaRate((float) $luRdRate) : null;
             $luWr = is_numeric($luWrRate) ? $fmtLbaRate((float) $luWrRate) : null;
             $luParts = array_filter([$luRd !== null ? 'R: ' . $luRd : null, $luWr !== null ? 'W: ' . $luWr : null]);
