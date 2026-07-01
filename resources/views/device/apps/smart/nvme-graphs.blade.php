@@ -70,7 +70,6 @@
     $sections = [[$anchorPrefix . 'temperature', 'Temperature']];
     if ($spareSensor)   { $sections[] = [$anchorPrefix . 'spare', 'Available Spare']; }
     if ($pctUsedSensor) { $sections[] = [$anchorPrefix . 'pct-used', 'Percentage Used']; }
-    $sections[] = [$anchorPrefix . 'data-units', 'Data Units'];
     $sections[] = [$anchorPrefix . 'lba-units', 'LBA / Data Units'];
     $sections[] = [$anchorPrefix . 'host-io', 'Host I/O'];
     $sections[] = [$anchorPrefix . 'diskio', 'Disk I/O'];
@@ -127,8 +126,7 @@
     $duWr = isset($health['data_units_written']) && is_numeric($health['data_units_written'])
         ? \LibreNMS\Util\Number::formatBi((int) $health['data_units_written'] * $du) : null;
     $duParts = array_filter([$duRd !== null ? 'R: ' . $duRd : null, $duWr !== null ? 'W: ' . $duWr : null]);
-    $nvAppGraph('nvme_data_units', 'Data Units', $anchorPrefix . 'data-units', [], implode(' / ', $duParts));
-    $nvAppGraph('disk_lba_units', 'LBA / Data Units', $anchorPrefix . 'lba-units', ['rrd' => 'smart_nvme']);
+    $nvAppGraph('disk_lba_units', 'LBA / Data Units', $anchorPrefix . 'lba-units', ['rrd' => 'smart_nvme'], implode(' / ', $duParts));
 
     $hrRd = is_numeric($health['host_read_commands'] ?? null) ? $fmtI($health['host_read_commands']) : null;
     $hrWr = is_numeric($health['host_write_commands'] ?? null) ? $fmtI($health['host_write_commands']) : null;

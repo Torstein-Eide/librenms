@@ -82,7 +82,8 @@
             $duFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $duGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
                 'id'     => $data->app->app_id,
-                'type'   => 'smart_nvme_data_units',
+                'type'   => 'smart_disk_lba_units',
+                'rrd'    => 'smart_nvme',
                 'disk'   => $disk['idx'],
                 'from'   => $duFrom,
                 'to'     => $duNow,
