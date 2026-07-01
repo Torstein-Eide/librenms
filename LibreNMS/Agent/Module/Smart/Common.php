@@ -19,9 +19,13 @@ use SnmpQuery;
 /**
  * SMART application dispatcher.
  *
- * Reads the payload version and delegates to the correct handler:
- *   MIB   →  SNMP SMARTMON-*-MIB path (this class)
- *   V1    →  SmartV1 (legacy CSV or v1 JSON, raw RRD only)
+ * Detects the available data source on first run and routes all subsequent
+ * discover/poll calls to the correct handler:
+ *   mib  →  SNMP SMARTMON-*-MIB path (this class, full sensor + DB pipeline)
+ *   v1   →  SmartJsonV1 (Unix-agent / SNMP-extend JSON payload)
+ *
+ * Handler type is stored in smart_app_state after the first successful probe.
+ * If neither source is reachable during discover(), all stale DB data is wiped.
  */
 class Common extends Application
 {
@@ -80,7 +84,7 @@ class Common extends Application
     public function shouldDiscover(): bool
     {
         $rowCount = (int) (
-            SnmpQuery::mibs(self::COMMON_MIBS)->hideMib()
+            SnmpQuery::mibs(self::COMMON_MIBS)->mibDir('smart')->hideMib()
                 ->get('SMARTMON-COMMON-MIB::smartmonDeviceTableRowCount.0')
                 ->value('smartmonDeviceTableRowCount.0')
         );
@@ -91,13 +95,27 @@ class Common extends Application
             return true;
         }
 
-        // The device-table OID is empty or unresponsive. Still run discovery when
-        // the DB holds devices for this app so the cleanup pass can remove the now
-        // stale device rows, child rows, and sensors.
+        // A stored handler means we have a known data source (mib or v1). Always
+        // re-run discovery to refresh data and pick up handler-type changes.
+        if (DB::table('smart_app_state')->where('app_id', $this->app->app_id)->exists()) {
+            $this->vlog('shouldDiscover: stored handler found, running discovery');
+
+            return true;
+        }
+
+        // No MIB and no stored handler yet: probe V1 JSON for first-time detection.
+        if ($this->v1PayloadAvailable()) {
+            $this->vlog('shouldDiscover: no MIB, V1 payload available');
+
+            return true;
+        }
+
+        // No data source found. Still run if the DB holds rows from a previous
+        // deployment so the cleanup pass can remove them.
         $hasRows = DB::table('smart_devices')
             ->where('app_id', $this->app->app_id)
             ->exists();
-        $this->vlog('shouldDiscover: OID empty/unresponsive, DB ' . ($hasRows ? 'non-empty, running for cleanup' : 'empty, skipping'));
+        $this->vlog('shouldDiscover: no data source, DB ' . ($hasRows ? 'non-empty, running for cleanup' : 'empty, skipping'));
 
         return $hasRows;
     }
@@ -107,15 +125,18 @@ class Common extends Application
         $this->initContext();
 
         $handler = $this->detectAndPersistHandler();
-        $this->vlog("discover: handler={$handler}");
+        $this->vlog('discover: handler=' . ($handler ?? 'null'));
 
-        if ($handler !== self::HANDLER_MIB) {
-            $this->vlog('discover: non-MIB handler, skipping MIB discovery');
-
-            return;
+        if ($handler === self::HANDLER_MIB) {
+            $this->discoverMib();
+        } elseif ($handler === self::HANDLER_V1) {
+            $this->vlog('discover: delegating to SmartJsonV1');
+            $this->makeV1Handler()->discover();
+        } else {
+            // Neither MIB nor V1 JSON is reachable; wipe any stale data.
+            $this->vlog('discover: no data source detected, cleaning up');
+            $this->cleanup();
         }
-
-        $this->discoverMib();
     }
 
     public function shouldPoll(): bool
@@ -129,6 +150,13 @@ class Common extends Application
     public function poll(): void
     {
         $this->initContext();
+
+        if ($this->storedHandler() === self::HANDLER_V1) {
+            $this->vlog('poll: delegating to SmartJsonV1');
+            $this->makeV1Handler()->poll();
+
+            return;
+        }
 
         $this->pollCommon();
         $this->sataDeviceList = $this->sataDevicesFromDb();
@@ -452,7 +480,7 @@ class Common extends Application
     /** Update common application counters. */
     private function pollCommon(): void
     {
-        $rows = SnmpQuery::mibs(self::COMMON_MIBS)->hideMib()->walk([
+        $rows = SnmpQuery::mibs(self::COMMON_MIBS)->mibDir('smart')->hideMib()->walk([
             'SMARTMON-COMMON-MIB::smartmonDeviceLastPollResult',
             'SMARTMON-COMMON-MIB::smartmonDeviceLastPollTime',
             'SMARTMON-COMMON-MIB::smartmonDevicePowerState',
@@ -483,7 +511,7 @@ class Common extends Application
         // Only the raw value + operational status are needed: the scale is stored on
         // each sensor (sensor_divisor/multiplier at discovery) and applied by
         // updateSensorValues(), so the heavier full-table walk is unnecessary here.
-        $sensorValues = SnmpQuery::mibs(self::SENSOR_MIBS)
+        $sensorValues = SnmpQuery::mibs(self::SENSOR_MIBS)->mibDir('smart')
             ->hideMib()
             ->walk([
                 'SMARTMON-SENSOR-MIB::smartmonSensorValue',
@@ -561,7 +589,7 @@ class Common extends Application
 
     private function sensorTable(): void
     {
-        $this->sensorRows = SnmpQuery::mibs(self::SENSOR_MIBS)
+        $this->sensorRows = SnmpQuery::mibs(self::SENSOR_MIBS)->mibDir('smart')
             ->hideMib()
             ->walk('SMARTMON-SENSOR-MIB::smartmonSensorTable')
             ->table(2);
@@ -569,12 +597,14 @@ class Common extends Application
 
     // ── Handler detection ─────────────────────────────────────────────────────
 
-    /** Detect handler type on first run and persist it; return stored value otherwise. */
-    private function detectAndPersistHandler(): string
+    /**
+     * Return the stored handler type, or detect and store it on first run.
+     * Returns null when neither MIB nor V1 JSON is reachable (discover() will
+     * call cleanup() in that case).
+     */
+    private function detectAndPersistHandler(): ?string
     {
-        $handler = DB::table('smart_app_state')
-            ->where('app_id', $this->context->appId)
-            ->value('handler') ?: null;
+        $handler = $this->storedHandler();
 
         if ($handler !== null) {
             $this->vlog("detectAndPersistHandler: using stored handler={$handler}");
@@ -582,18 +612,60 @@ class Common extends Application
             return $handler;
         }
 
-        $response = SnmpQuery::mibs(self::COMMON_MIBS)
+        // Probe MIB first.
+        $response = SnmpQuery::mibs(self::COMMON_MIBS)->mibDir('smart')
             ->hideMib()
             ->get('SMARTMON-COMMON-MIB::smartmonDeviceTableRowCount.0');
-        $handler = ($response->isValid() && $response->value('smartmonDeviceTableRowCount.0') !== '')
-            ? self::HANDLER_MIB
-            : self::HANDLER_V1;
+        if ($response->isValid() && $response->value('smartmonDeviceTableRowCount.0') !== '') {
+            $this->vlog('detectAndPersistHandler: MIB detected');
+            $this->persistHandler(self::HANDLER_MIB);
 
-        $this->vlog("detectAndPersistHandler: detected handler={$handler} (MIB valid=" . ($response->isValid() ? 'true' : 'false') . ')');
+            return self::HANDLER_MIB;
+        }
 
+        // MIB unavailable: try V1 JSON.
+        if ($this->v1PayloadAvailable()) {
+            $this->vlog('detectAndPersistHandler: V1 JSON detected');
+            $this->persistHandler(self::HANDLER_V1);
+
+            return self::HANDLER_V1;
+        }
+
+        $this->vlog('detectAndPersistHandler: no handler detected (MIB valid=' . ($response->isValid() ? 'true' : 'false') . ')');
+
+        return null;
+    }
+
+    /** Read the persisted handler type without triggering SNMP or payload probes. */
+    private function storedHandler(): ?string
+    {
+        return DB::table('smart_app_state')
+            ->where('app_id', $this->context->appId)
+            ->value('handler') ?: null;
+    }
+
+    private function persistHandler(string $handler): void
+    {
         DbSync::upsert('smart_app_state', ['app_id' => $this->context->appId, 'handler' => $handler], ['app_id']);
+    }
 
-        return $handler;
+    /**
+     * Probe V1 JSON availability by checking nsExtendStatus."smart" = active(1).
+     * Lighter than fetching the full payload: no script execution, no JSON parsing.
+     */
+    private function v1PayloadAvailable(): bool
+    {
+        $status = (int) SnmpQuery::mibs(['NET-SNMP-EXTEND-MIB'])
+            ->hideMib()
+            ->get('NET-SNMP-EXTEND-MIB::nsExtendStatus."smart"')
+            ->value('nsExtendStatus."smart"');
+
+        return $status === 1; // RowStatus active(1)
+    }
+
+    private function makeV1Handler(): SmartJsonV1
+    {
+        return new SmartJsonV1($this->os, $this->app, $this->agent_data);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
