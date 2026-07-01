@@ -553,7 +553,7 @@ final class NvmeHandler implements DiskTypeHandler
 
     private function walkNvmeTable(string $table, int $group): array
     {
-        return SnmpQuery::mibs(self::NVME_MIBS)->hideMib()
+        return SnmpQuery::mibs(self::NVME_MIBS)->mibDir('smart')->hideMib()
             ->walk("SMARTMON-NVME-MIB::$table")->table($group);
     }
 

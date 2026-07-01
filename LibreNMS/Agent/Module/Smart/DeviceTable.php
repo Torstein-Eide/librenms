@@ -34,7 +34,7 @@ final class DeviceTable
             return $this->commonDevices;
         }
 
-        $snmpTs = SnmpQuery::mibs(self::COMMON_MIBS)->hideMib()
+        $snmpTs = SnmpQuery::mibs(self::COMMON_MIBS)->mibDir('smart')->hideMib()
             ->get('SMARTMON-COMMON-MIB::smartmonDeviceTableLastChange.0')
             ->value('smartmonDeviceTableLastChange.0');
 
@@ -93,11 +93,11 @@ final class DeviceTable
 
     private function loadCommonDeviceTable(): void
     {
-        $metaTable = SnmpQuery::mibs(self::COMMON_MIBS)
+        $metaTable = SnmpQuery::mibs(self::COMMON_MIBS)->mibDir('smart')
             ->hideMib()
             ->walk('SMARTMON-COMMON-MIB::smartmonDeviceMetadataTable')
             ->table(1);
-        $statusTable = SnmpQuery::mibs(self::COMMON_MIBS)
+        $statusTable = SnmpQuery::mibs(self::COMMON_MIBS)->mibDir('smart')
             ->hideMib()
             ->walk('SMARTMON-COMMON-MIB::smartmonDeviceStatusTable')
             ->table(1);

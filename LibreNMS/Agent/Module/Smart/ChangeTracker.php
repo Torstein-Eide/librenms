@@ -199,6 +199,6 @@ final class ChangeTracker
 
     private function walkSataTable(string $table, int $group): array
     {
-        return SnmpQuery::mibs(self::SATA_MIBS)->hideMib()->walk("SMARTMON-SATA-MIB::$table")->table($group);
+        return SnmpQuery::mibs(self::SATA_MIBS)->mibDir('smart')->hideMib()->walk("SMARTMON-SATA-MIB::$table")->table($group);
     }
 }

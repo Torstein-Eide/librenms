@@ -7,7 +7,7 @@ use LibreNMS\Tests\TestCase;
 use ReflectionClass;
 
 /**
- * Fixtures are the worked examples documented in mibs/SMARTMON-TC-MIB's
+ * Fixtures are the worked examples documented in mibs/smart/SMARTMON-TC-MIB's
  * SmartmonAtaSmartAttrFormat textual convention.
  *
  * - attrFormatSubValues() decodes multi-value formats (raw8, raw16,

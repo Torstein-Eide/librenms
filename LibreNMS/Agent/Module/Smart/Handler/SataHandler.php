@@ -1533,7 +1533,7 @@ final class SataHandler implements DiskTypeHandler
 
     private function walkSataTable(string $table, int $group, bool $numericIndex = false): array
     {
-        $query = SnmpQuery::mibs(self::SATA_MIBS)->hideMib();
+        $query = SnmpQuery::mibs(self::SATA_MIBS)->mibDir('smart')->hideMib();
         if ($numericIndex) {
             $query = $query->numericIndex();
         }

@@ -1154,7 +1154,7 @@ class HtmlData
         // SmartmonAtaSmartAttrFormat: encoding of value_raw_string for this
         // attribute, resolved from smartmontools' drivedb.h. Each description
         // is unique to its format so the raw column's tooltip can explain
-        // what's actually being shown. See mibs/SMARTMON-TC-MIB for the full
+        // what's actually being shown. See mibs/smart/SMARTMON-TC-MIB for the full
         // worked examples this is summarized from.
         'attr_format' => [
             0  => 'Unknown format',
