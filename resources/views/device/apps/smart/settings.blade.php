@@ -78,7 +78,7 @@
                 @foreach ($diskKeys as $i => $diskKey)
                     @php $tabId = 'smart-thresh-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey ?: 'default'); @endphp
                     <li role="presentation" class="{{ $i === 0 ? 'active' : '' }}">
-                        <a href="#{{ $tabId }}" aria-controls="{{ $tabId }}" role="tab" data-toggle="tab" class="{{ ! empty($diskHasBreach[$diskKey]) ? 'text-danger' : '' }}">{{ $diskLabels[$diskKey] ?? $diskKey }}</a>
+                        <a href="#{{ $tabId }}" aria-controls="{{ $tabId }}" role="tab" data-toggle="tab" class="{{ $diskKey !== '' && ! empty($diskHasBreach[$diskKey]) ? 'text-danger' : '' }}">{{ $diskLabels[$diskKey] ?? $diskKey }}</a>
                     </li>
                 @endforeach
             </ul>
