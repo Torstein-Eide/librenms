@@ -422,9 +422,11 @@ class SmartAttributeSettingsController
                 ->where('attribute_id', (int) $validated['attribute_id'])
                 ->delete();
 
-        // Report the now-effective values (falls back to the global default,
-        // or all-null/true if scope=global since that row was just deleted)
-        // so the UI can update the row in place instead of reloading.
+        // No override row is left after a reset, so the warn_rate_* fields
+        // always go back to blank (letting the placeholder show the inherited
+        // global default) regardless of what that default's value is. Only
+        // alert_enabled needs the actual inherited value reported back, since
+        // the checkbox has no "blank/inherited" state of its own.
         $global = $validated['scope'] === 'global' ? null : DB::table('smart_attribute_thresholds')
             ->where('app_id', 0)->where('disk_key', '')
             ->where('attribute_id', (int) $validated['attribute_id'])
@@ -434,10 +436,10 @@ class SmartAttributeSettingsController
             'status' => 'ok',
             'message' => $deleted > 0 ? 'Reset to default' : 'Already at default',
             'values' => [
-                'warn_rate_8h' => $global->warn_rate_8h ?? null,
-                'warn_rate_24h' => $global->warn_rate_24h ?? null,
-                'warn_rate_168h' => $global->warn_rate_168h ?? null,
-                'warn_rate_672h' => $global->warn_rate_672h ?? null,
+                'warn_rate_8h' => null,
+                'warn_rate_24h' => null,
+                'warn_rate_168h' => null,
+                'warn_rate_672h' => null,
                 'alert_enabled' => (bool) (($global->alert_enabled ?? null) ?? true),
             ],
         ]);

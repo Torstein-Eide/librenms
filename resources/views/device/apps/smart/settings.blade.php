@@ -50,11 +50,35 @@
         @if ($appId === null || empty($diskKeys))
             <div class="alert alert-info">{{ __('No SMART attributes discovered yet for this device.') }}</div>
         @else
+            @php
+                $fmtAvg = static function ($v) {
+                    return is_numeric($v) ? number_format((float) $v, 1) : '-';
+                };
+                $isBreached = static function ($item, $window) {
+                    $rateVal = $item['rate_' . $window];
+                    $warnVal = $item['warn_rate_' . $window];
+
+                    return is_numeric($rateVal) && is_numeric($warnVal) && (float) $rateVal >= (float) $warnVal;
+                };
+                // Which tabs have at least one breached attribute, so the tab
+                // itself is flagged without having to click into each disk.
+                $diskHasBreach = [];
+                foreach ($itemsByDisk as $breachDiskKey => $breachItems) {
+                    foreach ($breachItems as $breachItem) {
+                        foreach (['8h', '24h', '168h', '672h'] as $breachWindow) {
+                            if ($isBreached($breachItem, $breachWindow)) {
+                                $diskHasBreach[$breachDiskKey] = true;
+                                break 2;
+                            }
+                        }
+                    }
+                }
+            @endphp
             <ul class="nav nav-tabs" role="tablist">
                 @foreach ($diskKeys as $i => $diskKey)
                     @php $tabId = 'smart-thresh-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey ?: 'default'); @endphp
                     <li role="presentation" class="{{ $i === 0 ? 'active' : '' }}">
-                        <a href="#{{ $tabId }}" aria-controls="{{ $tabId }}" role="tab" data-toggle="tab">{{ $diskLabels[$diskKey] ?? $diskKey }}</a>
+                        <a href="#{{ $tabId }}" aria-controls="{{ $tabId }}" role="tab" data-toggle="tab" class="{{ ! empty($diskHasBreach[$diskKey]) ? 'text-danger' : '' }}">{{ $diskLabels[$diskKey] ?? $diskKey }}</a>
                     </li>
                 @endforeach
             </ul>
@@ -66,9 +90,6 @@
                         $items = $itemsByDisk[$diskKey] ?? collect();
                         $isDefaultTab = $diskKey === '';
                         $scope = $isDefaultTab ? 'global' : 'disk';
-                        $fmtAvg = static function ($v) {
-                            return is_numeric($v) ? number_format((float) $v, 1) : '-';
-                        };
                     @endphp
                     <div role="tabpanel" class="tab-pane {{ $i === 0 ? 'active' : '' }}" id="{{ $tabId }}">
                         <div class="table-responsive">
@@ -95,12 +116,8 @@
                                         <td>{{ $item['attribute_id'] }}</td>
                                         <td>{{ str_replace('_', ' ', (string) $item['name']) }}</td>
                                         @foreach (['8h', '24h', '168h', '672h'] as $window)
-                                            @php
-                                                $rateVal = $item['rate_' . $window];
-                                                $warnVal = $item['warn_rate_' . $window];
-                                                $breached = is_numeric($rateVal) && is_numeric($warnVal) && (float) $rateVal >= (float) $warnVal;
-                                            @endphp
-                                            <td class="{{ $breached ? 'text-danger' : 'text-muted' }}">{{ $fmtAvg($rateVal) }}</td>
+                                            @php $breached = $isBreached($item, $window); @endphp
+                                            <td class="{{ $breached ? 'danger' : 'text-muted' }}">{{ $fmtAvg($item['rate_' . $window]) }}</td>
                                             <td>
                                                 <div class="form-group has-feedback" style="margin:0">
                                                     <input type="text"
