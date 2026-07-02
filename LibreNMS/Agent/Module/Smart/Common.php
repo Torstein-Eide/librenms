@@ -9,7 +9,6 @@ use LibreNMS\Agent\Module\Smart\Handler\NvmeHandler;
 use LibreNMS\Agent\Module\Smart\Handler\SataHandler;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
-use LibreNMS\Agent\Module\Smart\Support\RrdReconciler;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
 use LibreNMS\Agent\Module\Smart\Support\SnmpDecode as SmartSnmpDecode;
 use LibreNMS\Util\Debug;
@@ -55,6 +54,25 @@ class Common extends Application
 
     private const HANDLER_MIB = 'mib'; // SMARTMON-*-MIB
     private const HANDLER_V1 = 'v1';  // Json
+
+    /**
+     * ATA attributes whose raw RRD DS should be COUNTER rather than GAUGE,
+     * keyed by [id => smartmontools name]. Shared by every SATA/ATA
+     * pipeline: SataHandler (SNMP-MIB path, which can also classify by
+     * attribute name via its isCounterAttrName() heuristic) and SmartJsonV1
+     * (Unix-agent JSON path, which only ever sees a fixed attribute ID with
+     * no name available, so it can only apply this ID-keyed part).
+     */
+    public const ATA_COUNTER_ATTRS = [
+        179 => 'Used_Rsvd_Blk_Cnt_Tot',
+        180 => 'Unused_Rsvd_Blk_Cnt_Tot',
+        241 => 'Total_LBAs_Written',
+        242 => 'Total_LBAs_Read',
+        245 => 'Timed_Workld_Media_Wear',
+        246 => 'Timed_Workld_RdWr_Ratio',
+        247 => 'Timed_Workld_Timer',
+        251 => 'NAND_Writes',
+    ];
 
     // Per-disk child tables keyed by (app_id, disk_key). Pruned alongside
     // smart_devices when a drive disappears. smart_sata_change is keyed by
@@ -254,9 +272,6 @@ class Common extends Application
 
         // One-shot V1→V2 RRD migration (no-op once all devices are marked done).
         $this->sataHandler->migrateV1Rrds($this->sataDevices());
-
-        // Retrofit any DS missing from pre-existing RRD files (idempotent; no-op once present).
-        RrdReconciler::reconcileCommonDeviceRrds($this->context, $this->sataDevices(), $this->nvmeDevices());
 
         // SENSOR-MIB is common to all device types; walk once before type discovery.
         $this->sensorTable();

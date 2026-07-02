@@ -120,6 +120,33 @@
                             </select>
                         </div>
                     @endif
+
+                    <div class="form-group" style="margin:18px 0 0">
+                        <label>{{ __('Log extra Device Statistics to RRD') }}</label>
+                        <p class="text-muted" style="margin:0 0 6px">
+                            {{ __('Adds a fixed set of ATA Device Statistics (GP Log 0x04) counters to each disk\'s RRD file, when present on that disk.') }}
+                        </p>
+                        <div class="checkbox">
+                            <label>
+                                <input type="checkbox"
+                                       id="smart-log-extra-dev-stats-global"
+                                       data-update-url="{{ route('device.apps.smart.settings.log_extra_dev_stats', $device) }}"
+                                       @checked($logExtraDevStatsGlobal)>
+                                {{ __('Enabled by default (applies to every device)') }}
+                            </label>
+                        </div>
+                        <div class="checkbox">
+                            <label>
+                                <input type="checkbox"
+                                       id="smart-log-extra-dev-stats-override"
+                                       data-tristate="{{ $logExtraDevStatsOverride === null ? '' : ($logExtraDevStatsOverride ? '1' : '0') }}"
+                                       data-update-url="{{ route('device.apps.smart.settings.log_extra_dev_stats', $device) }}"
+                                       @checked($logExtraDevStatsOverride ?? $logExtraDevStatsGlobal)>
+                                {{ __('Override for this device') }}
+                            </label>
+                            <a href="#" id="smart-log-extra-dev-stats-reset" class="{{ $logExtraDevStatsOverride === null ? 'disabled' : '' }}" style="margin-left:8px">{{ __('Reset to default') }}</a>
+                        </div>
+                    </div>
                 </div>
             </div>
         @endif
@@ -224,6 +251,54 @@
                     success: function (data) { toastr.success(data.message); },
                     error: function () { toastr.error('{{ __('Could not update default view mode') }}'); },
                 });
+            });
+
+            // Log extra Device Statistics: global default + per-device override (tri-state via reset link).
+            function saveLogExtraDevStats(scope, value) {
+                return $.ajax({
+                    type: 'POST',
+                    url: $('#smart-log-extra-dev-stats-global').data('update-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        scope: scope,
+                        value: value,
+                    },
+                });
+            }
+
+            $('#smart-log-extra-dev-stats-global').on('change', function () {
+                saveLogExtraDevStats('global', $(this).is(':checked'))
+                    .done(function (data) { toastr.success(data.message); })
+                    .fail(function () { toastr.error('{{ __('Could not update setting') }}'); });
+            });
+
+            $('#smart-log-extra-dev-stats-override').on('change', function () {
+                var checked = $(this).is(':checked');
+                saveLogExtraDevStats('disk', checked)
+                    .done(function (data) {
+                        toastr.success(data.message);
+                        $('#smart-log-extra-dev-stats-override').data('tristate', checked ? '1' : '0');
+                        $('#smart-log-extra-dev-stats-reset').removeClass('disabled');
+                    })
+                    .fail(function () { toastr.error('{{ __('Could not update setting') }}'); });
+            });
+
+            $('#smart-log-extra-dev-stats-reset').on('click', function (event) {
+                event.preventDefault();
+                if ($(this).hasClass('disabled')) return;
+
+                var $reset = $(this);
+                saveLogExtraDevStats('disk', null)
+                    .done(function (data) {
+                        toastr.success(data.message);
+                        $('#smart-log-extra-dev-stats-override')
+                            .prop('checked', $('#smart-log-extra-dev-stats-global').is(':checked'))
+                            .data('tristate', '');
+                        $reset.addClass('disabled');
+                    })
+                    .fail(function () { toastr.error('{{ __('Could not update setting') }}'); });
             });
         })();
     </script>

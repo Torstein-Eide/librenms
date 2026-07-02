@@ -5,7 +5,9 @@ namespace LibreNMS\Agent\Module\Smart;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Application;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
+use LibreNMS\Agent\Module\Smart\Support\AttributeRateTracker;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
+use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
 
@@ -29,8 +31,89 @@ class SmartJsonV1 extends Application
         'smart_selftest_short',
         'smart_selftest_long',
     ];
-    /** @var list<int> */
-    private const ATTR_IDS = [5, 9, 10, 12, 173, 177, 183, 184, 187, 188, 190, 194, 196, 197, 198, 199, 231, 232, 233];
+    /**
+     * The SATA attributes this JSON payload tracks (its keys), each with its
+     * standard smartctl name (its values) saved into
+     * smart_sata_attributes.name with a trailing "*". This payload only ever
+     * carries a bare numeric ID with no name field, unlike the SNMP-MIB path
+     * (smartmonSataAttrName) -- these are the conventional/generic ATA names
+     * for these IDs (matching what the old per-attribute legacy_id*.inc.php
+     * graphs hardcoded as their labels), not necessarily this specific
+     * vendor's actual attribute name, hence the "*" marking it as assumed.
+     *
+     * @var array<int, string>
+     */
+    private const ASSUMED_ATTR_NAMES = [
+        5   => 'Reallocated_Sector_Ct',
+        9   => 'Power_On_Hours',
+        10  => 'Spin_Retry_Count',
+        12  => 'Power_Cycle_Count',
+        173 => 'Worst_Case_Erase_Count',
+        177 => 'Wear_Leveling_Count',
+        183 => 'Runtime_Bad_Block',
+        184 => 'End-to-End_Error',
+        187 => 'Reported_Uncorrect',
+        188 => 'Command_Timeout',
+        190 => 'Airflow_Temperature_Cel',
+        194 => 'Temperature_Celsius',
+        196 => 'Reallocated_Event_Count',
+        197 => 'Current_Pending_Sector',
+        198 => 'Offline_Uncorrectable',
+        199 => 'UDMA_CRC_Error_Count',
+        231 => 'SSD_Life_Left',
+        232 => 'Available_Reservd_Space',
+        233 => 'Media_Wearout_Indicator',
+    ];
+
+    /**
+     * Main attribute RRD's DS, keyed by DS name -> the numericAttr() key that
+     * fills it. max_temp is a sensor instead of an RRD entry at all (see
+     * pollRrds()). Matches the modern SataHandler design: DS type is COUNTER
+     * for any ID in Common::ATA_COUNTER_ATTRS, GAUGE otherwise -- this class
+     * has no attribute name available (only a fixed numeric ID per entry),
+     * so it can't apply SataHandler's additional name-based COUNTER
+     * heuristic. No self-test pass/fail counters (completed/interrupted/
+     * readfailure/unknownfail/extended/short/conveyance/selective) -- V2
+     * deliberately dropped those RRD DS in favor of smart_sata_selftest_log,
+     * which this class also populates (see V1_SATA_DISCARD_DS in
+     * SataHandler.php).
+     *
+     * @var array<string, string>
+     */
+    private const MAIN_RRD_ATTR_KEYS = [
+        'id5' => '5',
+        'id9' => '9',
+        'id10' => '10',
+        'id173' => '173',
+        'id177' => '177',
+        'id183' => '183',
+        'id184' => '184',
+        'id187' => '187',
+        'id188' => '188',
+        'id190' => '190',
+        'id194' => '194',
+        'id196' => '196',
+        'id197' => '197',
+        'id198' => '198',
+        'id199' => '199',
+        'id231' => '231',
+        'id232' => '232',
+        'id233' => '233',
+    ];
+
+    /**
+     * MAIN_RRD_ATTR_KEYS behind a method with a widened return type, so
+     * pollRrds()'s Common::ATA_COUNTER_ATTRS lookup is checked against
+     * "some string ID", not today's fixed set of literal ID strings (which
+     * currently never overlaps ATA_COUNTER_ATTRS, but the check should stay
+     * live rather than PHPStan proving it permanently unreachable).
+     *
+     * @return array<string, string>
+     */
+    private static function mainRrdAttrKeys(): array
+    {
+        return self::MAIN_RRD_ATTR_KEYS;
+    }
 
     // ── Public lifecycle ──────────────────────────────────────────────────────
 
@@ -64,7 +147,8 @@ class SmartJsonV1 extends Application
 
             $this->discoverDiskInDb($diskKey, $disk);
             $expectedOids = array_merge($expectedOids, $this->discoverDiskSensors($idx, $disk, $label, $logEntries));
-            $this->syncDiskAttributes($diskKey, $disk);
+            $presentAttrIds = $this->syncDiskAttributes($diskKey, $disk);
+            $this->syncDiskAttributeRates($diskKey, $presentAttrIds);
             $this->syncSelftestLog($diskKey, $logEntries);
             $expectedOids = array_merge($expectedOids, $this->discoverSelftestAgeSensors($idx, $diskKey, $label));
 
@@ -95,7 +179,8 @@ class SmartJsonV1 extends Application
             $idx = DiskIdentity::index($diskKey);
             $logEntries = $this->parseSelftestLog((string) ($disk['selftest_log'] ?? ''));
 
-            $this->syncDiskAttributes($diskKey, $disk);
+            $presentAttrIds = $this->syncDiskAttributes($diskKey, $disk);
+            $this->pollDiskAttributeRates($diskKey, $presentAttrIds);
             $this->syncSelftestLog($diskKey, $logEntries);
             $sensorValues += $this->diskSensorValues($idx, $diskKey, $disk, $logEntries);
             $this->pollRrds($diskKey, $disk);
@@ -291,15 +376,17 @@ class SmartJsonV1 extends Application
      * Upsert non-null numeric SMART attributes into smart_sata_attributes and
      * prune any attribute IDs that no longer appear in the payload.
      * Called in both discover() and poll() to keep the table current.
+     *
+     * @return list<int> attribute IDs present in this poll's payload, for syncDiskAttributeRates()/pollDiskAttributeRates()
      */
-    private function syncDiskAttributes(string $diskKey, array $disk): void
+    private function syncDiskAttributes(string $diskKey, array $disk): array
     {
         $appId = $this->app->app_id;
         $deviceId = $this->os->getDeviceId();
         $rows = [];
         $presentIds = [];
 
-        foreach (self::ATTR_IDS as $attrId) {
+        foreach (array_keys(self::ASSUMED_ATTR_NAMES) as $attrId) {
             $raw = $disk[(string) $attrId] ?? null;
             if (! is_numeric($raw)) {
                 continue;
@@ -310,8 +397,9 @@ class SmartJsonV1 extends Application
                 'device_id'    => $deviceId,
                 'disk_key'     => $diskKey,
                 'attribute_id' => $attrId,
+                'name'         => self::ASSUMED_ATTR_NAMES[$attrId] . '*',
                 'value_raw'    => (int) $raw,
-                'rrd_type'     => 'GAUGE',
+                'rrd_type'     => isset(Common::ATA_COUNTER_ATTRS[$attrId]) ? 'COUNTER' : 'GAUGE',
             ];
             $presentIds[] = $attrId;
         }
@@ -327,6 +415,86 @@ class SmartJsonV1 extends Application
                 ->where('app_id', $appId)
                 ->where('disk_key', $diskKey)
                 ->delete();
+        }
+
+        return $presentIds;
+    }
+
+    /**
+     * Compute rate-of-change (RRD-history-based) for this disk's present
+     * attributes and persist rate_8h/24h/168h/672h + rate_status/status.
+     * Discovery only (RRD history accrues via polling; discovery is the
+     * natural cadence to re-evaluate trends) -- mirrors
+     * SataHandler::syncSataAttributeRates(), sharing the same
+     * AttributeRateTracker since both write "id{N}" DS into a same-shaped
+     * per-disk "smart" RRD file. This class has no device-reported status
+     * per attribute (unlike the SNMP-MIB path), so status only ever reflects
+     * a rate-of-change breach, never an underlying device-reported failure.
+     *
+     * @param  list<int>  $presentIds
+     */
+    private function syncDiskAttributeRates(string $diskKey, array $presentIds): void
+    {
+        if ($presentIds === []) {
+            return;
+        }
+
+        $appId = $this->app->app_id;
+        $deviceId = $this->os->getDeviceId();
+        $hostname = $this->os->getDeviceArray()['hostname'];
+        $rrdFilename = app(Rrd::class)->name($hostname, ['app', 'smart', $appId, $diskKey]);
+
+        $attrs = [];
+        foreach ($presentIds as $attrId) {
+            $attrs[$attrId] = ['ds' => 'id' . $attrId, 'status' => null];
+        }
+
+        AttributeRateTracker::sync($appId, $deviceId, $hostname, $diskKey, $rrdFilename, $attrs);
+    }
+
+    /**
+     * Cheap poll-time re-evaluation of rate_status (and status) against the
+     * rate_8h/24h/168h/672h values discovery already persisted, without
+     * recomputing them from RRD history every poll -- mirrors
+     * SataHandler::syncSataAttributeRowsPoll(), so a threshold edited via the
+     * settings page takes effect before the next discovery.
+     *
+     * @param  list<int>  $presentIds
+     */
+    private function pollDiskAttributeRates(string $diskKey, array $presentIds): void
+    {
+        if ($presentIds === []) {
+            return;
+        }
+
+        $appId = $this->app->app_id;
+        $deviceId = $this->os->getDeviceId();
+
+        $existingRates = DB::table('smart_sata_attributes')
+            ->where('app_id', $appId)
+            ->where('disk_key', $diskKey)
+            ->get(['attribute_id', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'])
+            ->keyBy('attribute_id');
+        $thresholdRows = AttributeRateTracker::loadThresholdRows($appId, $diskKey);
+
+        foreach ($presentIds as $attrId) {
+            $existing = $existingRates->get($attrId);
+            $rates = [
+                '8h' => $existing->rate_8h ?? null,
+                '24h' => $existing->rate_24h ?? null,
+                '168h' => $existing->rate_168h ?? null,
+                '672h' => $existing->rate_672h ?? null,
+            ];
+            $rateStatus = AttributeRateTracker::resolveRateStatus($thresholdRows, $attrId, $rates);
+
+            DbSync::upsert('smart_sata_attributes', [
+                'app_id'       => $appId,
+                'device_id'    => $deviceId,
+                'disk_key'     => $diskKey,
+                'attribute_id' => $attrId,
+                'status'       => AttributeRateTracker::combineStatus(null, $rateStatus),
+                'rate_status'  => $rateStatus,
+            ], ['app_id', 'disk_key', 'attribute_id']);
         }
     }
 
@@ -426,92 +594,28 @@ class SmartJsonV1 extends Application
         $appId = $this->app->app_id;
         $name = 'smart';
 
-        // Main attribute RRD – same schema as old SmartV1 for graph compatibility.
-        $rrdDef = RrdDefinition::make()
-            ->addDataset('id5', 'GAUGE', 0)
-            ->addDataset('id10', 'GAUGE', 0)
-            ->addDataset('id173', 'GAUGE', 0)
-            ->addDataset('id177', 'GAUGE', 0)
-            ->addDataset('id183', 'GAUGE', 0)
-            ->addDataset('id184', 'GAUGE', 0)
-            ->addDataset('id187', 'GAUGE', 0)
-            ->addDataset('id188', 'GAUGE', 0)
-            ->addDataset('id190', 'GAUGE', 0)
-            ->addDataset('id194', 'GAUGE', 0)
-            ->addDataset('id196', 'GAUGE', 0)
-            ->addDataset('id197', 'GAUGE', 0)
-            ->addDataset('id198', 'GAUGE', 0)
-            ->addDataset('id199', 'GAUGE', 0)
-            ->addDataset('id231', 'GAUGE', 0)
-            ->addDataset('id233', 'GAUGE', 0)
-            ->addDataset('completed', 'GAUGE', 0)
-            ->addDataset('interrupted', 'GAUGE', 0)
-            ->addDataset('readfailure', 'GAUGE', 0)
-            ->addDataset('unknownfail', 'GAUGE', 0)
-            ->addDataset('extended', 'GAUGE', 0)
-            ->addDataset('short', 'GAUGE', 0)
-            ->addDataset('conveyance', 'GAUGE', 0)
-            ->addDataset('selective', 'GAUGE', 0);
+        // Single per-disk attribute RRD, every attribute (including id9/id232,
+        // which used to get their own separate RRD files) in one file with
+        // one DS each -- matching the modern SataHandler design, where every
+        // attribute lives in the same per-disk RRD regardless of ID.
+        $rrdDef = RrdDefinition::make();
+        $fields = [];
+        foreach (self::mainRrdAttrKeys() as $ds => $attrKey) {
+            $type = isset(Common::ATA_COUNTER_ATTRS[(int) $attrKey]) ? 'COUNTER' : 'GAUGE';
+            $rrdDef->addDataset($ds, $type, 0);
+            $fields[$ds] = $this->numericAttr($disk, $attrKey);
+        }
 
         $this->putRrd('app', [
             'name'    => $name,
             'app_id'  => $appId,
             'rrd_def' => $rrdDef,
             'rrd_name' => ['app', $name, $appId, $diskKey],
-        ], [
-            'id5'         => $this->numericAttr($disk, '5'),
-            'id10'        => $this->numericAttr($disk, '10'),
-            'id173'       => $this->numericAttr($disk, '173'),
-            'id177'       => $this->numericAttr($disk, '177'),
-            'id183'       => $this->numericAttr($disk, '183'),
-            'id184'       => $this->numericAttr($disk, '184'),
-            'id187'       => $this->numericAttr($disk, '187'),
-            'id188'       => $this->numericAttr($disk, '188'),
-            'id190'       => $this->numericAttr($disk, '190'),
-            'id194'       => $this->numericAttr($disk, '194'),
-            'id196'       => $this->numericAttr($disk, '196'),
-            'id197'       => $this->numericAttr($disk, '197'),
-            'id198'       => $this->numericAttr($disk, '198'),
-            'id199'       => $this->numericAttr($disk, '199'),
-            'id231'       => $this->numericAttr($disk, '231'),
-            'id233'       => $this->numericAttr($disk, '233'),
-            'completed'   => $this->numericAttr($disk, 'completed'),
-            'interrupted' => $this->numericAttr($disk, 'interrupted'),
-            'readfailure' => $this->numericAttr($disk, 'read_failure'),
-            'unknownfail' => $this->numericAttr($disk, 'unknown_failure'),
-            'extended'    => $this->numericAttr($disk, 'extended'),
-            'short'       => $this->numericAttr($disk, 'short'),
-            'conveyance'  => $this->numericAttr($disk, 'conveyance'),
-            'selective'   => $this->numericAttr($disk, 'selective'),
-        ]);
+        ], $fields);
 
-        // Power-on hours (separate RRD to match old SmartV1 naming).
-        $this->putRrd('app', [
-            'name'     => $name,
-            'app_id'   => $appId,
-            'rrd_def'  => RrdDefinition::make()->addDataset('id9', 'GAUGE', 0),
-            'rrd_name' => ['app', "{$name}_id9", $appId, $diskKey],
-        ], ['id9' => $this->numericAttr($disk, '9')]);
-
-        // Attribute 232 – optional (not in the main RRD above).
-        if ($this->numericAttr($disk, '232') !== null) {
-            $this->putRrd('app', [
-                'name'     => $name,
-                'app_id'   => $appId,
-                'rrd_def'  => RrdDefinition::make()->addDataset('id232', 'GAUGE', 0),
-                'rrd_name' => ['app', "{$name}_id232", $appId, $diskKey],
-            ], ['id232' => $this->numericAttr($disk, '232')]);
-        }
-
-        // Max temperature (separate RRD to match old SmartV1 naming).
-        if ($this->numericAttr($disk, 'max_temp') !== null) {
-            $this->putRrd('app', [
-                'name'     => $name,
-                'app_id'   => $appId,
-                'rrd_def'  => RrdDefinition::make()->addDataset('maxtemp', 'GAUGE', 0),
-                'rrd_name' => ['app', "{$name}_maxtemp", $appId, $diskKey],
-            ], ['maxtemp' => $this->numericAttr($disk, 'max_temp')]);
-        }
+        // Max temperature is a sensor (smart_v1_maxtemp, see discoverSensors()/
+        // updateSensorValues()), which gets its own RRD via the sensor framework
+        // -- no separate hand-rolled RRD needed here.
     }
 
     /**

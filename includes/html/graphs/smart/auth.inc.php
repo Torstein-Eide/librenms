@@ -52,14 +52,14 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
         // object_array[1]: drive selector — drives on this device compatible with the current subtype.
         // Omitted for all_* subtypes which graph every disk at once.
         // Prefix determines compatible disk kind:
-        //   nvme_*          → NVMe drives only
-        //   sata_*/legacy_* → SATA/ATA drives only
-        //   disk_*          → both (shared graphs)
+        //   nvme_* → NVMe drives only
+        //   sata_* → SATA/ATA drives only
+        //   disk_* → both (shared graphs)
         if (! str_starts_with($subtype, 'all_')) {
             $allowedKind = match (true) {
-                str_starts_with($subtype, 'nvme')                                         => 'nvme',
-                str_starts_with($subtype, 'sata_') || str_starts_with($subtype, 'legacy') => 'sata',
-                default                                                                    => null,
+                str_starts_with($subtype, 'nvme')    => 'nvme',
+                str_starts_with($subtype, 'sata_')   => 'sata',
+                default                               => null,
             };
             $diskOptions = [];
             $labelCookieForList = $labelCookie ?? ('smart_label_mode_' . $device['device_id']);
@@ -116,9 +116,9 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
             if ($diskOptions !== [] && $firstDiskKey !== null
                 && ! array_filter($diskOptions, fn ($o) => $o['selected'])) {
                 $diskKey = $firstDiskKey;
-                $disk    = $htmlData->disk($diskKey);
+                $disk = $htmlData->disk($diskKey);
                 $vars['disk'] = $htmlData->diskIndex($diskKey);
-                $vars['rrd']  = $disk['kind'] === 'nvme' ? 'smart_nvme' : 'smart';
+                $vars['rrd'] = $disk['kind'] === 'nvme' ? 'smart_nvme' : 'smart';
                 $diskOptions[0]['selected'] = true;
                 // Resync titles: the fallback picked a different disk than the URL specified (or
                 // no disk was in the URL at all), so rebuild both display strings from scratch.
@@ -148,7 +148,7 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
                     continue;
                 }
                 if ($firstAttrId === null) {
-                    $firstAttrId   = $attrId;
+                    $firstAttrId = $attrId;
                     $firstAttrSpec = $spec;
                 }
                 $attrOptions[] = [
@@ -166,10 +166,10 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
             // If the URL's attr_id isn't in the eligible list, fall back to the first.
             if ($attrOptions !== [] && $firstAttrId !== null
                 && ! array_filter($attrOptions, fn ($o) => $o['selected'])) {
-                $vars['attr_id']     = (string) $firstAttrId;
-                $vars['attr_name']   = $firstAttrSpec['raw_name'];
+                $vars['attr_id'] = (string) $firstAttrId;
+                $vars['attr_name'] = $firstAttrSpec['raw_name'];
                 $vars['attr_thresh'] = $firstAttrSpec['thresh'] !== null ? (string) $firstAttrSpec['thresh'] : '';
-                $vars['rate_unit']   = $firstAttrSpec['rate_unit'] ?? '';
+                $vars['rate_unit'] = $firstAttrSpec['rate_unit'] ?? '';
                 $attrOptions[0]['selected'] = true;
             }
             if ($attrOptions !== []) {

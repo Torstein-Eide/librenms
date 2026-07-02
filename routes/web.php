@@ -197,6 +197,7 @@ Route::middleware(['auth'])->group(function (): void {
         Route::post('apps/smart/settings/alert', [Device\Apps\SmartAttributeSettingsController::class, 'alertToggle'])->name('apps.smart.settings.alert');
         Route::post('apps/smart/settings/naming-template', [Device\Apps\SmartAttributeSettingsController::class, 'updateNamingTemplate'])->name('apps.smart.settings.naming_template');
         Route::post('apps/smart/settings/default-view-mode', [Device\Apps\SmartAttributeSettingsController::class, 'updateDefaultViewMode'])->name('apps.smart.settings.default_view_mode');
+        Route::post('apps/smart/settings/log-extra-dev-stats', [Device\Apps\SmartAttributeSettingsController::class, 'updateLogExtraDevStats'])->name('apps.smart.settings.log_extra_dev_stats');
     });
 
     // fallback device routes

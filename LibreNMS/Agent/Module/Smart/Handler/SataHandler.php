@@ -6,12 +6,14 @@ use App\Facades\LibrenmsConfig;
 use App\Models\Device;
 use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use LibreNMS\Agent\Module\Smart\ChangeTracker;
+use LibreNMS\Agent\Module\Smart\Common;
 use LibreNMS\Agent\Module\Smart\Context;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
+use LibreNMS\Agent\Module\Smart\Support\AttributeRateTracker;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
-use LibreNMS\Agent\Module\Smart\Support\RrdReconciler;
+use LibreNMS\Agent\Module\Smart\Support\DevStatRrdCatalog;
+use LibreNMS\Agent\Module\Smart\Support\ExtraDevStatSetting;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
 use LibreNMS\Agent\Module\Smart\Support\SnmpDecode as SmartSnmpDecode;
 use LibreNMS\Data\Store\Rrd;
@@ -31,28 +33,6 @@ final class SataHandler implements DiskTypeHandler
 
     private const SATA_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SATA-MIB'];
 
-    // ATA attributes whose raw DS is COUNTER: [id => smartmontools name].
-    // Discovery checks by name (more reliable; ID 251 varies by vendor).
-    // Polling falls back to the ID key when rrd_type is not yet stored in DB.
-    private const ATA_COUNTER_ATTRS = [
-        179 => 'Used_Rsvd_Blk_Cnt_Tot',
-        180 => 'Unused_Rsvd_Blk_Cnt_Tot',
-        241 => 'Total_LBAs_Written',
-        242 => 'Total_LBAs_Read',
-        245 => 'Timed_Workld_Media_Wear',
-        246 => 'Timed_Workld_RdWr_Ratio',
-        247 => 'Timed_Workld_Timer',
-        251 => 'NAND_Writes',
-    ];
-
-    // Rate-of-change lookback windows (column suffix => seconds).
-    private const RATE_WINDOWS = [
-        '8h' => 28800,
-        '24h' => 86400,
-        '168h' => 604800,
-        '672h' => 2419200,
-    ];
-
     // V1 RRD datasets that have no equivalent in V2 and should be discarded on migration.
     // V1 stored these as self-test pass/fail counters; V2 handles self-test via the log table.
     private const V1_SATA_DISCARD_DS = [
@@ -64,6 +44,20 @@ final class SataHandler implements DiskTypeHandler
     private array $sataAttributes = [];
     private array $sataDeviceList = [];
     private readonly ChangeTracker $changes;
+
+    /**
+     * DS the current disk's per-cycle RRD file carries, keyed by DS name ->
+     * ['type'=>..,'min'=>..,'max'=>..,'value'=>..]. Re-seeded with power_state
+     * on every resolveSataDsCatalog() call (this handler processes multiple
+     * disks per discover()/poll() pass, so it can't be cached across disks),
+     * then extended with whichever allowlisted Device Statistics entries are
+     * present for that disk when the "log extra Device Statistics" setting
+     * is enabled. reconcileSataDeviceRrds() additionally appends the current
+     * disk's attribute DS directly into this same property (rather than a
+     * separate local array), so its final addDatasetsFromConfig() call needs
+     * no merge step.
+     */
+    private array $devStatCatalog = [];
 
     public function __construct(private readonly Context $ctx)
     {
@@ -106,8 +100,8 @@ final class SataHandler implements DiskTypeHandler
             if (isset($this->sataAttributes[$devIdx])) {
                 $this->syncSataAttributeRows($dev, $this->sataAttributes[$devIdx]);
                 $this->syncSataAttributeRates($dev, $this->sataAttributes[$devIdx]);
-                $this->reconcileSataAttributeRrds($dev, $this->sataAttributes[$devIdx]);
             }
+            $this->reconcileSataDeviceRrds($dev, $this->sataAttributes[$devIdx] ?? []);
         }
 
         // Change-guarded tables (per device):
@@ -383,9 +377,10 @@ final class SataHandler implements DiskTypeHandler
         $diskKey = $dev['disk_key'];
         $idx = DiskIdentity::index($diskKey);
 
-        // Attribute RRD + power state. Keep power_state last because rrdtool tune
-        // appends new DS to existing files; keyed updates below tolerate missing
-        // source fields while preserving DS order for newly-created RRDs.
+        // Attribute RRD, then power_state + any allowlisted dev-stat DS (see
+        // resolveSataDsCatalog()). rrdtool tune appends new DS to existing
+        // files regardless of call order, so this ordering only matters for
+        // the DS layout of newly-created files.
         $rrd_def = RrdDefinition::make();
         $fields = [];
 
@@ -409,7 +404,7 @@ final class SataHandler implements DiskTypeHandler
                 }
                 $meta = $attrMeta->get($id);
                 $rawType = $meta->rrd_type
-                    ?? ($this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(self::ATA_COUNTER_ATTRS[$id])
+                    ?? ($this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(Common::ATA_COUNTER_ATTRS[$id])
                         ? 'COUNTER' : 'GAUGE');
 
                 $format = (int) ($meta->format ?? null);
@@ -450,8 +445,10 @@ final class SataHandler implements DiskTypeHandler
             }
         }
 
-        $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
-        $fields['power_state'] = (int) ($dev['power_state'] ?? null);
+        foreach ($this->resolveSataDsCatalog($dev) as $ds => $shape) {
+            $rrd_def->addDataset($ds, $shape['type'], $shape['min'], $shape['max'], $shape['heartbeat']);
+            $fields[$ds] = $shape['value'];
+        }
 
         $rrdName = ['app', 'smart', $this->ctx->appId, $idx];
         $rrd = app(Rrd::class);
@@ -461,8 +458,8 @@ final class SataHandler implements DiskTypeHandler
             return;
         }
 
-        // DS reconciliation (retrofitting power_state onto older files) is a
-        // discovery concern, handled by RrdReconciler::reconcileCommonDeviceRrds();
+        // DS reconciliation (retrofitting power_state/attribute/dev-stat DS onto
+        // older files) is a discovery concern, handled by reconcileSataDeviceRrds();
         // new files get every DS at create time from $rrd_def. No tune at poll time.
         app('Datastore')->put($this->ctx->deviceArray, 'app', [
             'name'                => 'smart',
@@ -747,77 +744,18 @@ final class SataHandler implements DiskTypeHandler
     {
         $diskKey = $dev['disk_key'];
         $idx = DiskIdentity::index($diskKey);
-        $rrd = app(Rrd::class);
-        $rrdFilename = $rrd->name($this->ctx->device['hostname'], ['app', 'smart', $this->ctx->appId, $idx]);
-        $now = time();
+        $rrdFilename = app(Rrd::class)->name($this->ctx->device['hostname'], ['app', 'smart', $this->ctx->appId, $idx]);
 
-        $rrdTypes = DB::table('smart_sata_attributes')
-            ->where('app_id', $this->ctx->appId)
-            ->where('disk_key', $diskKey)
-            ->pluck('rrd_type', 'attribute_id');
-
-        $counterDs = [];
-        $gaugeDs = [];
-        $dsByAttrId = [];
+        $attrs = [];
         foreach ($attrRows as $attrId => $row) {
             $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
-            $ds = $this->rateDsForAttribute($id, $row);
-            $dsByAttrId[$id] = $ds;
-            if ($ds === null) {
-                continue;
-            }
-            // id{N}Hi (div-format sub-DS) is always written GAUGE by pollSataDeviceRrd(),
-            // regardless of what rrd_type says about the base attribute.
-            if ($ds === 'id' . $id && ($rrdTypes[$id] ?? null) === 'COUNTER') {
-                $counterDs[] = $ds;
-            } else {
-                $gaugeDs[] = $ds;
-            }
-        }
-
-        [$ratesByDs, $failedWindows] = $this->fetchAttributeRates($rrd, $rrdFilename, $counterDs, $gaugeDs, $now);
-        $thresholdRows = $this->loadThresholdRows($diskKey);
-
-        // A window whose rrdtool fetch failed outright (timeout, process error) keeps
-        // whatever rate was last persisted for it instead of being nulled out. A
-        // transient fetch failure must not be indistinguishable from "no data".
-        $previousRates = $failedWindows !== []
-            ? DB::table('smart_sata_attributes')
-                ->where('app_id', $this->ctx->appId)
-                ->where('disk_key', $diskKey)
-                ->get(['attribute_id', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'])
-                ->keyBy('attribute_id')
-            : collect();
-
-        foreach ($attrRows as $attrId => $row) {
-            $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
-            $ds = $dsByAttrId[$id] ?? null;
-            $previous = $previousRates->get($id);
-            // No trackable single-valued dataset for this attribute's format (e.g. raw8/raw16
-            // split into independent id{N}P0..P5 byte/word counters) -- leave rates null rather
-            // than guessing at a combined value.
-            $rates = $ds === null ? ['8h' => null, '24h' => null, '168h' => null, '672h' => null] : [
-                '8h' => $ratesByDs[$ds]['8h'] ?? ($failedWindows['8h'] ?? false ? $previous?->rate_8h : null),
-                '24h' => $ratesByDs[$ds]['24h'] ?? ($failedWindows['24h'] ?? false ? $previous?->rate_24h : null),
-                '168h' => $ratesByDs[$ds]['168h'] ?? ($failedWindows['168h'] ?? false ? $previous?->rate_168h : null),
-                '672h' => $ratesByDs[$ds]['672h'] ?? ($failedWindows['672h'] ?? false ? $previous?->rate_672h : null),
+            $attrs[$id] = [
+                'ds'     => $this->rateDsForAttribute($id, $row),
+                'status' => (int) ($row['smartmonSataAttrStatus'] ?? null),
             ];
-            $rawStatus = (int) ($row['smartmonSataAttrStatus'] ?? null);
-            $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
-
-            DbSync::upsert('smart_sata_attributes', [
-                'app_id'       => $this->ctx->appId,
-                'device_id'    => $this->ctx->deviceId,
-                'disk_key'     => $diskKey,
-                'attribute_id' => $id,
-                'rate_8h'      => $rates['8h'],
-                'rate_24h'     => $rates['24h'],
-                'rate_168h'    => $rates['168h'],
-                'rate_672h'    => $rates['672h'],
-                'status'       => $this->combineStatus($rawStatus, $rateStatus),
-                'rate_status'  => $rateStatus,
-            ], ['app_id', 'disk_key', 'attribute_id']);
         }
+
+        AttributeRateTracker::sync($this->ctx->appId, $this->ctx->deviceId, $this->ctx->device['hostname'], $diskKey, $rrdFilename, $attrs);
     }
 
     /**
@@ -842,190 +780,6 @@ final class SataHandler implements DiskTypeHandler
     }
 
     /**
-     * Average change per hour, per RRD dataset, for every lookback window.
-     *
-     * Every dataset for a given window is fetched in ONE batched rrdtool call
-     * (Rrd::getWindowAverages() takes the whole dataset list). Each call
-     * spawns a separate rrdtool subprocess, so this is 4 calls for all COUNTER
-     * datasets plus 8 for all GAUGE datasets (2 boundary probes x 4 windows),
-     * regardless of how many SMART attributes the disk has. Looping a single
-     * dataset per call here previously spawned one subprocess per attribute
-     * per window, which exhausted the open-file limit on disks with 30+
-     * attributes.
-     *
-     * @param  array<string>  $counterDs
-     * @param  array<string>  $gaugeDs
-     * @return array{0: array<string, array<string, float>>, 1: array<string, bool>} [dataset => window suffix => rate, window suffix => fetch failed]
-     */
-    private function fetchAttributeRates(Rrd $rrd, string $filename, array $counterDs, array $gaugeDs, int $now): array
-    {
-        $ratesByDs = [];
-        $failedWindows = [];
-        $probe = 600; // 10 minutes, well above the default 5-minute poll step
-
-        foreach (self::RATE_WINDOWS as $suffix => $seconds) {
-            $start = $now - $seconds;
-            $hours = $seconds / 3600;
-
-            if ($counterDs !== []) {
-                $counterRates = $rrd->getWindowAverages($filename, $counterDs, $start, $now);
-                if ($counterRates === null) {
-                    $failedWindows[$suffix] = true;
-                    Log::error("smart_mib: fetchAttributeRates: counter fetch FAILED for window={$suffix} file={$filename}, keeping previously persisted rates for this window");
-                } else {
-                    foreach ($counterRates as $ds => $perSecond) {
-                        $ratesByDs[$ds][$suffix] = $perSecond * 3600;
-                    }
-                }
-            }
-
-            if ($gaugeDs !== []) {
-                $startVals = $rrd->getWindowAverages($filename, $gaugeDs, $start, min($start + $probe, $now));
-                $endVals = $rrd->getWindowAverages($filename, $gaugeDs, max($now - $probe, $start), $now);
-                if ($startVals === null || $endVals === null) {
-                    $failedWindows[$suffix] = true;
-                    Log::error("smart_mib: fetchAttributeRates: gauge fetch FAILED for window={$suffix} file={$filename}, keeping previously persisted rates for this window");
-                } else {
-                    foreach ($gaugeDs as $ds) {
-                        if (isset($startVals[$ds], $endVals[$ds])) {
-                            $ratesByDs[$ds][$suffix] = ($endVals[$ds] - $startVals[$ds]) / $hours;
-                        }
-                    }
-                }
-            }
-        }
-
-        return [$ratesByDs, $failedWindows];
-    }
-
-    /**
-     * Fold rate_status into the displayed `status`: a rate-of-change breach (rate_status=2)
-     * escalates status to 4 (Rate exceeded) even if the device itself reports the attribute
-     * fine. A device-reported notRelevant(-1), meaning the disk has no failure threshold
-     * for this attribute, is treated as ok(1) once a rate-of-change threshold is enabled and
-     * not breached, since the rate threshold then stands in for the missing device one.
-     */
-    private function combineStatus(?int $rawStatus, int $rateStatus): ?int
-    {
-        if ($rateStatus === 2) {
-            return 4;
-        }
-
-        if ($rawStatus === -1 && $rateStatus === 1) {
-            return 1;
-        }
-
-        return $rawStatus;
-    }
-
-    /**
-     * Resolve smart_sata_attributes.rate_status for one attribute: -1 (no rate-of-change
-     * threshold enabled for this disk/attribute), 1 (enabled, no window exceeds it), or
-     * 2 (enabled, at least one window exceeds it). Independent of the device-reported
-     * `status` column, so polling and discovery never fight over the same field.
-     *
-     * @param  \Illuminate\Support\Collection<int, object>  $thresholdRows  this disk's rows, from loadThresholdRows()
-     */
-    private function resolveRateStatus(\Illuminate\Support\Collection $thresholdRows, int $attrId, array $rates): int
-    {
-        $rows = $thresholdRows->where('attribute_id', $attrId);
-        $diskRow = $rows->firstWhere('disk_key', '!=', '');
-        $globalRow = $rows->firstWhere('disk_key', '');
-
-        // Per-disk override decides alerting on/off when present; otherwise the global
-        // default's switch applies. Muting here short-circuits before any limit check,
-        // so a configured warn_rate_* never alerts while its row is switched off.
-        $alertEnabled = (bool) (($diskRow->alert_enabled ?? null) ?? ($globalRow->alert_enabled ?? null) ?? true);
-        if (! $alertEnabled) {
-            return -1;
-        }
-
-        $limits = $this->effectiveLimits($thresholdRows, $attrId);
-        if (! $this->hasEnabledThreshold($limits)) {
-            return -1;
-        }
-
-        return $this->rateExceedsThreshold($limits, $rates) ? 2 : 1;
-    }
-
-    /**
-     * Every smart_attribute_thresholds row that can apply to this disk: its own per-disk
-     * overrides plus every global-default row (app_id=0, disk_key=''). Fetched once per
-     * disk so effectiveLimits() can look up a given attribute_id in memory rather than
-     * re-querying per attribute. This runs in the poller hot path.
-     */
-    private function loadThresholdRows(string $diskKey): \Illuminate\Support\Collection
-    {
-        return DB::table('smart_attribute_thresholds')
-            ->where(function ($q) use ($diskKey) {
-                $q->where(['app_id' => $this->ctx->appId, 'disk_key' => $diskKey])
-                    ->orWhere(['app_id' => 0, 'disk_key' => '']);
-            })
-            ->get();
-    }
-
-    /**
-     * Effective rate-of-change limit per window, merged column-by-column: the per-disk
-     * override wins for a given window only when it's actually enabled there; otherwise
-     * that window falls back to the global default. A single ::first() pick between the
-     * two rows would let an override with no enabled windows fully shadow a configured
-     * global default, instead of falling back to it.
-     *
-     * @param  \Illuminate\Support\Collection<int, object>  $thresholdRows  this disk's rows, from loadThresholdRows()
-     * @return array<string, float|null> window suffix (8h/24h/168h/672h) => limit
-     */
-    private function effectiveLimits(\Illuminate\Support\Collection $thresholdRows, int $attrId): array
-    {
-        $rows = $thresholdRows->where('attribute_id', $attrId);
-        $diskRow = $rows->firstWhere('disk_key', '!=', '');
-        $globalRow = $rows->firstWhere('disk_key', '');
-
-        $limits = [];
-        foreach (['8h' => 'warn_rate_8h', '24h' => 'warn_rate_24h', '168h' => 'warn_rate_168h', '672h' => 'warn_rate_672h'] as $suffix => $column) {
-            $limits[$suffix] = ($diskRow !== null ? $this->thresholdLimit($diskRow, $column) : null)
-                ?? ($globalRow !== null ? $this->thresholdLimit($globalRow, $column) : null);
-        }
-
-        return $limits;
-    }
-
-    /**
-     * A configured warn_rate_* limit, or null if unset/0. 0 means "no limit" (disabled),
-     * not "warn on any change", so it must not be treated as an active threshold.
-     */
-    private function thresholdLimit(object $threshold, string $column): ?float
-    {
-        $value = $threshold->$column ?? null;
-
-        return $value !== null && (float) $value > 0 ? (float) $value : null;
-    }
-
-    /** True if any window has an enabled rate-of-change limit. */
-    private function hasEnabledThreshold(array $limits): bool
-    {
-        foreach ($limits as $limit) {
-            if ($limit !== null) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /** True if any rate window exceeds its effective limit. */
-    private function rateExceedsThreshold(array $limits, array $rates): bool
-    {
-        foreach ($limits as $suffix => $limit) {
-            $rate = $rates[$suffix] ?? null;
-            if ($limit !== null && $rate !== null && abs($rate) > $limit) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
      * Update the poll-relevant attribute columns; discovery keeps the rest (the rate_*
      * columns themselves, which need a fresh RRD fetch to recompute).
      *
@@ -1043,7 +797,7 @@ final class SataHandler implements DiskTypeHandler
             ->where('disk_key', $diskKey)
             ->get(['attribute_id', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'])
             ->keyBy('attribute_id');
-        $thresholdRows = $this->loadThresholdRows($diskKey);
+        $thresholdRows = AttributeRateTracker::loadThresholdRows($this->ctx->appId, $diskKey);
 
         foreach ($attrRows as $attrId => $row) {
             $id = (int) $attrId;
@@ -1055,7 +809,7 @@ final class SataHandler implements DiskTypeHandler
                 '672h' => $existing->rate_672h ?? null,
             ];
             $rawStatus = (int) ($row['smartmonSataAttrStatus'] ?? null);
-            $rateStatus = $this->resolveRateStatus($thresholdRows, $id, $rates);
+            $rateStatus = AttributeRateTracker::resolveRateStatus($thresholdRows, $id, $rates);
 
             DbSync::upsert('smart_sata_attributes', [
                 'app_id'           => $this->ctx->appId,
@@ -1067,7 +821,7 @@ final class SataHandler implements DiskTypeHandler
                 'value_raw_string' => isset($row['smartmonSataAttrRawString'])
                     ? substr((string) $row['smartmonSataAttrRawString'], 0, 32)
                     : null,
-                'status'           => $this->combineStatus($rawStatus, $rateStatus),
+                'status'           => AttributeRateTracker::combineStatus($rawStatus, $rateStatus),
                 'rate_status'      => $rateStatus,
             ], ['app_id', 'disk_key', 'attribute_id']);
         }
@@ -1378,32 +1132,38 @@ final class SataHandler implements DiskTypeHandler
     }
 
     /**
-     * Retrofit each attribute's *current* smartmonSataAttrFormat-implied RRD
-     * dataset set onto an already-existing per-disk RRD file, via
-     * Rrd::addDatasetsFromConfig() (a no-op tune for DS that already exist).
+     * Retrofit this disk's RRD file's dataset set to match what it should
+     * currently be, via a single Rrd::addDatasetsFromConfig() call (a no-op
+     * tune for DS that already exist, skipped entirely if the file doesn't
+     * exist yet -- a brand-new device gets every DS at create time from
+     * pollSataDeviceRrd()'s own RrdDefinition instead).
      *
-     * smartmontools' drivedb.h changes over time, so an attribute's format
-     * can change between discovery cycles (e.g. a drivedb update reclassifies
-     * an attribute from a plain format to a div/multi-part one, or vice
-     * versa). pollSataDeviceRrd() only ever updates a file's *values* on the
-     * DS it expects to already exist -- it never creates new DS on an
-     * existing file -- so without this, a drivedb-driven format change would
-     * leave the RRD stuck with the previous cycle's DS shape and start
-     * failing to write the now-expected ones.
+     * Covers three things in one $config/one call: power_state (a fixed DS
+     * every per-disk RRD file carries); each attribute's *current*
+     * smartmonSataAttrFormat-implied DS set (smartmontools' drivedb.h changes
+     * over time, so an attribute's format can change between discovery
+     * cycles -- e.g. a drivedb update reclassifies an attribute from a plain
+     * format to a div/multi-part one, or vice versa; pollSataDeviceRrd() only
+     * ever updates a file's *values* on the DS it expects to already exist,
+     * it never creates new DS on an existing file, so without this a
+     * drivedb-driven format change would leave the RRD stuck with the
+     * previous cycle's DS shape); and, if the "log extra Device Statistics"
+     * setting is enabled for this device, whichever allowlisted
+     * (page_num, stat_offset) dev-stat rows are present for this disk.
      */
-    private function reconcileSataAttributeRrds(array $dev, array $attrRows): void
+    private function reconcileSataDeviceRrds(array $dev, array $attrRows): void
     {
-        if (empty($attrRows)) {
-            return;
-        }
-
         $diskKey = $dev['disk_key'];
         $idx = DiskIdentity::index($diskKey);
         $rrd = app(Rrd::class);
         $rrdFile = $rrd->name($this->ctx->device->hostname, ['app', 'smart', $this->ctx->appId, $idx]);
 
         $heartbeat = LibrenmsConfig::get('rrd.heartbeat');
-        $config = [];
+
+        // Seeds $this->devStatCatalog with power_state + any allowlisted dev-stat
+        // DS; the attribute loop below appends directly into the same property,
+        // so the final addDatasetsFromConfig() call needs no separate merge.
+        $this->resolveSataDsCatalog($dev);
 
         foreach ($attrRows as $attrId => $row) {
             $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
@@ -1413,7 +1173,7 @@ final class SataHandler implements DiskTypeHandler
                 continue;
             }
 
-            $config[$dsNorm] = ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
+            $this->devStatCatalog[$dsNorm] = ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
 
             $format = (int) ($row['smartmonSataAttrFormat'] ?? null);
             $rawString = $row['smartmonSataAttrRawString'] ?? null;
@@ -1424,20 +1184,59 @@ final class SataHandler implements DiskTypeHandler
                     if (strlen($dsSub) > 19) {
                         continue;
                     }
-                    $config[$dsSub] = ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
+                    $this->devStatCatalog[$dsSub] = ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
                 }
 
                 continue;
             }
 
-            $rawType = $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(self::ATA_COUNTER_ATTRS[$id])
+            $rawType = $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(Common::ATA_COUNTER_ATTRS[$id])
                 ? 'COUNTER' : 'GAUGE';
-            $config[$dsRaw] = ['type' => $rawType, 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
+            $this->devStatCatalog[$dsRaw] = ['type' => $rawType, 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U'];
         }
 
-        if ($config !== []) {
-            RrdReconciler::addDatasetsFromConfig($rrdFile, $config);
+        $rrd->addDatasetsFromConfig($rrdFile, $this->devStatCatalog);
+    }
+
+    /**
+     * (Re)resolves $this->devStatCatalog for one disk: always seeded with
+     * power_state (every per-disk RRD file carries it), plus -- when the
+     * "log extra Device Statistics" setting is enabled -- whichever
+     * allowlisted (per DevStatRrdCatalog) Device Statistics rows are present
+     * for this disk. Each entry is already shaped like
+     * Rrd::addDatasetsFromConfig() expects (type/heartbeat/min/max), plus a
+     * 'value' key that config-only callers (reconcileSataDeviceRrds()) can
+     * just ignore -- addDatasetsFromConfig() only reads the DS-shape keys.
+     *
+     * @return array<string, array{type: string, heartbeat: int, min: int, max: int|string, value: int|string|null}>
+     */
+    private function resolveSataDsCatalog(array $dev): array
+    {
+        $heartbeat = LibrenmsConfig::get('rrd.heartbeat');
+
+        $this->devStatCatalog = [
+            'power_state' => ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 8, 'value' => (int) ($dev['power_state'] ?? null)],
+        ];
+
+        if (! ExtraDevStatSetting::resolve($this->ctx->appId)) {
+            return $this->devStatCatalog;
         }
+
+        $catalog = DevStatRrdCatalog::entries();
+        $rows = DB::table('smart_sata_dev_stats')
+            ->where('app_id', $this->ctx->appId)
+            ->where('disk_key', $dev['disk_key'])
+            ->get(['page_num', 'stat_offset', 'value']);
+
+        foreach ($rows as $row) {
+            $entry = $catalog[DevStatRrdCatalog::key((int) $row->page_num, (int) $row->stat_offset)] ?? null;
+            if ($entry === null) {
+                continue;
+            }
+            $this->devStatCatalog[$entry['ds']] = ['type' => $entry['type'], 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 'U', 'value' => $row->value];
+        }
+
+        return $this->devStatCatalog;
     }
 
     /**
@@ -1548,6 +1347,6 @@ final class SataHandler implements DiskTypeHandler
             return false;
         }
 
-        return in_array($name, self::ATA_COUNTER_ATTRS, true) || stripos($name, 'count') !== false;
+        return in_array($name, Common::ATA_COUNTER_ATTRS, true) || stripos($name, 'count') !== false;
     }
 }

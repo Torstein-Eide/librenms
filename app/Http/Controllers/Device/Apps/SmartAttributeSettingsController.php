@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
+use LibreNMS\Agent\Module\Smart\Support\ExtraDevStatSetting;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 /**
@@ -190,8 +191,13 @@ class SmartAttributeSettingsController
         $perDiskTemplates = [];
         $defaultViewMode = 'basic';
         $viewModes = [];
+        $logExtraDevStatsGlobal = ExtraDevStatSetting::resolve(self::GLOBAL_SETTINGS_APP_ID);
+        $logExtraDevStatsOverride = null;
 
         if ($app !== null) {
+            $rawOverride = DB::table('smart_app_settings')->where('app_id', $appId)->value('log_extra_dev_stats');
+            $logExtraDevStatsOverride = $rawOverride === null ? null : (bool) $rawOverride;
+
             $htmlData = HtmlData::forDevice($app, $device->toArray());
             $labelCookie = 'smart_label_mode_' . $device->device_id;
             $labelModes = $htmlData->labelModes();
@@ -228,6 +234,8 @@ class SmartAttributeSettingsController
             'perDiskTemplates' => $perDiskTemplates,
             'defaultViewMode' => $defaultViewMode,
             'viewModes' => $viewModes,
+            'logExtraDevStatsGlobal' => $logExtraDevStatsGlobal,
+            'logExtraDevStatsOverride' => $logExtraDevStatsOverride,
         ]);
     }
 
@@ -302,6 +310,39 @@ class SmartAttributeSettingsController
         $this->invalidateHtmlData($device, $appId);
 
         return response()->json(['status' => 'ok', 'message' => 'Default view mode updated']);
+    }
+
+    /**
+     * Save the global default for "log extra Device Statistics to RRD", or a
+     * per-device override when scope=disk. A null value on scope=disk clears
+     * the override so the device goes back to inheriting the global default.
+     */
+    public function updateLogExtraDevStats(Device $device, Request $request): JsonResponse
+    {
+        $this->authorize('update', $device);
+
+        $validated = $request->validate([
+            'app_id' => 'required|integer',
+            'scope' => 'required|in:disk,global',
+            'value' => 'nullable|boolean',
+        ]);
+
+        $appId = $this->ownedAppId($device, (int) $validated['app_id']);
+        if ($appId === null) {
+            return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
+        }
+
+        $targetAppId = $validated['scope'] === 'global' ? ExtraDevStatSetting::GLOBAL_APP_ID : $appId;
+        $value = $validated['value'] ?? null;
+
+        DB::table('smart_app_settings')->updateOrInsert(
+            ['app_id' => $targetAppId],
+            ['log_extra_dev_stats' => $value === null ? null : (bool) $value]
+        );
+
+        $this->invalidateHtmlData($device, $appId);
+
+        return response()->json(['status' => 'ok', 'message' => 'Setting updated']);
     }
 
     /** @return array<string, string> Per-disk naming template overrides for this app, keyed by disk_key. */

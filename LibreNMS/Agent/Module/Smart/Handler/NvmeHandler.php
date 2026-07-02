@@ -2,6 +2,7 @@
 
 namespace LibreNMS\Agent\Module\Smart\Handler;
 
+use App\Facades\LibrenmsConfig;
 use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Module\Smart\Context;
@@ -9,6 +10,7 @@ use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
 use LibreNMS\Agent\Module\Smart\Support\SnmpDecode as SmartSnmpDecode;
+use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
 use LibreNMS\RRD\RrdDefinition;
 use LibreNMS\Util\SnmpDecode;
@@ -76,6 +78,15 @@ final class NvmeHandler implements DiskTypeHandler
         foreach ($devices as $devIdx => $dev) {
             $key = (string) $devIdx;
             $this->ctx->vlog("NvmeHandler::discover: device idx={$key} disk_key={$dev['disk_key']}");
+
+            // Retrofit power_state onto a pre-existing RRD file that predates it;
+            // no-op tune if already present, skipped entirely if the file doesn't
+            // exist yet (a new device gets it at create time from pollNvmeDeviceRrd()).
+            $idx = DiskIdentity::index($dev['disk_key']);
+            $rrdFile = app(Rrd::class)->name($this->ctx->device->hostname, ['app', 'smart_nvme', $this->ctx->appId, $idx]);
+            app(Rrd::class)->addDatasetsFromConfig($rrdFile, [
+                'power_state' => ['type' => 'GAUGE', 'heartbeat' => LibrenmsConfig::get('rrd.heartbeat'), 'min' => 0, 'max' => 8],
+            ]);
 
             if ($ctrl = $this->firstSubRow($controllers[$key] ?? null)) {
                 $this->syncNvmeInfoRow($dev, $ctrl);
@@ -331,8 +342,8 @@ final class NvmeHandler implements DiskTypeHandler
         $rrdName = ['app', 'smart_nvme', $this->ctx->appId, $idx];
 
         // DS reconciliation (retrofitting power_state onto older files) is a
-        // discovery concern, handled by RrdReconciler::reconcileCommonDeviceRrds();
-        // new files get every DS at create time from $rrd_def below. No tune at poll time.
+        // discovery concern, handled by discover()'s inline addDatasetsFromConfig()
+        // call; new files get every DS at create time from $rrd_def below. No tune at poll time.
         //
         // NVME_HEALTH_RRD is a fixed set, plus power_state, so $fields always carries every DS.
         app('Datastore')->put($this->ctx->deviceArray, 'app', [
