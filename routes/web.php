@@ -116,8 +116,8 @@ Route::middleware(['auth'])->group(function (): void {
         Route::delete('{poller}', [PollerController::class, 'destroy'])->name('poller.destroy');
         Route::delete('cluster/{poller_cluster}', [PollerController::class, 'destroyCluster'])->name('poller-cluster.destroy');
     });
-    Route::delete('ports/purge', [\App\Http\Controllers\PortsController::class, 'purge'])->name('ports.purge');
-    Route::get('ports/{view?}/{graph?}', [\App\Http\Controllers\PortsController::class, 'index'])
+    Route::delete('ports/purge', [App\Http\Controllers\PortsController::class, 'purge'])->name('ports.purge');
+    Route::get('ports/{view?}/{graph?}', [App\Http\Controllers\PortsController::class, 'index'])
         ->middleware('saved-filter:ports')->name('ports');
     Route::prefix('services')->name('services.')->group(function (): void {
         Route::resource('templates', ServiceTemplateController::class);
@@ -193,7 +193,6 @@ Route::middleware(['auth'])->group(function (): void {
         Route::get('apps/smart/settings/naming', [Device\Apps\SmartAttributeSettingsController::class, 'naming'])->name('apps.smart.settings.naming');
         Route::post('apps/smart/settings/field', [Device\Apps\SmartAttributeSettingsController::class, 'updateField'])->name('apps.smart.settings.field');
         Route::post('apps/smart/settings/reset', [Device\Apps\SmartAttributeSettingsController::class, 'reset'])->name('apps.smart.settings.reset');
-        Route::post('apps/smart/settings/copy', [Device\Apps\SmartAttributeSettingsController::class, 'copyToAllDisks'])->name('apps.smart.settings.copy');
         Route::post('apps/smart/settings/copy-default', [Device\Apps\SmartAttributeSettingsController::class, 'copyRowToDefault'])->name('apps.smart.settings.copy_default');
         Route::post('apps/smart/settings/alert', [Device\Apps\SmartAttributeSettingsController::class, 'alertToggle'])->name('apps.smart.settings.alert');
         Route::post('apps/smart/settings/naming-template', [Device\Apps\SmartAttributeSettingsController::class, 'updateNamingTemplate'])->name('apps.smart.settings.naming_template');

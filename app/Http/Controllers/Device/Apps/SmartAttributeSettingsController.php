@@ -114,11 +114,30 @@ class SmartAttributeSettingsController
             }
         }
 
+        // Worst-case (max) measured rate per attribute across all disks, so the
+        // "Global Defaults" tab can show what the noisiest disk is doing instead
+        // of hiding its rate columns outright.
+        $maxRatesByAttribute = [];
+        foreach ($rows as $row) {
+            $attributeId = (int) $row->attribute_id;
+            foreach (['rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'] as $window) {
+                if (! is_numeric($row->$window)) {
+                    continue;
+                }
+                $value = (float) $row->$window;
+                if (! isset($maxRatesByAttribute[$attributeId][$window]) || $value > $maxRatesByAttribute[$attributeId][$window]) {
+                    $maxRatesByAttribute[$attributeId][$window] = $value;
+                }
+            }
+        }
+
         // Synthetic "Global Defaults" tab: one row per attribute_id (named from
         // whichever disk row first carried that attribute), editing the
-        // app_id=0/disk_key='' global-default row directly.
+        // app_id=0/disk_key='' global-default row directly. Its 'rate_*' fields
+        // hold the max across disks (see $maxRatesByAttribute above), not a
+        // per-disk average like the other tabs' 'rate_*' fields do.
         $attributeNames = $rows->unique('attribute_id')->pluck('name', 'attribute_id');
-        $defaultItems = $attributeNames->map(function ($name, $attributeId) use ($globals) {
+        $defaultItems = $attributeNames->map(function ($name, $attributeId) use ($globals, $maxRatesByAttribute) {
             $global = $globals[$attributeId] ?? null;
 
             return [
@@ -128,10 +147,10 @@ class SmartAttributeSettingsController
                 'is_override' => false,
                 'has_row' => $global !== null,
                 'alert_enabled' => (bool) (($global->alert_enabled ?? null) ?? true),
-                'rate_8h' => null,
-                'rate_24h' => null,
-                'rate_168h' => null,
-                'rate_672h' => null,
+                'rate_8h' => $maxRatesByAttribute[$attributeId]['rate_8h'] ?? null,
+                'rate_24h' => $maxRatesByAttribute[$attributeId]['rate_24h'] ?? null,
+                'rate_168h' => $maxRatesByAttribute[$attributeId]['rate_168h'] ?? null,
+                'rate_672h' => $maxRatesByAttribute[$attributeId]['rate_672h'] ?? null,
                 'warn_rate_8h' => $global->warn_rate_8h ?? null,
                 'warn_rate_24h' => $global->warn_rate_24h ?? null,
                 'warn_rate_168h' => $global->warn_rate_168h ?? null,
@@ -403,7 +422,25 @@ class SmartAttributeSettingsController
                 ->where('attribute_id', (int) $validated['attribute_id'])
                 ->delete();
 
-        return response()->json(['status' => 'ok', 'message' => $deleted > 0 ? 'Reset to default' : 'Already at default']);
+        // Report the now-effective values (falls back to the global default,
+        // or all-null/true if scope=global since that row was just deleted)
+        // so the UI can update the row in place instead of reloading.
+        $global = $validated['scope'] === 'global' ? null : DB::table('smart_attribute_thresholds')
+            ->where('app_id', 0)->where('disk_key', '')
+            ->where('attribute_id', (int) $validated['attribute_id'])
+            ->first();
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => $deleted > 0 ? 'Reset to default' : 'Already at default',
+            'values' => [
+                'warn_rate_8h' => $global->warn_rate_8h ?? null,
+                'warn_rate_24h' => $global->warn_rate_24h ?? null,
+                'warn_rate_168h' => $global->warn_rate_168h ?? null,
+                'warn_rate_672h' => $global->warn_rate_672h ?? null,
+                'alert_enabled' => (bool) (($global->alert_enabled ?? null) ?? true),
+            ],
+        ]);
     }
 
     /**
@@ -432,62 +469,21 @@ class SmartAttributeSettingsController
             ->where('attribute_id', (int) $validated['attribute_id'])
             ->first();
 
+        if ($global === null) {
+            return response()->json(['status' => 'error', 'message' => 'No global default configured for this attribute yet'], 404);
+        }
+
         $values = [
-            'warn_rate_8h' => $global->warn_rate_8h ?? null,
-            'warn_rate_24h' => $global->warn_rate_24h ?? null,
-            'warn_rate_168h' => $global->warn_rate_168h ?? null,
-            'warn_rate_672h' => $global->warn_rate_672h ?? null,
-            'alert_enabled' => (bool) (($global->alert_enabled ?? null) ?? true),
+            'warn_rate_8h' => $global->warn_rate_8h,
+            'warn_rate_24h' => $global->warn_rate_24h,
+            'warn_rate_168h' => $global->warn_rate_168h,
+            'warn_rate_672h' => $global->warn_rate_672h,
+            'alert_enabled' => (bool) ($global->alert_enabled ?? true),
         ];
 
         $this->upsertThreshold($appId, (string) $validated['disk_key'], (int) $validated['attribute_id'], $values);
 
         return response()->json(['status' => 'ok', 'message' => 'Copied from global default', 'values' => $values]);
-    }
-
-    public function copyToAllDisks(Device $device, Request $request): JsonResponse
-    {
-        $this->authorize('update', $device);
-
-        $validated = $request->validate([
-            'app_id' => 'required|integer',
-            'source_disk_key' => 'required|string',
-        ]);
-
-        $appId = $this->ownedAppId($device, (int) $validated['app_id']);
-        if ($appId === null) {
-            return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
-        }
-
-        $sourceDiskKey = $validated['source_disk_key'];
-
-        $sourceRows = DB::table('smart_attribute_thresholds')
-            ->where('app_id', $appId)
-            ->where('disk_key', $sourceDiskKey)
-            ->get();
-
-        if ($sourceRows->isEmpty()) {
-            return response()->json(['status' => 'info', 'message' => 'Source disk has no configured thresholds']);
-        }
-
-        $diskKeys = DB::table('smart_sata_attributes')
-            ->where('app_id', $appId)
-            ->where('disk_key', '!=', $sourceDiskKey)
-            ->distinct()
-            ->pluck('disk_key');
-
-        foreach ($diskKeys as $diskKey) {
-            foreach ($sourceRows as $sourceRow) {
-                $this->upsertThreshold($appId, $diskKey, (int) $sourceRow->attribute_id, [
-                    'warn_rate_8h' => $sourceRow->warn_rate_8h,
-                    'warn_rate_24h' => $sourceRow->warn_rate_24h,
-                    'warn_rate_168h' => $sourceRow->warn_rate_168h,
-                    'warn_rate_672h' => $sourceRow->warn_rate_672h,
-                ]);
-            }
-        }
-
-        return response()->json(['status' => 'ok', 'message' => 'Copied to ' . $diskKeys->count() . ' disk(s)']);
     }
 
     /** Confirm $requestedAppId is actually this device's smart app, returning it or null. */

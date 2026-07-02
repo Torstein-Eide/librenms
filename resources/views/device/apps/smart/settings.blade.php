@@ -77,21 +77,13 @@
                                 <tr>
                                     <th>{{ __('ID') }}</th>
                                     <th>{{ __('Name') }}</th>
-                                    @if (! $isDefaultTab)
-                                        <th>{{ __('Avg 8h') }}</th>
-                                    @endif
+                                    <th>{{ $isDefaultTab ? __('Max 8h') : __('Avg 8h') }}</th>
                                     <th class="col-sm-1">{{ __('Warn 8h') }}</th>
-                                    @if (! $isDefaultTab)
-                                        <th>{{ __('Avg 24h') }}</th>
-                                    @endif
+                                    <th>{{ $isDefaultTab ? __('Max 24h') : __('Avg 24h') }}</th>
                                     <th class="col-sm-1">{{ __('Warn 24h') }}</th>
-                                    @if (! $isDefaultTab)
-                                        <th>{{ __('Avg 1wk') }}</th>
-                                    @endif
+                                    <th>{{ $isDefaultTab ? __('Max 1wk') : __('Avg 1wk') }}</th>
                                     <th class="col-sm-1">{{ __('Warn 1wk') }}</th>
-                                    @if (! $isDefaultTab)
-                                        <th>{{ __('Avg 1mo') }}</th>
-                                    @endif
+                                    <th>{{ $isDefaultTab ? __('Max 1mo') : __('Avg 1mo') }}</th>
                                     <th class="col-sm-1">{{ __('Warn 1mo') }}</th>
                                     <th>{{ __('Alert') }}</th>
                                     <th></th>
@@ -103,9 +95,12 @@
                                         <td>{{ $item['attribute_id'] }}</td>
                                         <td>{{ str_replace('_', ' ', (string) $item['name']) }}</td>
                                         @foreach (['8h', '24h', '168h', '672h'] as $window)
-                                            @if (! $isDefaultTab)
-                                                <td class="text-muted">{{ $fmtAvg($item['rate_' . $window]) }}</td>
-                                            @endif
+                                            @php
+                                                $rateVal = $item['rate_' . $window];
+                                                $warnVal = $item['warn_rate_' . $window];
+                                                $breached = is_numeric($rateVal) && is_numeric($warnVal) && (float) $rateVal >= (float) $warnVal;
+                                            @endphp
+                                            <td class="{{ $breached ? 'text-danger' : 'text-muted' }}">{{ $fmtAvg($rateVal) }}</td>
                                             <td>
                                                 <div class="form-group has-feedback" style="margin:0">
                                                     <input type="text"
@@ -157,22 +152,6 @@
                 @endforeach
             </div>
 
-            <div class="panel panel-default">
-                <div class="panel-heading">{{ __('Copy thresholds to all disks') }}</div>
-                <div class="panel-body" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-                    <div class="form-group" style="margin:0">
-                        <label>{{ __('Source disk') }}</label>
-                        <select id="smart-thresh-source-disk" class="form-control input-sm" style="min-width:220px">
-                            @foreach ($diskKeys as $diskKey)
-                                @if ($diskKey !== '')
-                                    <option value="{{ $diskKey }}">{{ $diskLabels[$diskKey] ?? $diskKey }}</option>
-                                @endif
-                            @endforeach
-                        </select>
-                    </div>
-                    <button type="button" id="smart-thresh-copy" class="btn btn-default btn-sm">{{ __('Copy to all other disks') }}</button>
-                </div>
-            </div>
         @endif
     </x-device.page>
 @endsection
@@ -182,7 +161,6 @@
         (function () {
             var appId = {{ (int) ($appId ?? 0) }};
             var resetUrl = '{{ $appId !== null ? route('device.apps.smart.settings.reset', $device) : '' }}';
-            var copyUrl = '{{ $appId !== null ? route('device.apps.smart.settings.copy', $device) : '' }}';
             var token = '{{ csrf_token() }}';
 
             // Inline edit, save on blur or Enter. No save button.
@@ -251,10 +229,23 @@
                 });
             });
 
+            function applyRowValues($row, values) {
+                ['8h', '24h', '168h', '672h'].forEach(function (window) {
+                    var val = values['warn_rate_' + window];
+                    var display = (val === null || val === undefined) ? '' : val;
+                    $row.find('.smart-thresh-field[data-field="warn_rate_' + window + '"]').val(display).data('val', display);
+                });
+                var $alert = $row.find('.smart-thresh-alert');
+                if ($alert.length) {
+                    $alert.bootstrapSwitch('state', !!values.alert_enabled, true);
+                }
+            }
+
             $('.smart-thresh-reset').on('click', function (event) {
                 event.preventDefault();
                 if ($(this).hasClass('disabled')) return;
                 var $this = $(this);
+                var $row = $this.closest('tr');
                 $.ajax({
                     type: 'POST',
                     url: $(this).data('reset-url'),
@@ -267,8 +258,13 @@
                         attribute_id: $(this).data('attribute_id'),
                     },
                     success: function (data) {
+                        if (data.status !== 'ok') {
+                            toastr.error(data.message);
+                            return;
+                        }
                         toastr.success(data.message);
-                        setTimeout(function () { location.reload(true); }, 1000);
+                        applyRowValues($row, data.values);
+                        $this.addClass('disabled');
                     },
                     error: function () { toastr.error('{{ __('Could not reset threshold') }}'); },
                 });
@@ -276,6 +272,8 @@
 
             $('.smart-thresh-copy-default').on('click', function (event) {
                 event.preventDefault();
+                var $this = $(this);
+                var $row = $this.closest('tr');
                 $.ajax({
                     type: 'POST',
                     url: $(this).data('copy-url'),
@@ -287,32 +285,15 @@
                         attribute_id: $(this).data('attribute_id'),
                     },
                     success: function (data) {
+                        if (data.status !== 'ok') {
+                            toastr.error(data.message);
+                            return;
+                        }
                         toastr.success(data.message);
-                        setTimeout(function () { location.reload(true); }, 1000);
+                        applyRowValues($row, data.values);
+                        $row.find('.smart-thresh-reset').removeClass('disabled');
                     },
                     error: function () { toastr.error('{{ __('Could not copy from global default') }}'); },
-                });
-            });
-
-            document.getElementById('smart-thresh-copy')?.addEventListener('click', function () {
-                $.ajax({
-                    type: 'POST',
-                    url: copyUrl,
-                    dataType: 'json',
-                    data: {
-                        _token: token,
-                        app_id: appId,
-                        source_disk_key: document.getElementById('smart-thresh-source-disk').value,
-                    },
-                    success: function (data) {
-                        if (data.status === 'error') {
-                            toastr.error(data.message);
-                        } else {
-                            toastr.success(data.message);
-                            setTimeout(function () { location.reload(true); }, 1200);
-                        }
-                    },
-                    error: function () { toastr.error('{{ __('Could not copy thresholds') }}'); },
                 });
             });
         })();
