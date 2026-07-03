@@ -91,15 +91,6 @@
             ]);
             $duGraph = \LibreNMS\Util\Url::lazyGraphTag($duGraphArray, 'tw:w-full tw:h-auto');
 
-            $duLinkArray = $duGraphArray;
-            $duLinkArray['page'] = 'graphs';
-            unset($duLinkArray['height'], $duLinkArray['width']);
-            $duLink = \LibreNMS\Util\Url::generate($duLinkArray);
-
-            $duOverlibArray = $duGraphArray;
-            $duOverlibArray['width'] = 210;
-            $duOverlib = generate_overlib_content($duOverlibArray, $device['hostname'] . ' - LBAs Written/Read');
-
             // Current rate (B/s) from the last RRD interval. 1 NVMe data unit = 512 000 B.
             $du = 512000;
             $duRrdFile = \App\Facades\Rrd::name($device['hostname'], ['app', 'smart_nvme', $data->app->app_id, $disk['idx']]);
@@ -113,7 +104,7 @@
             $duBadge = $duParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $duParts)) . '</span>' : '';
 
             $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>LBAs Written/Read', $duBadge);
-            echo \LibreNMS\Util\Url::overlibLink($duLink, $duGraph, $duOverlib);
+            echo $graphPopup('smart_disk_lba_units', ['id' => $data->app->app_id, 'rrd' => 'smart_nvme', 'disk' => $disk['idx']], $duGraph, $device['hostname'] . ' - LBAs Written/Read');
             $panelEnd();
         @endphp
     </div>
@@ -156,16 +147,11 @@
             };
             // Wraps $content (label text, value badge, or the mini graph image) in
             // the same hover-preview link that points at the sensor's graph.
-            $sensorGraphLink = static function ($s, string $content) use ($hNow, $hFrom, $device, $sensorLink): string {
-                $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 210, 'height' => 100];
-                $overlib = generate_overlib_content($g, $device['hostname'] . ' - ' . $s->sensor_descr);
-
-                return \LibreNMS\Util\Url::overlibLink($sensorLink($s), $content, $overlib);
+            $sensorGraphLink = static function ($s, string $content) use ($graphPopup, $device): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], $content, $device['hostname'] . ' - ' . $s->sensor_descr);
             };
-            $sensorMini = static function ($s) use ($sensorGraphLink, $hNow, $hFrom): string {
-                $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 100, 'height' => 20, 'bg' => 'ffffff00'];
-
-                return $sensorGraphLink($s, \LibreNMS\Util\Url::lazyGraphTag($g));
+            $sensorMini = static function ($s) use ($graphPopup, $device): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], null, $device['hostname'] . ' - ' . $s->sensor_descr);
             };
             $rowOpenTag = static function (string $link): string {
                 return $link !== ''
@@ -202,39 +188,16 @@
             };
             // Wraps $content (label text, value badge, or the mini graph image) in
             // the same hover-preview link that points at the stat's graph.
-            $statGraphLink = static function (string $ds, string $content) use ($hNow, $hFrom, $data, $disk, $device, $dsToType, $statLink): string {
+            $statGraphLink = static function (string $ds, ?string $content) use ($graphPopup, $data, $disk, $device, $dsToType): string {
                 $type = $dsToType[$ds] ?? null;
-                if ($type === null) { return $content; }
-                $g = [
-                    'id'     => $data->app->app_id,
-                    'type'   => 'smart_' . $type,
-                    'disk'   => $disk['idx'],
-                    'from'   => $hFrom,
-                    'to'     => $hNow,
-                    'legend' => 'no',
-                    'width'  => 210,
-                    'height' => 100,
-                ];
-                $overlib = generate_overlib_content($g, $device['hostname'] . ' - ' . $ds);
+                if ($type === null) { return $content ?? ''; }
 
-                return \LibreNMS\Util\Url::overlibLink($statLink($ds), $content, $overlib);
+                return $graphPopup('smart_' . $type, ['id' => $data->app->app_id, 'disk' => $disk['idx']], $content, $device['hostname'] . ' - ' . $ds);
             };
-            $nvMetricGraph = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $dsToType, $statGraphLink): string {
-                $type = $dsToType[$ds] ?? null;
-                if ($type === null) { return ''; }
-                $g = [
-                    'id'     => $data->app->app_id,
-                    'type'   => 'smart_' . $type,
-                    'disk'   => $disk['idx'],
-                    'from'   => $hFrom,
-                    'to'     => $hNow,
-                    'legend' => 'no',
-                    'width'  => 100,
-                    'height' => 20,
-                    'bg'     => 'ffffff00',
-                ];
+            $nvMetricGraph = static function (string $ds) use ($statGraphLink, $dsToType): string {
+                if (($dsToType[$ds] ?? null) === null) { return ''; }
 
-                return $statGraphLink($ds, \LibreNMS\Util\Url::lazyGraphTag($g));
+                return $statGraphLink($ds, null);
             };
 
             $nvTips = [

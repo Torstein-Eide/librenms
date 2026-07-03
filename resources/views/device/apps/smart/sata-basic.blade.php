@@ -107,26 +107,15 @@
         @php
             $blockSize = is_numeric($info['logical_block_size'] ?? null) ? (int) $info['logical_block_size'] : 512;
 
-            $luNow  = \App\Facades\LibrenmsConfig::get('time.now');
-            $luFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $luGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
                 'id'     => $data->app->app_id,
                 'type'   => 'smart_disk_lba_units',
                 'disk'   => $idx,
-                'from'   => $luFrom,
-                'to'     => $luNow,
+                'from'   => \App\Facades\LibrenmsConfig::get('time.day'),
+                'to'     => \App\Facades\LibrenmsConfig::get('time.now'),
                 'legend' => 'no',
             ]);
             $luGraph = \LibreNMS\Util\Url::lazyGraphTag($luGraphArray, 'tw:w-full tw:h-auto');
-
-            $luLinkArray = $luGraphArray;
-            $luLinkArray['page'] = 'graphs';
-            unset($luLinkArray['height'], $luLinkArray['width']);
-            $luLink = \LibreNMS\Util\Url::generate($luLinkArray);
-
-            $luOverlibArray = $luGraphArray;
-            $luOverlibArray['width'] = 210;
-            $luOverlib = generate_overlib_content($luOverlibArray, $device['hostname'] . ' - LBAs Written/Read');
 
             // Current rate (B/s) from the last RRD interval, not the lifetime total.
             $luRrdFile = \App\Facades\Rrd::name($device['hostname'], ['app', 'smart', $data->app->app_id, $idx]);
@@ -140,7 +129,7 @@
             $luBadge = $luParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $luParts)) . '</span>' : '';
 
             $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>LBAs Written/Read', $luBadge);
-            echo \LibreNMS\Util\Url::overlibLink($luLink, $luGraph, $luOverlib);
+            echo $graphPopup('smart_disk_lba_units', ['id' => $data->app->app_id, 'disk' => $idx], $luGraph, $device['hostname'] . ' - LBAs Written/Read');
             $panelEnd();
         @endphp
         @else
@@ -162,26 +151,15 @@
         @endphp
         @if($diskioDescr !== null)
         @php
-            $dioNow  = \App\Facades\LibrenmsConfig::get('time.now');
-            $dioFrom = \App\Facades\LibrenmsConfig::get('time.day');
             $dioGraphArray = \App\Http\Controllers\Device\Tabs\OverviewController::setGraphWidth([
                 'id'     => $data->app->app_id,
                 'type'   => 'smart_disk_diskio',
                 'disk'   => $idx,
-                'from'   => $dioFrom,
-                'to'     => $dioNow,
+                'from'   => \App\Facades\LibrenmsConfig::get('time.day'),
+                'to'     => \App\Facades\LibrenmsConfig::get('time.now'),
                 'legend' => 'no',
             ]);
             $dioGraph = \LibreNMS\Util\Url::lazyGraphTag($dioGraphArray, 'tw:w-full tw:h-auto');
-
-            $dioLinkArray = $dioGraphArray;
-            $dioLinkArray['page'] = 'graphs';
-            unset($dioLinkArray['height'], $dioLinkArray['width']);
-            $dioLink = \LibreNMS\Util\Url::generate($dioLinkArray);
-
-            $dioOverlibArray = $dioGraphArray;
-            $dioOverlibArray['width'] = 210;
-            $dioOverlib = generate_overlib_content($dioOverlibArray, $device['hostname'] . ' - Disk I/O');
 
             $dioRrdFile = \App\Facades\Rrd::name($device['hostname'], ['ucd_diskio', $diskioDescr]);
             $dioRates   = \App\Facades\Rrd::getLastRates($dioRrdFile, ['read', 'written']);
@@ -191,7 +169,7 @@
             $dioBadge = $dioParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $dioParts)) . '</span>' : '';
 
             $panelStart('<i class="fa fa-exchange" style="margin-right:6px"></i>Disk I/O', $dioBadge);
-            echo \LibreNMS\Util\Url::overlibLink($dioLink, $dioGraph, $dioOverlib);
+            echo $graphPopup('smart_disk_diskio', ['id' => $data->app->app_id, 'disk' => $idx], $dioGraph, $device['hostname'] . ' - Disk I/O');
             $panelEnd();
         @endphp
         @endif
@@ -235,22 +213,13 @@
                 };
             };
 
-            $hNow  = \App\Facades\LibrenmsConfig::get('time.now');
-            $hFrom = \App\Facades\LibrenmsConfig::get('time.day');
             // Wraps $content (label text, value badge, or the mini graph image) in
             // the same hover-preview link that points at the sensor's graph.
-            $sensorGraphLink = static function ($s, string $content) use ($hNow, $hFrom, $device): string {
-                $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 210, 'height' => 100];
-                $overlib = generate_overlib_content($g, $device['hostname'] . ' - ' . $s->sensor_descr);
-                $linkArr = $g; $linkArr['page'] = 'graphs'; unset($linkArr['width'], $linkArr['height'], $linkArr['legend']);
-                $link = \LibreNMS\Util\Url::generate($linkArr);
-
-                return \LibreNMS\Util\Url::overlibLink($link, $content, $overlib);
+            $sensorGraphLink = static function ($s, string $content) use ($graphPopup, $device): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], $content, $device['hostname'] . ' - ' . $s->sensor_descr);
             };
-            $sensorMini = static function ($s) use ($sensorGraphLink, $hNow, $hFrom): string {
-                $g = ['id' => $s->sensor_id, 'type' => 'sensor_' . $s->sensor_class, 'from' => $hFrom, 'to' => $hNow, 'legend' => 'no', 'width' => 100, 'height' => 20, 'bg' => 'ffffff00'];
-
-                return $sensorGraphLink($s, \LibreNMS\Util\Url::lazyGraphTag($g));
+            $sensorMini = static function ($s) use ($graphPopup, $device): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], null, $device['hostname'] . ' - ' . $s->sensor_descr);
             };
 
             // All disk sensors, status (state) sensors first.
@@ -278,20 +247,11 @@
             // Live power state and power lifetime summary rows.
             if (($disk['power_state'] ?? null) !== null) {
                 $powerState = $data->decode('power_state', $disk['power_state']);
-                $powerStateGraphArgs = [
-                    'id'          => $data->app->app_id,
-                    'type'        => 'smart_disk_power_state',
-                    'disk'        => $idx,
-                    'from'        => $hFrom,
-                    'to'          => $hNow,
-                    'width'       => 100,
-                    'height'      => 20,
-                    'legend'      => 'no',
-                    'popup_title' => htmlspecialchars($device['hostname'] . ' - Power State'),
-                ];
-                $powerStateLabel = \LibreNMS\Util\Url::graphPopup($powerStateGraphArgs, $labelWithTooltip('Power State', $tooltipForLabel('Power State')));
-                $powerStateMini = \LibreNMS\Util\Url::graphPopup($powerStateGraphArgs);
-                $powerStateValue = \LibreNMS\Util\Url::graphPopup($powerStateGraphArgs, htmlspecialchars($powerState));
+                $powerStateVars = ['id' => $data->app->app_id, 'disk' => $idx];
+                $powerStateTitle = $device['hostname'] . ' - Power State';
+                $powerStateLabel = $graphPopup('smart_disk_power_state', $powerStateVars, $labelWithTooltip('Power State', $tooltipForLabel('Power State')), $powerStateTitle);
+                $powerStateMini = $graphPopup('smart_disk_power_state', $powerStateVars, null, $powerStateTitle);
+                $powerStateValue = $graphPopup('smart_disk_power_state', $powerStateVars, htmlspecialchars($powerState), $powerStateTitle);
                 echo '<tr><td style="white-space:nowrap"><i class="fa fa-plug text-muted" style="margin-right:6px"></i>'
                     . $powerStateLabel . '</td>'
                     . '<td style="width:110px">' . $powerStateMini . '</td>'
@@ -407,7 +367,6 @@
     $panelStart($attrHeaderLink, $attrSummaryBadge);
 
     $attrAppId = $data->app->app_id;
-    $attrNow   = \App\Facades\LibrenmsConfig::get('time.now');
     $attrFrom  = \App\Facades\LibrenmsConfig::get('time.week');
     $tblId     = 'smart-attr-tbl-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $idx);
 
@@ -538,19 +497,15 @@
         // Click → graphs page, hover → day/week/month/year popup (as on device overview).
         $mini = '';
         if ($attrId > 0) {
-            $mini = \LibreNMS\Util\Url::graphPopup([
-                'id'          => $attrAppId,
-                'type'        => 'smart_sata_attr_value',
-                'disk'        => $idx,
-                'attr_id'     => $attrId,
-                'rate_unit'   => $attr['rate_unit'] ?? '',
-                'from'        => $attrFrom,
-                'to'          => $attrNow,
-                'width'       => 60,
-                'height'      => 15,
-                'legend'      => 'no',
-                'popup_title' => htmlspecialchars($device['hostname'] . ' - ' . $name),
-            ]);
+            $mini = $graphPopup(
+                'smart_sata_attr_value',
+                ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'rate_unit' => $attr['rate_unit'] ?? ''],
+                null,
+                $device['hostname'] . ' - ' . $name,
+                60,
+                15,
+                $attrFrom
+            );
         }
 
         // raw24div24/raw24div32 (Hi/Lo split into two separate graphs, see
@@ -558,19 +513,15 @@
         // own scale, since Hi and Lo often differ by orders of magnitude.
         $miniDiv = '';
         if ($attrId > 0 && in_array($rawFormat, [12, 13], true)) {
-            $miniDiv = \LibreNMS\Util\Url::graphPopup([
-                'id'          => $attrAppId,
-                'type'        => 'smart_sata_attr_div',
-                'disk'        => $idx,
-                'attr_id'     => $attrId,
-                'rate_unit'   => $attr['rate_unit'] ?? '',
-                'from'        => $attrFrom,
-                'to'          => $attrNow,
-                'width'       => 60,
-                'height'      => 15,
-                'legend'      => 'no',
-                'popup_title' => htmlspecialchars($device['hostname'] . ' - ' . $name . ' (Hi/Lo)'),
-            ]);
+            $miniDiv = $graphPopup(
+                'smart_sata_attr_div',
+                ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'rate_unit' => $attr['rate_unit'] ?? ''],
+                null,
+                $device['hostname'] . ' - ' . $name . ' (Hi/Lo)',
+                60,
+                15,
+                $attrFrom
+            );
         }
 
         echo '<tr style="' . $rowStyle . '" data-fail="' . $isFail . '" data-flags="' . htmlspecialchars($flagsRaw, ENT_QUOTES) . '">'

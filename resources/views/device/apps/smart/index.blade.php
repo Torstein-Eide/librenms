@@ -60,6 +60,27 @@
     $panelEnd = static function (): void {
         echo '</div></div>';
     };
+    // Wraps $content (defaults to a small graph image) in the x-popup component,
+    // with an x-graph-row of day/week/month/year graphs as its hover body.
+    // $vars must not contain from/to/width/height/legend - x-graph-row supplies
+    // its own periods, and would have those overridden by matching $vars keys.
+    $graphPopup = static function (string $type, array $vars, ?string $content = null, ?string $popupTitle = null, int $width = 100, int $height = 20, string $from = '-1d'): string {
+        return \Illuminate\Support\Facades\Blade::render(<<<'BLADE'
+            <x-popup>
+                @if($content !== null)
+                    {!! $content !!}
+                @else
+                    <x-graph :type="$type" :vars="$vars" :width="$width" :height="$height" :from="$from" legend="no" loading="lazy"></x-graph>
+                @endif
+                @if($popupTitle !== null)
+                    <x-slot name="title">{{ $popupTitle }}</x-slot>
+                @endif
+                <x-slot name="body">
+                    <x-graph-row loading="lazy" :type="$type" :vars="$vars"></x-graph-row>
+                </x-slot>
+            </x-popup>
+            BLADE, compact('content', 'type', 'vars', 'popupTitle', 'width', 'height', 'from'));
+    };
     $tableRow = static function (string $label, string $value, string $tooltip = ''): string {
         $labelHtml = $tooltip !== ''
             ? '<abbr style="cursor:help;text-decoration:underline dotted" title="' . htmlspecialchars($tooltip, ENT_QUOTES) . '">' . htmlspecialchars($label) . '</abbr>'
