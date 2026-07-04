@@ -924,14 +924,30 @@ class HtmlData
     /**
      * Which rate unit the attribute's raw RRD series should be graphed in:
      * 'hour' for newly-detected ("Count" in the name) counters, 'second' for
-     * the original fixed-list counters, null for GAUGE (no rate semantics).
+     * the original fixed-list counters, null for GAUGE (no rate semantics --
+     * the raw-graph/current-value COUNTER-only scaling this gates must not
+     * apply to a GAUGE's raw reading). For the Δ8h/24h/168h/672h columns,
+     * which want a unit for every attribute regardless of type, use
+     * attributeDeltaUnit() instead.
      */
     public function attributeRateUnit(array $attr): ?string
     {
-        if (($attr['rrd_type'] ?? null) !== 'COUNTER') {
-            return null;
-        }
+        return ($attr['rrd_type'] ?? null) === 'COUNTER' ? $this->attributeDeltaUnit($attr) : null;
+    }
 
+    /**
+     * Unit ('second' or 'hour') for the Δ8h/24h/168h/672h columns' rate_*
+     * values. Unlike attributeRateUnit(), this always resolves to a unit:
+     * rate_8h etc. are computed as raw-units-per-hour for every trackable
+     * single-value attribute regardless of rrd_type
+     * (AttributeRateTracker::sync() rates GAUGE datasets via
+     * (end-start)/hours, the same units rrdtool derives for COUNTER
+     * datasets), so a GAUGE-typed error/event count like Reported_Uncorrect
+     * deserves the same /h or /s suffix a COUNTER-typed one like
+     * UDMA_CRC_Error_Count gets.
+     */
+    public function attributeDeltaUnit(array $attr): string
+    {
         $rates = array_filter(
             [$attr['rate_8h'] ?? null, $attr['rate_24h'] ?? null, $attr['rate_168h'] ?? null, $attr['rate_672h'] ?? null],
             static fn ($rate): bool => is_numeric($rate)
@@ -944,7 +960,7 @@ class HtmlData
 
         $avgRate = array_sum($rates) / count($rates);
 
-        return $avgRate > self::RATE_UNIT_PERSEC_THRESHOLD ? 'second' : 'hour';
+        return abs($avgRate) > self::RATE_UNIT_PERSEC_THRESHOLD ? 'second' : 'hour';
     }
 
     /**
@@ -1151,7 +1167,7 @@ class HtmlData
             if (! is_numeric($rate)) {
                 return $normPart;
             }
-            $rateUnit = $this->attributeRateUnit($attr);
+            $rateUnit = $this->attributeDeltaUnit($attr);
             $displayRate = $rateUnit === 'hour' ? (float) $rate * 3600 : (float) $rate;
 
             return $normPart . ' , Value ' . number_format($displayRate, 2) . ($rateUnit === 'hour' ? '/h' : '/s');

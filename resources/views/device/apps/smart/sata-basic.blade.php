@@ -476,12 +476,15 @@
             default => '<span class="text-muted">' . htmlspecialchars($statusLabel) . '</span>',
         };
 
-        // rate_8h/24h/168h/672h are persisted in raw-units-per-hour. attributeRateUnit()
-        // switches high-volume counters (avg > 3600/h, i.e. >1/s) to a per-second display;
-        // it's the same lookup the mini-graph uses to pick its DS unit.
-        $rateUnit    = $data->attributeRateUnit($attr);
+        // rate_8h/24h/168h/672h are persisted in raw-units-per-hour for every
+        // trackable attribute, GAUGE or COUNTER alike -- attributeDeltaUnit()
+        // (unlike attributeRateUnit(), which the mini-graph uses to pick its DS
+        // unit and which stays null for GAUGE) switches high-volume counters
+        // (avg > 3600/h, i.e. >1/s) to a per-second display but otherwise
+        // always resolves to a suffix.
+        $rateUnit    = $data->attributeDeltaUnit($attr);
         $rateDivisor = $rateUnit === 'second' ? 3600.0 : 1.0;
-        $rateSuffix  = $rateUnit === 'second' ? '/s' : ($rateUnit === 'hour' ? '/h' : '');
+        $rateSuffix  = $rateUnit === 'second' ? '/s' : '/h';
 
         $fmtRate = static function ($v) use ($rateDivisor, $rateSuffix) {
             if (! is_numeric($v)) {
