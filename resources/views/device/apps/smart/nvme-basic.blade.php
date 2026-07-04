@@ -173,10 +173,10 @@
 
             // NVMe health stats to show as plain rows (no sensor, no limits).
             static $dsToType = [
-                'media_errors' => 'nvme_errors',
-                'unsafe_shut'  => 'nvme_unsafe_shut',
-                'pwr_hours'    => 'nvme_pwr_hours',
-                'pwr_cycles'   => 'nvme_pwr_cycles',
+                'media_errors' => 'disk_errors',
+                'unsafe_shut'  => 'disk_unsafe_shut',
+                'pwr_hours'    => 'disk_pwr_hours',
+                'pwr_cycles'   => 'disk_pwr_cycles',
             ];
             $statLink = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $dsToType): string {
                 $type = $dsToType[$ds] ?? null;
@@ -185,6 +185,7 @@
                 return \LibreNMS\Util\Url::generate([
                     'id'   => $data->app->app_id,
                     'type' => 'smart_' . $type,
+                    'rrd'  => 'smart_nvme',
                     'disk' => $disk['idx'],
                     'from' => $hFrom,
                     'to'   => $hNow,
@@ -199,7 +200,7 @@
                 $type = $dsToType[$ds] ?? null;
                 if ($type === null) { return $content ?? ''; }
 
-                return $graphPopup('smart_' . $type, ['id' => $data->app->app_id, 'disk' => $disk['idx']], $content, $popupTitle($disk, $label, $value));
+                return $graphPopup('smart_' . $type, ['id' => $data->app->app_id, 'disk' => $disk['idx'], 'rrd' => 'smart_nvme'], $content, $popupTitle($disk, $label, $value));
             };
             $nvMetricGraph = static function (string $ds, string $label, ?string $value) use ($statGraphLink, $dsToType): string {
                 if (($dsToType[$ds] ?? null) === null) { return ''; }
