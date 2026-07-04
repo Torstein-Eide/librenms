@@ -84,7 +84,7 @@ class Common extends Application
         'smart_sata_erc', 'smart_sata_phy_events', 'smart_sata_selective_test',
         'smart_sata_log_dir', 'smart_sata_dev_stats', 'smart_sata_pending_defects',
         'smart_nvme_info', 'smart_nvme_health', 'smart_nvme_namespaces', 'smart_nvme_selftest_log',
-        'smart_sas_info', 'smart_sas_health', 'smart_sas_error_counters', 'smart_sas_selftest_log',
+        // 'smart_sas_info', 'smart_sas_health', 'smart_sas_error_counters', 'smart_sas_selftest_log', // SAS not yet supported
     ];
 
     private array  $sensorRows = [];
