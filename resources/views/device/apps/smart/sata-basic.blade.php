@@ -402,6 +402,14 @@
 
     $dark = session('applied_site_style') === 'dark';
 
+    // Popup "Current" values (see HtmlData::attrCurrentDisplay()) use the live
+    // Normalized+raw-string reading for most attributes; only a COUNTER-type
+    // single-value attribute needs anything from the RRD file itself (its last
+    // per-second/per-hour rate, since its live raw is a cumulative total, not a
+    // "current" reading). That fetch is batched once per disk here (not once
+    // per attribute row) via HtmlData::attrCurrentPoint().
+    $attrLast = $data->attrCurrentPoint($selectedDisk);
+
     foreach ($disk['attributes'] as $attr) {
         $status = (int) ($attr['status'] ?? 0);
         $statusLabel = $status === -1 ? 'NA' : $data->decode('attr_status', $attr['status'] ?? null);
@@ -423,6 +431,15 @@
         $rawDisp  = $data->formatRawSI($rawFull);
         $attrId   = (int) ($attr['attribute_id'] ?? 0);
         $name     = str_replace('_', ' ', (string) ($attr['name'] ?? ''));
+
+        // See HtmlData::attrCurrentDisplay() for how this picks between the
+        // live Normalized+raw string and (COUNTER-only) an RRD-derived rate.
+        // The div popup ($miniDiv below) reuses the same value -- for a
+        // div-format (12/13) attribute, Value is already its raw "hi/lo"
+        // string, the only value that applies there anyway (attr_div.inc.php's
+        // graph has no Normalized line at all).
+        $rawFormat = isset($attr['format']) && is_numeric($attr['format']) ? (int) $attr['format'] : null;
+        $attrCurrentDisp = $data->attrCurrentDisplay($attr, $attrLast);
 
         $flagLines = $data->attributeFlagLines($attr);
         $flagsTip  = htmlspecialchars(implode("\n", $flagLines), ENT_QUOTES);
@@ -446,7 +463,6 @@
 
         $threshCell = '<span data-toggle="tooltip" data-placement="top" title="' . htmlspecialchars('Failure threshold - attribute fails when Value drops below this', ENT_QUOTES) . '" style="cursor:default;border-bottom:1px dotted">' . htmlspecialchars((string) ($thresh ?? '')) . '</span>';
 
-        $rawFormat = isset($attr['format']) && is_numeric($attr['format']) ? (int) $attr['format'] : null;
         $rawTip = 'Raw hardware reading - vendor-specific meaning'
             . "\nFormat: " . $data->decode('attr_format', $rawFormat)
             . "\nFull raw: " . $rawFull;
@@ -501,7 +517,7 @@
                 'smart_sata_attr_value',
                 ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'rate_unit' => $attr['rate_unit'] ?? ''],
                 null,
-                $popupTitle($disk, $name, $rawDisp),
+                $popupTitle($disk, $name, $attrCurrentDisp),
                 60,
                 15,
                 $attrFrom
@@ -517,7 +533,7 @@
                 'smart_sata_attr_div',
                 ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'rate_unit' => $attr['rate_unit'] ?? ''],
                 null,
-                $popupTitle($disk, $name . ' (Hi/Lo)', $rawDisp),
+                $popupTitle($disk, $name . ' (Hi/Lo)', $attrCurrentDisp),
                 60,
                 15,
                 $attrFrom

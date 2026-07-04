@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
+use LibreNMS\Data\Store\TimeSeriesPoint;
 use LibreNMS\Util\Number;
 
 /**
@@ -1066,6 +1067,99 @@ class HtmlData
     public function hasOtherRrd(string $diskKey): bool
     {
         return array_intersect($this->rrdDatasets($diskKey), ['id10', 'id183', 'id184', 'id196', 'id199']) !== [];
+    }
+
+    /** Formats with independent multi-part/div DS (P5..P0 or Hi/Lo) instead of a single idN -- see SataHandler::attrFormatSubValues(). */
+    private const ATTR_MULTIPART_FORMATS = [1, 2, 9, 11, 12, 13];
+
+    /**
+     * DS names to batch-fetch for computing every attribute's popup "Current"
+     * value on one disk. Only a COUNTER-type single-value attribute needs
+     * anything from the RRD file at all (see attrCurrentDisplay()): its
+     * plain idN, filtered down to what actually exists -- requesting a DEF
+     * against a missing DS fails the whole rrdtool xport call, not just that
+     * one DS (see Rrd::getLastRates()).
+     *
+     * @return array<int, string>
+     */
+    public function attrCurrentDsNames(string $diskKey): array
+    {
+        $disk = $this->disks[$diskKey] ?? null;
+        if ($disk === null) {
+            return [];
+        }
+
+        $existing = array_flip($this->rrdDatasets($diskKey));
+        $names = [];
+        foreach ($disk['attributes'] as $attr) {
+            $attrId = (int) ($attr['attribute_id'] ?? 0);
+            $format = isset($attr['format']) && is_numeric($attr['format']) ? (int) $attr['format'] : null;
+            if ($attrId <= 0 || in_array($format, self::ATTR_MULTIPART_FORMATS, true) || ($attr['rrd_type'] ?? null) !== 'COUNTER') {
+                continue;
+            }
+            $ds = 'id' . $attrId;
+            if (isset($existing[$ds])) {
+                $names[] = $ds;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * Batched last-sample fetch backing every COUNTER-type attribute popup's
+     * "Current" rate on one disk -- a single Rrd::getLastRates() call across
+     * every DS attrCurrentDsNames() says is relevant, instead of one rrdtool
+     * subprocess per attribute row. Null when nothing is worth fetching, or
+     * when the batch fetch itself fails (see Rrd::getLastRates()).
+     */
+    public function attrCurrentPoint(string $diskKey): ?TimeSeriesPoint
+    {
+        $names = $this->attrCurrentDsNames($diskKey);
+        if ($names === []) {
+            return null;
+        }
+
+        $rrdFile = Rrd::name((string) ($this->device['hostname'] ?? ''), ['app', 'smart', $this->app->app_id, $this->diskIndex($diskKey)]);
+
+        return Rrd::getLastRates($rrdFile, $names);
+    }
+
+    /**
+     * "Current" popup value for one attribute: "Norm: {value_norm} , Value
+     * {reading}". {reading} is the live smartmonSataAttrRawString/RawValue
+     * as-is for every multi-part/div format (1/2/9/11/12/13 -- their RRD DS
+     * are independent parts, not one "current" number, so the live packed
+     * string already is the right representation) and for GAUGE-type
+     * single-value attributes (whose live value already matches their last
+     * RRD sample). Only a COUNTER-type single-value attribute swaps in the
+     * RRD's last per-second/per-hour rate from $point (attrCurrentPoint())
+     * instead: its live raw is a cumulative total, not a "current" reading,
+     * whereas the attribute's own graph (attr_value.inc.php) plots this same
+     * rate. Rate unit (per-second vs. per-hour) matches attributeRateUnit(),
+     * the same lookup the Δ8h/24h/... rate columns and mini-graph DS use.
+     */
+    public function attrCurrentDisplay(array $attr, ?TimeSeriesPoint $point): ?string
+    {
+        $attrId = (int) ($attr['attribute_id'] ?? 0);
+        $format = isset($attr['format']) && is_numeric($attr['format']) ? (int) $attr['format'] : null;
+        $norm = $attr['value_norm'] ?? null;
+        $normPart = 'Norm: ' . (is_numeric($norm) ? number_format((float) $norm, 0) : '-');
+
+        if (! in_array($format, self::ATTR_MULTIPART_FORMATS, true) && ($attr['rrd_type'] ?? null) === 'COUNTER') {
+            $rate = $point?->get('id' . $attrId);
+            if (! is_numeric($rate)) {
+                return $normPart;
+            }
+            $rateUnit = $this->attributeRateUnit($attr);
+            $displayRate = $rateUnit === 'hour' ? (float) $rate * 3600 : (float) $rate;
+
+            return $normPart . ' , Value ' . number_format($displayRate, 2) . ($rateUnit === 'hour' ? '/h' : '/s');
+        }
+
+        $rawString = trim((string) ($attr['value_raw_string'] ?? $attr['value_raw'] ?? ''));
+
+        return $rawString !== '' ? $normPart . ' , Value ' . $rawString : $normPart;
     }
 
     /**
