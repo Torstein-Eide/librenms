@@ -1,5 +1,6 @@
 <?php
 
+use App\Facades\Rrd;
 use App\Models\Application;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
 
@@ -54,12 +55,17 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
         // Prefix determines compatible disk kind:
         //   nvme_* → NVMe drives only
         //   sata_* → SATA/ATA drives only
-        //   disk_* → both (shared graphs)
+        //   disk_errors/disk_unsafe_shut/disk_pwr_hours/disk_pwr_cycles → SATA
+        //     only (the "disk_" prefix predates nvme_attr_value.inc.php, which
+        //     now covers those metrics for NVMe instead)
+        //   other disk_* → both (shared graphs)
         if (! str_starts_with($subtype, 'all_')) {
+            $sataOnlyDiskTypes = ['disk_errors', 'disk_unsafe_shut', 'disk_pwr_hours', 'disk_pwr_cycles'];
             $allowedKind = match (true) {
-                str_starts_with($subtype, 'nvme')    => 'nvme',
-                str_starts_with($subtype, 'sata_')   => 'sata',
-                default                               => null,
+                str_starts_with($subtype, 'nvme')            => 'nvme',
+                str_starts_with($subtype, 'sata_')           => 'sata',
+                in_array($subtype, $sataOnlyDiskTypes, true) => 'sata',
+                default                                       => null,
             };
             $diskOptions = [];
             $labelCookieForList = $labelCookie ?? ('smart_label_mode_' . $device['device_id']);
@@ -134,8 +140,40 @@ if (isset($vars['id']) && is_numeric($vars['id'])) {
             }
         }
 
+        // object_array[2]: NVMe metric selector for nvme_attr_value, mirroring
+        // the SATA attr_id selector below but keyed by HtmlData::nvmeAttrMetrics()
+        // (a static catalog, not per-disk DB rows) and filtered to metrics whose
+        // DS actually exists in this disk's smart_nvme RRD.
+        if ($disk !== null && $subtype === 'nvme_attr_value') {
+            $nvmeRrdFile = Rrd::name($device['hostname'], ['app', 'smart_nvme', $app->app_id, $vars['disk']]);
+            $availableDs = Rrd::checkRrdExists($nvmeRrdFile) ? Rrd::listDatasets($nvmeRrdFile) : [];
+            $currentMetric = (string) ($vars['metric'] ?? '');
+            $metricOptions = [];
+            $firstMetric = null;
+            foreach (HtmlData::nvmeAttrMetrics() as $ds => $metricSpec) {
+                if ($availableDs !== [] && ! in_array($ds, $availableDs, true)) {
+                    continue;
+                }
+                $firstMetric ??= $ds;
+                $metricOptions[] = [
+                    'url'      => LibreNMS\Util\Url::generate($vars, ['page' => 'graphs', 'metric' => $ds]),
+                    'label'    => $metricSpec['label'],
+                    'selected' => $ds === $currentMetric,
+                ];
+            }
+            // If the URL's metric isn't in the eligible list, fall back to the first.
+            if ($metricOptions !== [] && $firstMetric !== null
+                && ! array_filter($metricOptions, fn ($o) => $o['selected'])) {
+                $vars['metric'] = $firstMetric;
+                $metricOptions[0]['selected'] = true;
+            }
+            if ($metricOptions !== []) {
+                $object_array[2] = ['options' => $metricOptions];
+            }
+        }
+
         // object_array[2]: attribute selector — only for attr graph subtypes when a disk is selected.
-        if ($disk !== null && str_contains($subtype, 'attr')) {
+        if ($disk !== null && str_contains($subtype, 'attr') && $subtype !== 'nvme_attr_value') {
             $attrSpecs = $htmlData->attributeGraphSpecs((string) $diskKey);
             $currentAttr = isset($vars['attr_id']) ? (int) $vars['attr_id'] : null;
             // sata_attr_div only plots attributes with id{N}Hi/Lo DS (format 12 = raw24div24, 13 = raw24div32).

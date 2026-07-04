@@ -171,25 +171,21 @@
                 return ($rank[$a->sensor_class] ?? 9) <=> ($rank[$b->sensor_class] ?? 9);
             });
 
-            // NVMe health stats to show as plain rows (no sensor, no limits).
-            static $dsToType = [
-                'media_errors' => 'disk_errors',
-                'unsafe_shut'  => 'disk_unsafe_shut',
-                'pwr_hours'    => 'disk_pwr_hours',
-                'pwr_cycles'   => 'disk_pwr_cycles',
-            ];
+            // NVMe health stats to show as plain rows (no sensor, no limits). All
+            // four are single-DS metrics from HtmlData::nvmeAttrMetrics(), graphed
+            // by the generic nvme_attr_value.inc.php template (metric = ds name).
+            static $dsToType = ['media_errors' => true, 'unsafe_shut' => true, 'pwr_hours' => true, 'pwr_cycles' => true];
             $statLink = static function (string $ds) use ($hNow, $hFrom, $data, $disk, $dsToType): string {
-                $type = $dsToType[$ds] ?? null;
-                if ($type === null) { return ''; }
+                if (! isset($dsToType[$ds])) { return ''; }
 
                 return \LibreNMS\Util\Url::generate([
-                    'id'   => $data->app->app_id,
-                    'type' => 'smart_' . $type,
-                    'rrd'  => 'smart_nvme',
-                    'disk' => $disk['idx'],
-                    'from' => $hFrom,
-                    'to'   => $hNow,
-                    'page' => 'graphs',
+                    'id'     => $data->app->app_id,
+                    'type'   => 'smart_nvme_attr_value',
+                    'metric' => $ds,
+                    'disk'   => $disk['idx'],
+                    'from'   => $hFrom,
+                    'to'     => $hNow,
+                    'page'   => 'graphs',
                 ]);
             };
             // Wraps $content (label text, value badge, or the mini graph image) in
@@ -197,10 +193,9 @@
             // are the human-readable name and formatted current value (from $statRows
             // below), not the raw $ds key.
             $statGraphLink = static function (string $ds, ?string $content, string $label, ?string $value) use ($graphPopup, $data, $disk, $popupTitle, $dsToType): string {
-                $type = $dsToType[$ds] ?? null;
-                if ($type === null) { return $content ?? ''; }
+                if (! isset($dsToType[$ds])) { return $content ?? ''; }
 
-                return $graphPopup('smart_' . $type, ['id' => $data->app->app_id, 'disk' => $disk['idx'], 'rrd' => 'smart_nvme'], $content, $popupTitle($disk, $label, $value));
+                return $graphPopup('smart_nvme_attr_value', ['id' => $data->app->app_id, 'disk' => $disk['idx'], 'metric' => $ds], $content, $popupTitle($disk, $label, $value));
             };
             $nvMetricGraph = static function (string $ds, string $label, ?string $value) use ($statGraphLink, $dsToType): string {
                 if (($dsToType[$ds] ?? null) === null) { return ''; }

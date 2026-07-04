@@ -1,12 +1,11 @@
 <?php
 
-// Unsafe shutdown count: NVMe via smart_nvme/unsafe_shut DS;
-// SATA via smart RRD for attributes whose name matches /shutdown/i.
+// Unsafe shutdown count: SATA via smart RRD for attributes whose name matches
+// /shutdown/i. NVMe's equivalent is the 'unsafe_shut' metric on
+// nvme_attr_value.inc.php.
 
 use App\Facades\Rrd;
 use Illuminate\Support\Facades\DB;
-
-$isNvme = ($vars['rrd'] ?? '') === 'smart_nvme';
 
 $name = 'smart';
 $unit_text = 'events';
@@ -21,51 +20,40 @@ $transparency = 15;
 
 $rrd_list = [];
 
-if ($isNvme) {
-    $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart_nvme', $app->app_id, $vars['disk']]);
+$diskIdx = (string) ($vars['disk'] ?? '');
+$mibDiskIndex = static fn (string $key): string => substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
+
+$diskKey = null;
+foreach (DB::table('smart_devices')->where('app_id', $app->app_id)->get(['disk_key']) as $row) {
+    if ($mibDiskIndex($row->disk_key) === $diskIdx) {
+        $diskKey = $row->disk_key;
+        break;
+    }
+}
+
+if ($diskKey !== null) {
+    $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
     if (Rrd::checkRrdExists($rrd_filename)) {
         $point = Rrd::lastUpdate($rrd_filename);
         $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
-        if ($avail === [] || in_array('unsafe_shut', $avail, true)) {
-            $rrd_list[] = ['filename' => $rrd_filename, 'descr' => 'Unsafe Shutdowns', 'ds' => 'unsafe_shut'];
-        }
-    }
-} else {
-    $diskIdx = (string) ($vars['disk'] ?? '');
-    $mibDiskIndex = static fn (string $key): string => substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
 
-    $diskKey = null;
-    foreach (DB::table('smart_devices')->where('app_id', $app->app_id)->get(['disk_key']) as $row) {
-        if ($mibDiskIndex($row->disk_key) === $diskIdx) {
-            $diskKey = $row->disk_key;
-            break;
-        }
-    }
+        $matchedAttrs = DB::table('smart_sata_attributes')
+            ->where('app_id', $app->app_id)
+            ->where('disk_key', $diskKey)
+            ->whereRaw('LOWER(name) LIKE ?', ['%shutdown%'])
+            ->orderBy('attribute_id')
+            ->get(['attribute_id', 'name']);
 
-    if ($diskKey !== null) {
-        $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
-        if (Rrd::checkRrdExists($rrd_filename)) {
-            $point = Rrd::lastUpdate($rrd_filename);
-            $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
-
-            $matchedAttrs = DB::table('smart_sata_attributes')
-                ->where('app_id', $app->app_id)
-                ->where('disk_key', $diskKey)
-                ->whereRaw('LOWER(name) LIKE ?', ['%shutdown%'])
-                ->orderBy('attribute_id')
-                ->get(['attribute_id', 'name']);
-
-            foreach ($matchedAttrs as $attr) {
-                $ds = 'id' . (int) $attr->attribute_id;
-                if ($avail !== [] && ! in_array($ds, $avail, true)) {
-                    continue;
-                }
-                $rrd_list[] = [
-                    'filename' => $rrd_filename,
-                    'descr'    => str_replace('_', ' ', (string) $attr->name),
-                    'ds'       => $ds,
-                ];
+        foreach ($matchedAttrs as $attr) {
+            $ds = 'id' . (int) $attr->attribute_id;
+            if ($avail !== [] && ! in_array($ds, $avail, true)) {
+                continue;
             }
+            $rrd_list[] = [
+                'filename' => $rrd_filename,
+                'descr'    => str_replace('_', ' ', (string) $attr->name),
+                'ds'       => $ds,
+            ];
         }
     }
 }

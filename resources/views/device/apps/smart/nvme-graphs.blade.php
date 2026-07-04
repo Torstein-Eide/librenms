@@ -135,14 +135,14 @@
     $nvAppGraph('disk_diskio', 'Disk I/O', $anchorPrefix . 'diskio', ['rrd' => 'smart_nvme']);
 
     $medErrBadge = is_numeric($health['media_errors'] ?? null) ? $fmtI($health['media_errors']) : '';
-    $nvAppGraph('disk_errors', 'Media Errors', $anchorPrefix . 'errors', ['rrd' => 'smart_nvme'], $medErrBadge);
+    $nvAppGraph('nvme_attr_value', 'Media Errors', $anchorPrefix . 'errors', ['metric' => 'media_errors'], $medErrBadge);
 
     $cwBadge = isset($health['critical_warning']) && (int) $health['critical_warning'] !== 0
         ? '0x' . dechex((int) $health['critical_warning']) : '';
-    $nvAppGraph('nvme_crit_warn', 'Critical Warning', $anchorPrefix . 'crit-warn', [], $cwBadge);
+    $nvAppGraph('nvme_attr_value', 'Critical Warning', $anchorPrefix . 'crit-warn', ['metric' => 'crit_warn'], $cwBadge);
 
     $ctrlBusy = is_numeric($health['controller_busy_time'] ?? null) ? $fmtI($health['controller_busy_time']) . ' min total' : '';
-    $nvAppGraph('nvme_ctrl_busy', 'Controller Busy', $anchorPrefix . 'ctrl-busy', [], $ctrlBusy);
+    $nvAppGraph('nvme_attr_value', 'Controller Busy', $anchorPrefix . 'ctrl-busy', ['metric' => 'ctrl_busy'], $ctrlBusy);
 
     $warnTime = is_numeric($health['warning_temp_time'] ?? null) ? $fmtI($health['warning_temp_time']) . ' min' : null;
     $critTime = is_numeric($health['critical_comp_time'] ?? null) ? $fmtI($health['critical_comp_time']) . ' min' : null;
@@ -150,13 +150,13 @@
     $nvAppGraph('nvme_temp_time', 'Temp Threshold Time', $anchorPrefix . 'temp-time', [], implode(' / ', $tmpParts) . ($tmpParts !== [] ? ' total' : ''));
 
     $pohBadge = is_numeric($health['power_on_hours'] ?? null) ? $fmtI($health['power_on_hours']) . ' h' : '';
-    $nvAppGraph('disk_pwr_hours', 'Power On Hours', $anchorPrefix . 'pwr-hours', ['rrd' => 'smart_nvme'], $pohBadge);
+    $nvAppGraph('nvme_attr_value', 'Power On Hours', $anchorPrefix . 'pwr-hours', ['metric' => 'pwr_hours'], $pohBadge);
 
     $pcBadge = is_numeric($health['power_cycles'] ?? null) ? $fmtI($health['power_cycles']) : '';
-    $nvAppGraph('disk_pwr_cycles', 'Power Cycles', $anchorPrefix . 'pwr-cycles', ['rrd' => 'smart_nvme'], $pcBadge);
+    $nvAppGraph('nvme_attr_value', 'Power Cycles', $anchorPrefix . 'pwr-cycles', ['metric' => 'pwr_cycles'], $pcBadge);
 
     $usBadge = is_numeric($health['unsafe_shutdowns'] ?? null) ? $fmtI($health['unsafe_shutdowns']) : '';
-    $nvAppGraph('disk_unsafe_shut', 'Unsafe Shutdowns', $anchorPrefix . 'unsafe-shut', ['rrd' => 'smart_nvme'], $usBadge);
+    $nvAppGraph('nvme_attr_value', 'Unsafe Shutdowns', $anchorPrefix . 'unsafe-shut', ['metric' => 'unsafe_shut'], $usBadge);
 
     // Health state and self-test status (per-sensor temperatures are already covered
     // by the combined "Temperature" graph above).

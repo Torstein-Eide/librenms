@@ -1179,6 +1179,27 @@ class HtmlData
     }
 
     /**
+     * Single-DS NVMe health-log metrics selectable by nvme_attr_value.inc.php's
+     * `metric` var, keyed by RRD DS name. Single source of truth for that
+     * template's rendering switch and auth.inc.php's metric-selector dropdown.
+     * Combo-DS metrics (host I/O, LBA/data units, temp threshold time) have
+     * their own dedicated graphs and aren't listed here.
+     *
+     * @return array<string, array{label:string, kind:string, unit:string}>
+     */
+    public static function nvmeAttrMetrics(): array
+    {
+        return [
+            'media_errors' => ['label' => 'Media Errors',    'kind' => 'gauge',    'unit' => 'errors'],
+            'unsafe_shut'  => ['label' => 'Unsafe Shutdowns', 'kind' => 'gauge',    'unit' => 'events'],
+            'pwr_hours'    => ['label' => 'Power-on Hours',   'kind' => 'gauge',    'unit' => 'h'],
+            'pwr_cycles'   => ['label' => 'Power Cycles',     'kind' => 'gauge',    'unit' => 'cycles'],
+            'crit_warn'    => ['label' => 'Critical Warning', 'kind' => 'bitmask',  'unit' => 'bitmask'],
+            'ctrl_busy'    => ['label' => 'Controller Busy',  'kind' => 'pct_time', 'unit' => '% of time'],
+        ];
+    }
+
+    /**
      * Per-attribute graph specs for a disk, limited to attributes whose RRD
      * datasets actually exist.
      *

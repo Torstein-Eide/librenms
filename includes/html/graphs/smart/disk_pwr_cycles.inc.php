@@ -1,12 +1,12 @@
 <?php
 
-// Power cycle count: NVMe via smart_nvme/pwr_cycles DS; SATA via smart/id12 DS (ATA attribute 12).
+// Power cycle count: SATA via smart/id12 DS (ATA attribute 12). NVMe's
+// equivalent is the 'pwr_cycles' metric on nvme_attr_value.inc.php.
 
 use App\Facades\Rrd;
 
-$isNvme = ($vars['rrd'] ?? '') === 'smart_nvme';
-$rrd_filename = Rrd::name($device['hostname'], ['app', $isNvme ? 'smart_nvme' : 'smart', $app->app_id, $vars['disk']]);
-$ds = $isNvme ? 'pwr_cycles' : 'id12';
+$rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
+$ds = 'id12';
 
 $name = 'smart';
 $unit_text = 'cycles';

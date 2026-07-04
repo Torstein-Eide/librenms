@@ -1,12 +1,11 @@
 <?php
 
-// Error count graph: NVMe via smart_nvme/media_errors DS;
-// SATA via smart RRD for all attributes whose name matches /error/i.
+// Error count graph: SATA via smart RRD for all attributes whose name matches
+// /error/i, each plotted as its own line. NVMe's equivalent is the
+// 'media_errors' metric on nvme_attr_value.inc.php.
 
 use App\Facades\Rrd;
 use Illuminate\Support\Facades\DB;
-
-$isNvme = ($vars['rrd'] ?? '') === 'smart_nvme';
 
 $name = 'smart';
 $unit_text = 'errors';
@@ -21,61 +20,48 @@ $transparency = 15;
 
 $rrd_list = [];
 
-if ($isNvme) {
-    $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart_nvme', $app->app_id, $vars['disk']]);
+$diskIdx = (string) ($vars['disk'] ?? '');
+$mibDiskIndex = static fn (string $key): string => substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
+
+$diskKey = null;
+foreach (DB::table('smart_devices')->where('app_id', $app->app_id)->get(['disk_key']) as $row) {
+    if ($mibDiskIndex($row->disk_key) === $diskIdx) {
+        $diskKey = $row->disk_key;
+        break;
+    }
+}
+
+if ($diskKey !== null) {
+    $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
     if (Rrd::checkRrdExists($rrd_filename)) {
-        $point = Rrd::lastUpdate($rrd_filename);
-        $avail = ($point !== null && is_array($point->data ?? null)) ? array_keys($point->data) : [];
-        if ($avail === [] || in_array('media_errors', $avail, true)) {
-            $rrd_list[] = ['filename' => $rrd_filename, 'descr' => 'Media Errors', 'ds' => 'media_errors'];
-        }
-    }
-} else {
-    // SATA: find all attributes whose name contains "error" (case-insensitive)
-    // and plot each as a separate line from the smart RRD.
-    $diskIdx = (string) ($vars['disk'] ?? '');
-    $mibDiskIndex = static fn (string $key): string => substr((string) preg_replace('/[^a-zA-Z0-9_\-]/', '_', $key), 0, 80);
+        $avail = Rrd::listDatasets($rrd_filename);
 
-    $diskKey = null;
-    foreach (DB::table('smart_devices')->where('app_id', $app->app_id)->get(['disk_key']) as $row) {
-        if ($mibDiskIndex($row->disk_key) === $diskIdx) {
-            $diskKey = $row->disk_key;
-            break;
-        }
-    }
+        $errorAttrs = DB::table('smart_sata_attributes')
+            ->where('app_id', $app->app_id)
+            ->where('disk_key', $diskKey)
+            ->whereRaw('LOWER(name) LIKE ?', ['%error%'])
+            ->orderBy('attribute_id')
+            ->get(['attribute_id', 'name']);
 
-    if ($diskKey !== null) {
-        $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
-        if (Rrd::checkRrdExists($rrd_filename)) {
-            $avail = Rrd::listDatasets($rrd_filename);
-
-            $errorAttrs = DB::table('smart_sata_attributes')
-                ->where('app_id', $app->app_id)
-                ->where('disk_key', $diskKey)
-                ->whereRaw('LOWER(name) LIKE ?', ['%error%'])
-                ->orderBy('attribute_id')
-                ->get(['attribute_id', 'name']);
-
-            foreach ($errorAttrs as $attr) {
-                $dsBase = 'id' . (int) $attr->attribute_id;
-                $dsHi   = $dsBase . 'Hi';
-                if ($avail !== []) {
-                    if (in_array($dsBase, $avail, true)) {
-                        $ds = $dsBase;
-                    } elseif (in_array($dsHi, $avail, true)) {
-                        $ds = $dsHi;
-                    } else {
-                        continue;
-                    }
-                } else {
+        foreach ($errorAttrs as $attr) {
+            $dsBase = 'id' . (int) $attr->attribute_id;
+            $dsHi   = $dsBase . 'Hi';
+            if ($avail !== []) {
+                if (in_array($dsBase, $avail, true)) {
                     $ds = $dsBase;
+                } elseif (in_array($dsHi, $avail, true)) {
+                    $ds = $dsHi;
+                } else {
+                    continue;
                 }
-                $rrd_list[] = [
-                    'filename' => $rrd_filename,
-                    'descr'    => str_replace('_', ' ', (string) $attr->name),
-                    'ds'       => $ds,
-                ];
+            } else {
+                $ds = $dsBase;
             }
+            $rrd_list[] = [
+                'filename' => $rrd_filename,
+                'descr'    => str_replace('_', ' ', (string) $attr->name),
+                'ds'       => $ds,
+            ];
         }
     }
 }

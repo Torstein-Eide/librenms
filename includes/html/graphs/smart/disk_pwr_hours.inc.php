@@ -1,12 +1,12 @@
 <?php
 
-// Power-on hours: NVMe via smart_nvme/pwr_hours DS; SATA via smart/id9 DS (ATA attribute 9).
+// Power-on hours: SATA via smart/id9 DS (ATA attribute 9). NVMe's equivalent
+// is the 'pwr_hours' metric on nvme_attr_value.inc.php.
 
 use App\Facades\Rrd;
 
-$isNvme = ($vars['rrd'] ?? '') === 'smart_nvme';
-$rrd_filename = Rrd::name($device['hostname'], ['app', $isNvme ? 'smart_nvme' : 'smart', $app->app_id, $vars['disk']]);
-$ds = $isNvme ? 'pwr_hours' : 'id9';
+$rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
+$ds = 'id9';
 
 $name = 'smart';
 $unit_text = 'h';
