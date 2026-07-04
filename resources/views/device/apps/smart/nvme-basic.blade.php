@@ -147,11 +147,14 @@
             };
             // Wraps $content (label text, value badge, or the mini graph image) in
             // the same hover-preview link that points at the sensor's graph.
-            $sensorGraphLink = static function ($s, string $content) use ($graphPopup, $popupTitle, $disk): string {
-                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], $content, $popupTitle($disk, $s->sensor_descr, $s->formatValue()));
+            // sensor_descr already carries the "SMART {model} {serial} ({drive})"
+            // identity prefix $popupTitle() itself adds -- shortSensorName() strips
+            // it back off so the popup title doesn't repeat it twice.
+            $sensorGraphLink = static function ($s, string $content) use ($graphPopup, $popupTitle, $data, $disk): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], $content, $popupTitle($disk, $data->shortSensorName($s, $disk), $s->formatValue()));
             };
-            $sensorMini = static function ($s) use ($graphPopup, $popupTitle, $disk): string {
-                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], null, $popupTitle($disk, $s->sensor_descr, $s->formatValue()));
+            $sensorMini = static function ($s) use ($graphPopup, $popupTitle, $data, $disk): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], null, $popupTitle($disk, $data->shortSensorName($s, $disk), $s->formatValue()));
             };
             $rowOpenTag = static function (string $link): string {
                 return $link !== ''
