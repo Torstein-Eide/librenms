@@ -64,6 +64,7 @@ class Common extends Application
      * no name available, so it can only apply this ID-keyed part).
      */
     public const ATA_COUNTER_ATTRS = [
+        5   => 'Reallocated_Sector_Ct',
         179 => 'Used_Rsvd_Blk_Cnt_Tot',
         180 => 'Unused_Rsvd_Blk_Cnt_Tot',
         241 => 'Total_LBAs_Written',

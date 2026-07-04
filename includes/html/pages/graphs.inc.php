@@ -232,6 +232,10 @@ if (! $auth) {
         echo ' | To show trend, set to future date';
     }
 
+    if (str_contains((string) $vars['type'], 'smart_sata_attr_value') || str_contains((string) $vars['type'], 'smart_sata_attr_div')) {
+        echo ' | To show trend/forecast, set to future date';
+    }
+
     echo '</center>';
 
     echo generate_graph_js_state($graph_array);

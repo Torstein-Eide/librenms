@@ -4,8 +4,10 @@ namespace LibreNMS\Agent\Module\Smart\Handler;
 
 use App\Facades\LibrenmsConfig;
 use App\Models\Device;
+use App\Models\Eventlog;
 use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use LibreNMS\Agent\Module\Smart\ChangeTracker;
 use LibreNMS\Agent\Module\Smart\Common;
 use LibreNMS\Agent\Module\Smart\Context;
@@ -14,10 +16,12 @@ use LibreNMS\Agent\Module\Smart\Support\AttributeRateTracker;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Agent\Module\Smart\Support\DevStatRrdCatalog;
 use LibreNMS\Agent\Module\Smart\Support\ExtraDevStatSetting;
+use LibreNMS\Agent\Module\Smart\Support\HwForecastSetting;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
 use LibreNMS\Agent\Module\Smart\Support\SnmpDecode as SmartSnmpDecode;
 use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
+use LibreNMS\Exceptions\RrdException;
 use LibreNMS\RRD\RrdDefinition;
 use LibreNMS\Util\Debug;
 use LibreNMS\Util\SnmpDecode;
@@ -102,6 +106,8 @@ final class SataHandler implements DiskTypeHandler
                 $this->syncSataAttributeRates($dev, $this->sataAttributes[$devIdx]);
             }
             $this->reconcileSataDeviceRrds($dev, $this->sataAttributes[$devIdx] ?? []);
+            $hwForecastEnabled = HwForecastSetting::resolve($this->ctx->appId);
+            $this->reconcileHwForecastRra($dev, $hwForecastEnabled);
         }
 
         // Change-guarded tables (per device):
@@ -461,13 +467,59 @@ final class SataHandler implements DiskTypeHandler
         // DS reconciliation (retrofitting power_state/attribute/dev-stat DS onto
         // older files) is a discovery concern, handled by reconcileSataDeviceRrds();
         // new files get every DS at create time from $rrd_def. No tune at poll time.
-        app('Datastore')->put($this->ctx->deviceArray, 'app', [
+        $hwForecastEnabled = HwForecastSetting::resolve($this->ctx->appId);
+        $meta = [
             'name'                => 'smart',
             'app_id'              => $this->ctx->appId,
             'rrd_def'             => $rrd_def,
             'rrd_name'            => $rrdName,
             'rrd_update_template' => true,
-        ], $fields);
+        ];
+        if ($hwForecastEnabled) {
+            $meta['rrd_rra'] = $this->hwForecastRra();
+        }
+        app('Datastore')->put($this->ctx->deviceArray, 'app', $meta, $fields);
+    }
+
+    /**
+     * RRA list for a disk's per-disk RRD file when Holt-Winters forecasting is
+     * enabled: the same AVERAGE/MIN/MAX/LAST RRAs as the global `rrd_rra`
+     * default, plus HWPREDICT (rrdtool auto-derives
+     * SEASONAL/DEVSEASONAL/DEVPREDICT/FAILURES from it). This RRA list is
+     * file-wide -- every DS in the file (normalized values, power_state,
+     * dev-stat counters, not just raw attribute values) gets it, since
+     * RRDtool RRAs are not per-DS. MIN/MAX/LAST are required here (not just
+     * for parity with the default): other SMART graphs DEF against them
+     * directly (e.g. disk_power_state.inc.php's power_state:MIN/:MAX,
+     * disk_lba_units.inc.php's SATA read/write :MAX), and rrdtool graph
+     * errors at render time if a DEF's consolidation function has no
+     * matching RRA in the file. See HwForecastSetting for the enable/disable
+     * gate.
+     */
+    private function hwForecastRra(): array
+    {
+        // Seasonal period = one day's worth of steps; HWPREDICT rows cover ~30 days
+        // of history (288 steps/day * 30 = 8640 rows at the default 300s step).
+        $step = (int) LibrenmsConfig::get('rrd.step', 300);
+        $seasonalPeriod = max(1, (int) round(86400 / $step));
+        $rows = $seasonalPeriod * 30;
+
+        return [
+            'RRA:AVERAGE:0.5:1:2016',
+            'RRA:AVERAGE:0.5:6:1440',
+            'RRA:AVERAGE:0.5:24:1440',
+            'RRA:AVERAGE:0.5:288:1440',
+            'RRA:MIN:0.5:1:2016',
+            'RRA:MIN:0.5:6:1440',
+            'RRA:MIN:0.5:24:1440',
+            'RRA:MIN:0.5:288:1440',
+            'RRA:MAX:0.5:1:2016',
+            'RRA:MAX:0.5:6:1440',
+            'RRA:MAX:0.5:24:1440',
+            'RRA:MAX:0.5:288:1440',
+            'RRA:LAST:0.5:1:2016',
+            "RRA:HWPREDICT:{$rows}:0.1:0.0035:{$seasonalPeriod}",
+        ];
     }
 
     /**
@@ -1196,6 +1248,60 @@ final class SataHandler implements DiskTypeHandler
         }
 
         $rrd->addDatasetsFromConfig($rrdFile, $this->devStatCatalog);
+    }
+
+    /**
+     * Detection (not automatic action) for the HW-forecast RRA merge:
+     *  - If forecasting is enabled but this disk's existing per-disk RRD file
+     *    predates the setting (no HWPREDICT RRA - RRAs can't be added via
+     *    tune), log an Eventlog notice telling the admin to delete the file
+     *    manually so the next poll's Datastore->put() recreates it fresh
+     *    with the HWPREDICT-inclusive RRA list. Deleting the file loses its
+     *    entire existing history (every RRA, not just one poll cycle) -
+     *    that's a decision left to the admin, not made automatically here.
+     *  - Toggling forecasting OFF is left alone: the extra HWPREDICT RRA is
+     *    harmless to keep, and forcibly stripping it would be pointless data
+     *    loss for no functional gain.
+     *  - Any leftover `_hw`-suffixed RRD file from the pre-merge dedicated-file
+     *    layout is flagged the same way, for manual cleanup.
+     */
+    private function reconcileHwForecastRra(array $dev, bool $hwForecastEnabled): void
+    {
+        $idx = DiskIdentity::index($dev['disk_key']);
+        $rrd = app(Rrd::class);
+
+        $rrdFile = $rrd->name($this->ctx->device->hostname, ['app', 'smart', $this->ctx->appId, $idx]);
+        if ($hwForecastEnabled && $rrd->checkRrdExists($rrdFile)) {
+            try {
+                $hasHwRra = $rrd->hasRraConsolidationFunction($rrdFile, 'HWPREDICT');
+            } catch (RrdException $e) {
+                // A failed/timed-out check is not the same as "no HWPREDICT RRA" - don't
+                // raise a false migration notice off an inconclusive check.
+                Log::warning("SMART HW-forecast RRA check failed for $rrdFile: " . $e->getMessage());
+                $hasHwRra = true;
+            }
+            if (! $hasHwRra) {
+                Eventlog::log(
+                    "SMART: $rrdFile predates Holt-Winters forecasting and has no HWPREDICT RRA. " .
+                    'Delete this file manually to let it be recreated with forecasting enabled ' .
+                    '(this will lose its existing history).',
+                    $this->ctx->device,
+                    'poller',
+                    Severity::Warning
+                );
+            }
+        }
+
+        $legacyHwFile = $rrd->name($this->ctx->device->hostname, ['app', 'smart', $this->ctx->appId, $idx . '_hw']);
+        if ($rrd->checkRrdExists($legacyHwFile)) {
+            Eventlog::log(
+                "SMART: leftover forecast RRD $legacyHwFile from the old dedicated-file layout is no longer used. " .
+                'Delete it manually to clean up.',
+                $this->ctx->device,
+                'poller',
+                Severity::Notice
+            );
+        }
     }
 
     /**

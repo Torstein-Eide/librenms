@@ -1036,9 +1036,9 @@ class HtmlData
     // -------------------------------------------------------------------------
 
     /** Datasets present in the per-disk attribute RRD (['app','smart',app_id,idx]). */
-    private function rrdDatasets(string $diskKey, string $rrdName = 'smart'): array
+    private function rrdDatasets(string $diskKey, string $rrdName = 'smart', string $suffix = ''): array
     {
-        $rrdFile = Rrd::name((string) ($this->device['hostname'] ?? ''), ['app', $rrdName, $this->app->app_id, $this->diskIndex($diskKey)]);
+        $rrdFile = Rrd::name((string) ($this->device['hostname'] ?? ''), ['app', $rrdName, $this->app->app_id, $this->diskIndex($diskKey) . $suffix]);
         if (! Rrd::checkRrdExists($rrdFile)) {
             return [];
         }

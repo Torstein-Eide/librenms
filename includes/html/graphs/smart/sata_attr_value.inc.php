@@ -5,6 +5,7 @@ use App\Facades\Rrd;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Exceptions\RrdGraphException;
 use LibreNMS\Util\Number;
+use LibreNMS\Util\RrdTrendForecast;
 
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
 $attrId = isset($vars['attr_id']) ? (int) $vars['attr_id'] : 0;
@@ -402,4 +403,28 @@ if ($hasDiv) {
     $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
     $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
     $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
+}
+
+/**
+ * Trend/forecast overlay, plotted only for the single-raw-value branches above
+ * (plain id{N}/id{N}Normalized) -- the div/multi-part formats plot several
+ * independent counters with no single "the" raw value to project. Excludes the
+ * temperature attributes (194/190), which have their own dedicated graph (see
+ * HwForecastSetting's "except temperature" behavior). Shown when the graph's
+ * end time extends into the future (same convention as the sensor and
+ * port_bits graphs -- see includes/html/pages/graphs.inc.php's "set to future
+ * date" hint), not behind a separate UI toggle.
+ *
+ * Delegates the HWPREDICT-vs-linear-fallback decision entirely to
+ * RrdTrendForecast::append() -- see that class for details. $threshRawValue
+ * converts the SMART attribute's normalized-scale threshold into the raw
+ * scale actually being graphed here, which only the linear fallback path
+ * uses (for a "days until threshold" estimate).
+ */
+if ($to > time() && $hasRaw && ! $hasDiv && $partSuffixes === [] && ! in_array($attrId, [194, 190], true)) {
+    $threshRawValue = is_numeric($thresh)
+        ? (($hasNormalized && $rawMax !== null && $rawMax > 0) ? (float) $thresh * $rawMax / $normMax : (float) $thresh)
+        : null;
+
+    RrdTrendForecast::append($rrd_options, $rrd_filename, $dsRaw, 'hw', $rateMultiplier, $graph_params->from, $graph_params->to, '#ff6600', $threshRawValue);
 }

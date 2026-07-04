@@ -38,10 +38,12 @@ use LibreNMS\Exceptions\RrdFileExistsException;
 use LibreNMS\Exceptions\RrdGraphException;
 use LibreNMS\Exceptions\RrdNotFoundException;
 use LibreNMS\Exceptions\RrdStoreException;
+use LibreNMS\Exceptions\RrdUnknownException;
 use LibreNMS\RRD\RrdProcess;
 use LibreNMS\Util\Debug;
 use LibreNMS\Util\Rewrite;
 use SimpleXMLElement;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Exception\RuntimeException as ProcessRuntimeException;
 use Symfony\Component\Process\Process;
 
@@ -159,7 +161,8 @@ class Rrd extends BaseDatastore
                 $this->update($rrd, $fields, ! empty($meta['rrd_update_template']) ? array_keys($fields) : null);
             } catch (RrdNotFoundException) {
                 if (isset($rrd_def)) {
-                    $this->command('create', $rrd, ['--step', $step, ...$rrd_def->getArguments(), ...$this->rra]);
+                    $rra = $meta['rrd_rra'] ?? $this->rra;
+                    $this->command('create', $rrd, ['--step', $step, ...$rrd_def->getArguments(), ...$rra]);
                     $this->update($rrd, $fields, ! empty($meta['rrd_update_template']) ? array_keys($fields) : null);
                 }
             }
@@ -249,6 +252,31 @@ class Rrd extends BaseDatastore
     }
 
     /**
+     * True if the RRD file has at least one RRA using consolidation function $cf (e.g. 'HWPREDICT').
+     *
+     * @throws RrdException if `rrdtool info` times out or exits non-zero. Callers that gate a
+     *     destructive action (e.g. deleting a file) on this result must catch and treat a failed
+     *     check as "unknown", not as "RRA not present" -- the two are not equivalent.
+     */
+    public function hasRraConsolidationFunction(string $filename, string $cf): bool
+    {
+        $process = new Process([$this->rrdtool_executable, 'info', $filename]);
+        $process->setTimeout(10);
+
+        try {
+            $process->run();
+        } catch (ProcessTimedOutException $e) {
+            throw new RrdUnknownException("rrdtool info timed out for $filename: " . $e->getMessage());
+        }
+
+        if (! $process->isSuccessful()) {
+            throw new RrdUnknownException("rrdtool info failed for $filename: " . $process->getErrorOutput());
+        }
+
+        return (bool) preg_match('/^rra\[\d+\]\.cf = "' . preg_quote($cf, '/') . '"$/m', $process->getOutput());
+    }
+
+    /**
      * Add one or more datasets to an existing RRD file via rrdtool tune.
      *
      * Usage:
@@ -265,11 +293,14 @@ class Rrd extends BaseDatastore
     public function addDatasets(string $filename, array $datasets): bool
     {
         $existing = array_flip($this->listDatasets($filename));
+        Log::debug("RRD addDatasets: $filename existing DS [" . implode(',', array_keys($existing)) . ']');
         $options = [];
 
         foreach ($datasets as $dataset) {
             $name = $dataset['name'] ?? '';
             if (! preg_match('/^[a-zA-Z0-9_]{1,19}$/', (string) $name)) {
+                Log::debug("RRD addDatasets: $filename skipping '$name' (invalid name)");
+
                 continue;
             }
 
@@ -279,11 +310,15 @@ class Rrd extends BaseDatastore
 
             $type = strtoupper((string) ($dataset['type'] ?? ''));
             if (! in_array($type, ['GAUGE', 'COUNTER', 'DERIVE', 'ABSOLUTE'], true)) {
+                Log::debug("RRD addDatasets: $filename skipping '$name' (invalid type '$type')");
+
                 continue;
             }
 
             $heartbeat = (int) ($dataset['heartbeat'] ?? 0);
             if ($heartbeat < 1) {
+                Log::debug("RRD addDatasets: $filename skipping '$name' (invalid heartbeat '$heartbeat')");
+
                 continue;
             }
 
@@ -294,8 +329,12 @@ class Rrd extends BaseDatastore
         }
 
         if (empty($options)) {
+            Log::debug("RRD addDatasets: $filename nothing new to add");
+
             return true;
         }
+
+        Log::debug("RRD addDatasets: $filename tune options [" . implode(',', $options) . ']');
 
         try {
             $output = $this->command('tune', $filename, $options);
@@ -304,6 +343,8 @@ class Rrd extends BaseDatastore
 
             return false;
         }
+
+        Log::debug("RRD addDatasets: $filename tune output: $output");
 
         return ! str_contains($output, 'ERROR');
     }
@@ -326,6 +367,8 @@ class Rrd extends BaseDatastore
 
         foreach ($config as $name => $dataset) {
             if (! is_array($dataset)) {
+                Log::debug("RRD addDatasetsFromConfig: $filename skipping config entry '$name' (not an array)");
+
                 continue;
             }
 
@@ -335,6 +378,8 @@ class Rrd extends BaseDatastore
 
             $datasets[] = $dataset;
         }
+
+        Log::debug("RRD addDatasetsFromConfig: $filename requested [" . implode(',', array_column($datasets, 'name')) . ']');
 
         if (empty($datasets)) {
             return true;

@@ -138,6 +138,9 @@
     $appGraph('disk_diskio', 'Disk I/O', $anchorPrefix . 'diskio');
 
     // Per-attribute graphs with a "Scale from zero" toggle (id 9 is shown above as Power-on Hours).
+    // Forecast/trend overlay is not a UI toggle here -- like sensor/port_bits graphs,
+    // it shows automatically when the graph's end time extends into the future
+    // (see includes/html/pages/graphs.inc.php's "set to future date" hint).
     $attrSpecs = array_filter($specs, static fn ($spec) => $spec['id'] !== 9);
     if ($attrSpecs !== []) {
         $wrapperId = 'smart-attr-graphs-' . htmlspecialchars($idx);
@@ -154,7 +157,7 @@ function smartAttrScaleToggle(cb, wrapperId) {
 </script>';
         echo '<a id="' . $anchorPrefix . 'attributes" style="position:relative;top:-70px;display:block;visibility:hidden"></a>';
         echo '<h4 style="margin:20px 0 8px;border-bottom:1px solid #ddd;padding-bottom:6px">Attributes'
-            . '<label style="float:right;font-size:13px;font-weight:normal;margin-bottom:0;cursor:pointer">'
+            . '<label style="float:right;font-size:13px;font-weight:normal;margin-bottom:0;cursor:pointer;margin-left:14px">'
             . '<input type="checkbox" id="' . $toggleId . '" checked onchange="smartAttrScaleToggle(this,\'' . $wrapperId . '\')"> Scale from zero</label></h4>';
         echo '<div id="' . $wrapperId . '">';
         foreach ($attrSpecs as $spec) {

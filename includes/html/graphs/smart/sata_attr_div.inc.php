@@ -3,6 +3,7 @@
 use App\Facades\LibrenmsConfig;
 use App\Facades\Rrd;
 use LibreNMS\Exceptions\RrdGraphException;
+use LibreNMS\Util\RrdTrendForecast;
 
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
 $attrId = isset($vars['attr_id']) ? (int) $vars['attr_id'] : 0;
@@ -134,6 +135,15 @@ $rrd_options[] = 'LINE1.5:div#9a9aff:Div         ';
 $rrd_options[] = 'GPRINT:div:LAST:%8.1lf';
 $rrd_options[] = 'GPRINT:div:MIN:%8.1lf';
 $rrd_options[] = 'GPRINT:div:MAX:%8.1lf\l';
+
+// Trend/forecast overlay for Hi only -- it's the counter that actually grows
+// toward a failure threshold; Div is a ratio, not a magnitude to project. Shown
+// when the graph's end time extends into the future (same convention as the
+// sensor/port_bits graphs). See RrdTrendForecast for the HWPREDICT-vs-linear
+// fallback logic.
+if ($to > time()) {
+    RrdTrendForecast::append($rrd_options, $rrd_filename, $dsHi, 'hw', $rateMultiplier, $graph_params->from, $graph_params->to);
+}
 
 $graph_params->scale_max = (int) ceil($leftMax);
 $graph_params->scale_rigid = true;
