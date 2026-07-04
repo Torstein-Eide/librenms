@@ -129,7 +129,7 @@
             $luBadge = $luParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $luParts)) . '</span>' : '';
 
             $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>LBAs Written/Read', $luBadge);
-            echo $graphPopup('smart_disk_lba_units', ['id' => $data->app->app_id, 'disk' => $idx], $luGraph, $device['hostname'] . ' - LBAs Written/Read');
+            echo $graphPopup('smart_disk_lba_units', ['id' => $data->app->app_id, 'disk' => $idx], $luGraph, $popupTitle($disk, 'LBAs Written/Read', $luParts !== [] ? implode(' / ', $luParts) : null));
             $panelEnd();
         @endphp
         @else
@@ -169,7 +169,7 @@
             $dioBadge = $dioParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $dioParts)) . '</span>' : '';
 
             $panelStart('<i class="fa fa-exchange" style="margin-right:6px"></i>Disk I/O', $dioBadge);
-            echo $graphPopup('smart_disk_diskio', ['id' => $data->app->app_id, 'disk' => $idx], $dioGraph, $device['hostname'] . ' - Disk I/O');
+            echo $graphPopup('smart_disk_diskio', ['id' => $data->app->app_id, 'disk' => $idx], $dioGraph, $popupTitle($disk, 'Disk I/O', $dioParts !== [] ? implode(' / ', $dioParts) : null));
             $panelEnd();
         @endphp
         @endif
@@ -215,11 +215,11 @@
 
             // Wraps $content (label text, value badge, or the mini graph image) in
             // the same hover-preview link that points at the sensor's graph.
-            $sensorGraphLink = static function ($s, string $content) use ($graphPopup, $device): string {
-                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], $content, $device['hostname'] . ' - ' . $s->sensor_descr);
+            $sensorGraphLink = static function ($s, string $content) use ($graphPopup, $popupTitle, $disk): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], $content, $popupTitle($disk, $s->sensor_descr, $s->formatValue()));
             };
-            $sensorMini = static function ($s) use ($graphPopup, $device): string {
-                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], null, $device['hostname'] . ' - ' . $s->sensor_descr);
+            $sensorMini = static function ($s) use ($graphPopup, $popupTitle, $disk): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], null, $popupTitle($disk, $s->sensor_descr, $s->formatValue()));
             };
 
             // All disk sensors, status (state) sensors first.
@@ -248,7 +248,7 @@
             if (($disk['power_state'] ?? null) !== null) {
                 $powerState = $data->decode('power_state', $disk['power_state']);
                 $powerStateVars = ['id' => $data->app->app_id, 'disk' => $idx];
-                $powerStateTitle = $device['hostname'] . ' - Power State';
+                $powerStateTitle = $popupTitle($disk, 'Power State', $powerState);
                 $powerStateLabel = $graphPopup('smart_disk_power_state', $powerStateVars, $labelWithTooltip('Power State', $tooltipForLabel('Power State')), $powerStateTitle);
                 $powerStateMini = $graphPopup('smart_disk_power_state', $powerStateVars, null, $powerStateTitle);
                 $powerStateValue = $graphPopup('smart_disk_power_state', $powerStateVars, htmlspecialchars($powerState), $powerStateTitle);
@@ -501,7 +501,7 @@
                 'smart_sata_attr_value',
                 ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'rate_unit' => $attr['rate_unit'] ?? ''],
                 null,
-                $device['hostname'] . ' - ' . $name,
+                $popupTitle($disk, $name, $rawDisp),
                 60,
                 15,
                 $attrFrom
@@ -517,7 +517,7 @@
                 'smart_sata_attr_div',
                 ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'rate_unit' => $attr['rate_unit'] ?? ''],
                 null,
-                $device['hostname'] . ' - ' . $name . ' (Hi/Lo)',
+                $popupTitle($disk, $name . ' (Hi/Lo)', $rawDisp),
                 60,
                 15,
                 $attrFrom

@@ -104,7 +104,7 @@
             $duBadge = $duParts !== [] ? '<span class="text-muted">' . htmlspecialchars(implode(' / ', $duParts)) . '</span>' : '';
 
             $panelStart('<i class="fa fa-database" style="margin-right:6px"></i>LBAs Written/Read', $duBadge);
-            echo $graphPopup('smart_disk_lba_units', ['id' => $data->app->app_id, 'rrd' => 'smart_nvme', 'disk' => $disk['idx']], $duGraph, $device['hostname'] . ' - LBAs Written/Read');
+            echo $graphPopup('smart_disk_lba_units', ['id' => $data->app->app_id, 'rrd' => 'smart_nvme', 'disk' => $disk['idx']], $duGraph, $popupTitle($disk, 'LBAs Written/Read', $duParts !== [] ? implode(' / ', $duParts) : null));
             $panelEnd();
         @endphp
     </div>
@@ -147,11 +147,11 @@
             };
             // Wraps $content (label text, value badge, or the mini graph image) in
             // the same hover-preview link that points at the sensor's graph.
-            $sensorGraphLink = static function ($s, string $content) use ($graphPopup, $device): string {
-                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], $content, $device['hostname'] . ' - ' . $s->sensor_descr);
+            $sensorGraphLink = static function ($s, string $content) use ($graphPopup, $popupTitle, $disk): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], $content, $popupTitle($disk, $s->sensor_descr, $s->formatValue()));
             };
-            $sensorMini = static function ($s) use ($graphPopup, $device): string {
-                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], null, $device['hostname'] . ' - ' . $s->sensor_descr);
+            $sensorMini = static function ($s) use ($graphPopup, $popupTitle, $disk): string {
+                return $graphPopup('sensor_' . $s->sensor_class, ['id' => $s->sensor_id], null, $popupTitle($disk, $s->sensor_descr, $s->formatValue()));
             };
             $rowOpenTag = static function (string $link): string {
                 return $link !== ''
@@ -187,17 +187,19 @@
                 ]);
             };
             // Wraps $content (label text, value badge, or the mini graph image) in
-            // the same hover-preview link that points at the stat's graph.
-            $statGraphLink = static function (string $ds, ?string $content) use ($graphPopup, $data, $disk, $device, $dsToType): string {
+            // the same hover-preview link that points at the stat's graph. $label/$value
+            // are the human-readable name and formatted current value (from $statRows
+            // below), not the raw $ds key.
+            $statGraphLink = static function (string $ds, ?string $content, string $label, ?string $value) use ($graphPopup, $data, $disk, $popupTitle, $dsToType): string {
                 $type = $dsToType[$ds] ?? null;
                 if ($type === null) { return $content ?? ''; }
 
-                return $graphPopup('smart_' . $type, ['id' => $data->app->app_id, 'disk' => $disk['idx']], $content, $device['hostname'] . ' - ' . $ds);
+                return $graphPopup('smart_' . $type, ['id' => $data->app->app_id, 'disk' => $disk['idx']], $content, $popupTitle($disk, $label, $value));
             };
-            $nvMetricGraph = static function (string $ds) use ($statGraphLink, $dsToType): string {
+            $nvMetricGraph = static function (string $ds, string $label, ?string $value) use ($statGraphLink, $dsToType): string {
                 if (($dsToType[$ds] ?? null) === null) { return ''; }
 
-                return $statGraphLink($ds, null);
+                return $statGraphLink($ds, null, $label, $value);
             };
 
             $nvTips = [
@@ -238,10 +240,10 @@
                     : htmlspecialchars($label);
                 $valueCell = '<span class="label label-default">' . htmlspecialchars($value) . '</span>';
                 if ($ds !== null) {
-                    $nameCell = $statGraphLink($ds, $nameCell);
-                    $valueCell = $statGraphLink($ds, $valueCell);
+                    $nameCell = $statGraphLink($ds, $nameCell, $label, $value);
+                    $valueCell = $statGraphLink($ds, $valueCell, $label, $value);
                 }
-                $graphCell = $ds !== null ? $nvMetricGraph($ds) : '';
+                $graphCell = $ds !== null ? $nvMetricGraph($ds, $label, $value) : '';
                 echo $rowOpenTag($ds !== null ? $statLink($ds) : '')
                     . '<td style="white-space:nowrap"><i class="fa fa-line-chart text-muted" style="margin-right:6px"></i>' . $nameCell . '</td>'
                     . '<td style="width:110px">' . $graphCell . '</td>'

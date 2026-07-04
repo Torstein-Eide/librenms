@@ -81,6 +81,24 @@
             </x-popup>
             BLADE, compact('content', 'type', 'vars', 'popupTitle', 'width', 'height', 'from'));
     };
+    // Consistent "$hostname, $model $serial ($drive) - $label - Current: $value" title
+    // for $graphPopup()'s title slot across every SMART popup (rendered via {{ }}, so
+    // it must stay plain text - see components/popup.blade.php). $label/$value are
+    // optional so callers without a natural "current value" (e.g. a bare identity
+    // popup) can omit either.
+    $popupTitle = static function (array $disk, string $label = '', ?string $value = null) use ($device, $data): string {
+        $identity = trim((string) ($disk['model_name'] ?? '') . ' ' . (string) ($disk['serial_number'] ?? ''));
+        $identity = $identity !== '' ? $identity : $data->deviceLabel($disk);
+        $title = $device['hostname'] . ', ' . $identity . ' (' . $data->deviceLabel($disk) . ')';
+        if ($label !== '') {
+            $title .= ' - ' . $label;
+        }
+        if ($value !== null && $value !== '') {
+            $title .= ' - Current: ' . $value;
+        }
+
+        return $title;
+    };
     $tableRow = static function (string $label, string $value, string $tooltip = ''): string {
         $labelHtml = $tooltip !== ''
             ? '<abbr style="cursor:help;text-decoration:underline dotted" title="' . htmlspecialchars($tooltip, ENT_QUOTES) . '">' . htmlspecialchars($label) . '</abbr>'
