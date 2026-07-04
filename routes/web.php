@@ -190,7 +190,6 @@ Route::middleware(['auth'])->group(function (): void {
         Route::get('apps/smart/compare', [Device\Apps\SmartController::class, 'compare'])->name('apps.smart.compare');
         Route::get('apps/smart/graphs', [Device\Apps\SmartController::class, 'graphs'])->name('apps.smart.graphs');
         Route::get('apps/smart/settings', [Device\Apps\SmartAttributeSettingsController::class, 'index'])->name('apps.smart.settings');
-        Route::get('apps/smart/settings/naming', [Device\Apps\SmartAttributeSettingsController::class, 'naming'])->name('apps.smart.settings.naming');
         Route::post('apps/smart/settings/field', [Device\Apps\SmartAttributeSettingsController::class, 'updateField'])->name('apps.smart.settings.field');
         Route::post('apps/smart/settings/reset', [Device\Apps\SmartAttributeSettingsController::class, 'reset'])->name('apps.smart.settings.reset');
         Route::post('apps/smart/settings/copy-default', [Device\Apps\SmartAttributeSettingsController::class, 'copyRowToDefault'])->name('apps.smart.settings.copy_default');

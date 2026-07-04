@@ -37,6 +37,16 @@ class SmartAttributeSettingsController
     /** Placeholder variables accepted in a naming template; anything else is rejected. */
     private const NAMING_TEMPLATE_VARS = ['device', 'model', 'serial', 'wwn', 'model_family'];
 
+    /**
+     * Common::ATA_COUNTER_ATTRS entries that are genuine failure indicators
+     * (not workload/wear stats like Total_LBAs_Written/NAND_Writes), so they
+     * belong on this rate-of-change settings page despite smartctl reporting
+     * them with the "_Ct"/"_Cnt" abbreviation rather than "_Count" in their
+     * name -- the LOWER(name) LIKE '%count%' heuristic below would otherwise
+     * silently drop them.
+     */
+    private const FAILURE_INDICATOR_COUNTER_IDS = [5]; // Reallocated_Sector_Ct
+
     public function index(Device $device, Request $request): View
     {
         $this->authorize('update', $device);
@@ -47,16 +57,21 @@ class SmartAttributeSettingsController
         $appId = $app?->app_id;
 
         // Rate-of-change thresholds only make sense for the newly-detected
-        // ("Count" in the name) COUNTER attributes. These are failure-style
-        // counters (e.g. Reallocated_Event_Count). GAUGE attributes have no
-        // rate semantics, and the legacy fixed-list counters (Common::
-        // ATA_COUNTER_ATTRS: Total_LBAs_Written, NAND_Writes, etc.) are
-        // workload/wear statistics that grow during normal use, not failure
-        // indicators, so both are excluded from this settings page.
+        // ("Count" in the name) COUNTER attributes, plus the handful of
+        // FAILURE_INDICATOR_COUNTER_IDS above whose name doesn't literally say
+        // "Count". These are failure-style counters (e.g. Reallocated_Event_Count,
+        // Reallocated_Sector_Ct). GAUGE attributes have no rate semantics, and
+        // the rest of the legacy fixed-list counters (Common::ATA_COUNTER_ATTRS:
+        // Total_LBAs_Written, NAND_Writes, etc.) are workload/wear statistics
+        // that grow during normal use, not failure indicators, so both are
+        // excluded from this settings page.
         $rows = $appId === null ? collect() : DB::table('smart_sata_attributes')
             ->where('app_id', $appId)
             ->where('rrd_type', 'COUNTER')
-            ->whereRaw('LOWER(name) LIKE ?', ['%count%'])
+            ->where(function ($query) {
+                $query->whereRaw('LOWER(name) LIKE ?', ['%count%'])
+                    ->orWhereIn('attribute_id', self::FAILURE_INDICATOR_COUNTER_IDS);
+            })
             ->select('disk_key', 'attribute_id', 'name', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h')
             ->distinct()
             ->orderBy('disk_key')
@@ -100,6 +115,12 @@ class SmartAttributeSettingsController
         // app's own heading (smart.blade.php), including the label-mode cookie.
         $diskKeys = $rowDiskKeys;
         $diskLabels = array_combine($rowDiskKeys, $rowDiskKeys);
+        $diskFields = [];
+        $namingTemplate = null;
+        $perDiskTemplates = [];
+        $defaultViewMode = 'basic';
+        $viewModes = [];
+
         if ($app !== null) {
             $htmlData = HtmlData::forDevice($app, $device->toArray());
             $labelCookie = 'smart_label_mode_' . $device->device_id;
@@ -114,13 +135,47 @@ class SmartAttributeSettingsController
                 $disk = $htmlData->disk($diskKey);
                 $diskLabels[$diskKey] = $disk !== null ? $htmlData->displayLabel($disk, $labelMode) : $diskKey;
             }
+
+            // Naming/view-mode partials use the full disk set (including disks
+            // with no thresholds yet), not just $diskKeys above.
+            foreach ($htmlData->diskKeys() as $diskKey) {
+                $disk = $htmlData->disk($diskKey);
+                $diskFields[$diskKey] = $disk !== null ? [
+                    'device' => $htmlData->deviceLabel($disk),
+                    'model' => $htmlData->model($disk),
+                    'serial' => $htmlData->serial($disk),
+                    'wwn' => trim((string) ($disk['wwn'] ?? '')),
+                    'model_family' => trim((string) ($disk['model_family'] ?? '')),
+                ] : [];
+                if (! isset($diskLabels[$diskKey])) {
+                    $diskLabels[$diskKey] = $disk !== null ? $htmlData->displayLabel($disk, $labelMode) : $diskKey;
+                }
+            }
+
+            $namingTemplate = $htmlData->namingTemplate();
+            $perDiskTemplates = $this->perDiskTemplates($appId);
+            $defaultViewMode = $htmlData->defaultViewMode();
+            $viewModes = $htmlData->diskViewModes();
         }
 
-        // Worst-case (max) measured rate per attribute across all disks, so the
-        // "Global Defaults" tab can show what the noisiest disk is doing instead
-        // of hiding its rate columns outright.
+        // Global tab's attribute-defaults table lists every attribute_id ever
+        // discovered on ANY device (not just this one), since the global default
+        // it edits applies install-wide -- an attribute this device has never
+        // seen can still have (or need) a global default. "Max" is the worst-case
+        // measured rate across every disk on every device, so the tab can show
+        // what the noisiest disk anywhere is doing instead of hiding its rate
+        // columns outright.
+        $globalAttributeRows = DB::table('smart_sata_attributes')
+            ->where('rrd_type', 'COUNTER')
+            ->where(function ($query) {
+                $query->whereRaw('LOWER(name) LIKE ?', ['%count%'])
+                    ->orWhereIn('attribute_id', self::FAILURE_INDICATOR_COUNTER_IDS);
+            })
+            ->select('attribute_id', 'name', 'rate_8h', 'rate_24h', 'rate_168h', 'rate_672h')
+            ->get();
+
         $maxRatesByAttribute = [];
-        foreach ($rows as $row) {
+        foreach ($globalAttributeRows as $row) {
             $attributeId = (int) $row->attribute_id;
             foreach (['rate_8h', 'rate_24h', 'rate_168h', 'rate_672h'] as $window) {
                 if (! is_numeric($row->$window)) {
@@ -133,13 +188,10 @@ class SmartAttributeSettingsController
             }
         }
 
-        // Synthetic "Global Defaults" tab: one row per attribute_id (named from
-        // whichever disk row first carried that attribute), editing the
-        // app_id=0/disk_key='' global-default row directly. Its 'rate_*' fields
-        // hold the max across disks (see $maxRatesByAttribute above), not a
-        // per-disk average like the other tabs' 'rate_*' fields do.
-        $attributeNames = $rows->unique('attribute_id')->pluck('name', 'attribute_id');
-        $defaultItems = $attributeNames->map(function ($name, $attributeId) use ($globals, $maxRatesByAttribute) {
+        // One row per attribute_id (named from whichever row first carried that
+        // attribute), editing the app_id=0/disk_key='' global-default row directly.
+        $attributeNames = $globalAttributeRows->unique('attribute_id')->pluck('name', 'attribute_id');
+        $globalDefaultItems = $attributeNames->map(function ($name, $attributeId) use ($globals, $maxRatesByAttribute) {
             $global = $globals[$attributeId] ?? null;
 
             return [
@@ -160,10 +212,16 @@ class SmartAttributeSettingsController
             ];
         })->values()->sortBy('attribute_id')->values();
 
-        if ($defaultItems->isNotEmpty()) {
-            $diskKeys[] = self::GLOBAL_DISK_KEY;
-            $diskLabels[self::GLOBAL_DISK_KEY] = __('Global Defaults');
-            $itemsByDisk[self::GLOBAL_DISK_KEY] = $defaultItems;
+        $logExtraDevStatsGlobal = ExtraDevStatSetting::resolve(self::GLOBAL_SETTINGS_APP_ID);
+        $logExtraDevStatsOverride = null;
+        $enableHwForecastGlobal = HwForecastSetting::resolve(self::GLOBAL_SETTINGS_APP_ID);
+        $enableHwForecastOverride = null;
+
+        if ($appId !== null) {
+            $rawOverride = DB::table('smart_app_settings')->where('app_id', $appId)->value('log_extra_dev_stats');
+            $logExtraDevStatsOverride = $rawOverride === null ? null : (bool) $rawOverride;
+            $rawHwOverride = DB::table('smart_app_settings')->where('app_id', $appId)->value('enable_hw_forecast');
+            $enableHwForecastOverride = $rawHwOverride === null ? null : (bool) $rawHwOverride;
         }
 
         return view('device.apps.smart.settings', [
@@ -172,68 +230,7 @@ class SmartAttributeSettingsController
             'diskKeys' => $diskKeys,
             'diskLabels' => $diskLabels,
             'itemsByDisk' => $itemsByDisk,
-        ]);
-    }
-
-    /** Dedicated sub-page: device-wide + per-disk naming templates, and the default disk-view mode. */
-    public function naming(Device $device, Request $request): View
-    {
-        $this->authorize('update', $device);
-
-        require_once base_path('includes/html/functions.inc.php');
-
-        $app = Application::where('device_id', $device->device_id)->where('app_type', 'smart')->first();
-        $appId = $app?->app_id;
-
-        $diskKeys = [];
-        $diskLabels = [];
-        $diskFields = [];
-        $namingTemplate = null;
-        $perDiskTemplates = [];
-        $defaultViewMode = 'basic';
-        $viewModes = [];
-        $logExtraDevStatsGlobal = ExtraDevStatSetting::resolve(self::GLOBAL_SETTINGS_APP_ID);
-        $logExtraDevStatsOverride = null;
-        $enableHwForecastGlobal = HwForecastSetting::resolve(self::GLOBAL_SETTINGS_APP_ID);
-        $enableHwForecastOverride = null;
-
-        if ($app !== null) {
-            $rawOverride = DB::table('smart_app_settings')->where('app_id', $appId)->value('log_extra_dev_stats');
-            $logExtraDevStatsOverride = $rawOverride === null ? null : (bool) $rawOverride;
-            $rawHwOverride = DB::table('smart_app_settings')->where('app_id', $appId)->value('enable_hw_forecast');
-            $enableHwForecastOverride = $rawHwOverride === null ? null : (bool) $rawHwOverride;
-
-            $htmlData = HtmlData::forDevice($app, $device->toArray());
-            $labelCookie = 'smart_label_mode_' . $device->device_id;
-            $labelModes = $htmlData->labelModes();
-            $labelMode = $request->cookie($labelCookie) !== null && isset($labelModes[$request->cookie($labelCookie)])
-                ? $request->cookie($labelCookie)
-                : 'device';
-
-            $diskKeys = $htmlData->diskKeys();
-            foreach ($diskKeys as $diskKey) {
-                $disk = $htmlData->disk($diskKey);
-                $diskLabels[$diskKey] = $disk !== null ? $htmlData->displayLabel($disk, $labelMode) : $diskKey;
-                $diskFields[$diskKey] = $disk !== null ? [
-                    'device' => $htmlData->deviceLabel($disk),
-                    'model' => $htmlData->model($disk),
-                    'serial' => $htmlData->serial($disk),
-                    'wwn' => trim((string) ($disk['wwn'] ?? '')),
-                    'model_family' => trim((string) ($disk['model_family'] ?? '')),
-                ] : [];
-            }
-
-            $namingTemplate = $htmlData->namingTemplate();
-            $perDiskTemplates = $this->perDiskTemplates($appId);
-            $defaultViewMode = $htmlData->defaultViewMode();
-            $viewModes = $htmlData->diskViewModes();
-        }
-
-        return view('device.apps.smart.settings-naming', [
-            'device' => $device,
-            'appId' => $appId,
-            'diskKeys' => $diskKeys,
-            'diskLabels' => $diskLabels,
+            'globalDefaultItems' => $globalDefaultItems,
             'diskFields' => $diskFields,
             'namingTemplate' => $namingTemplate,
             'perDiskTemplates' => $perDiskTemplates,

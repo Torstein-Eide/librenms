@@ -32,143 +32,42 @@
             </div>
         </div>
 
-        {{-- Optionbar, matching the SMART app's own pagemenu-style navigation. --}}
+        {{-- Optionbar, matching the SMART app's own pagemenu-style navigation. The
+             Device/Global switch below is a client-side Bootstrap tab pair, not a
+             navigation link -- this is one page/route now, not two. --}}
         @php
             print_optionbar_start();
             echo '<a href="' . htmlspecialchars($smartAppHref, ENT_QUOTES) . '">' . __('Overview') . '</a>'
                 . ' | <a href="' . htmlspecialchars(route('device.apps.smart.compare', $device), ENT_QUOTES) . '">' . __('Compare') . '</a>'
                 . ' | <span class="pagemenu-selected">' . __('Settings') . '</span>'
-                . '<br>&nbsp;&nbsp; ' . __('Setting') . ': <span class="pagemenu-selected">' . __('Attribute Warning Thresholds') . '</span>'
-                . ' | <a href="' . htmlspecialchars(route('device.apps.smart.settings.naming', $device), ENT_QUOTES) . '">' . __('Disk Naming') . '</a>';
+                . '<br>&nbsp;&nbsp; ' . __('Setting') . ': ';
+        @endphp
+        <span class="smart-settings-outer-tabs" style="display:inline-block;vertical-align:middle">
+            <a href="#smart-outer-device" class="pagemenu-selected">{{ __('Device') }}</a>
+            <span> | </span>
+            <a href="#smart-outer-global">{{ __('Global') }}</a>
+        </span>
+        @php
             print_optionbar_end();
         @endphp
 
-        <p class="text-muted">
-            {{ __('Rate-of-change thresholds (raw value change per hour) used to flag an attribute with a rate warning. Edits save immediately. A disk row with no override falls back to the "Global Defaults" tab. "Avg" columns show the attribute\'s current measured rate, for reference when picking a threshold.') }}
-        </p>
-
-        @if ($appId === null || empty($diskKeys))
+        @if ($appId === null)
             <div class="alert alert-info">{{ __('No SMART attributes discovered yet for this device.') }}</div>
         @else
             @php
-                $fmtAvg = static function ($v) {
-                    return is_numeric($v) ? number_format((float) $v, 1) : '-';
+                $stateBadge = static function (bool $enabled, string $id) {
+                    return '<span id="' . $id . '" class="label ' . ($enabled ? 'label-success' : 'label-default') . '" data-label-enabled="' . __('Enabled') . '" data-label-disabled="' . __('Disabled') . '" style="margin-left:8px">' . ($enabled ? __('Enabled') : __('Disabled')) . '</span>';
                 };
-                $isBreached = static function ($item, $window) {
-                    $rateVal = $item['rate_' . $window];
-                    $warnVal = $item['warn_rate_' . $window];
-
-                    return is_numeric($rateVal) && is_numeric($warnVal) && (float) $rateVal >= (float) $warnVal;
-                };
-                // Which tabs have at least one breached attribute, so the tab
-                // itself is flagged without having to click into each disk.
-                $diskHasBreach = [];
-                foreach ($itemsByDisk as $breachDiskKey => $breachItems) {
-                    foreach ($breachItems as $breachItem) {
-                        foreach (['8h', '24h', '168h', '672h'] as $breachWindow) {
-                            if ($isBreached($breachItem, $breachWindow)) {
-                                $diskHasBreach[$breachDiskKey] = true;
-                                break 2;
-                            }
-                        }
-                    }
-                }
             @endphp
-            <ul class="nav nav-tabs" role="tablist">
-                @foreach ($diskKeys as $i => $diskKey)
-                    @php $tabId = 'smart-thresh-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey ?: 'default'); @endphp
-                    <li role="presentation" class="{{ $i === 0 ? 'active' : '' }}">
-                        <a href="#{{ $tabId }}" aria-controls="{{ $tabId }}" role="tab" data-toggle="tab" class="{{ $diskKey !== '' && ! empty($diskHasBreach[$diskKey]) ? 'text-danger' : '' }}">{{ $diskLabels[$diskKey] ?? $diskKey }}</a>
-                    </li>
-                @endforeach
-            </ul>
 
-            <div class="tab-content" style="margin-top:12px">
-                @foreach ($diskKeys as $i => $diskKey)
-                    @php
-                        $tabId = 'smart-thresh-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey ?: 'default');
-                        $items = $itemsByDisk[$diskKey] ?? collect();
-                        $isDefaultTab = $diskKey === '';
-                        $scope = $isDefaultTab ? 'global' : 'disk';
-                    @endphp
-                    <div role="tabpanel" class="tab-pane {{ $i === 0 ? 'active' : '' }}" id="{{ $tabId }}">
-                        <div class="table-responsive">
-                            <table class="table table-condensed table-hover">
-                                <thead>
-                                <tr>
-                                    <th>{{ __('ID') }}</th>
-                                    <th>{{ __('Name') }}</th>
-                                    <th>{{ $isDefaultTab ? __('Max 8h') : __('Avg 8h') }}</th>
-                                    <th class="col-sm-1">{{ __('Warn 8h') }}</th>
-                                    <th>{{ $isDefaultTab ? __('Max 24h') : __('Avg 24h') }}</th>
-                                    <th class="col-sm-1">{{ __('Warn 24h') }}</th>
-                                    <th>{{ $isDefaultTab ? __('Max 1wk') : __('Avg 1wk') }}</th>
-                                    <th class="col-sm-1">{{ __('Warn 1wk') }}</th>
-                                    <th>{{ $isDefaultTab ? __('Max 1mo') : __('Avg 1mo') }}</th>
-                                    <th class="col-sm-1">{{ __('Warn 1mo') }}</th>
-                                    <th>{{ __('Alert') }}</th>
-                                    <th></th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                @foreach ($items as $item)
-                                    <tr data-attribute_id="{{ $item['attribute_id'] }}" data-disk_key="{{ $diskKey }}">
-                                        <td>{{ $item['attribute_id'] }}</td>
-                                        <td>{{ str_replace('_', ' ', (string) $item['name']) }}</td>
-                                        @foreach (['8h', '24h', '168h', '672h'] as $window)
-                                            @php $breached = $isBreached($item, $window); @endphp
-                                            <td class="{{ $breached ? 'danger' : 'text-muted' }}">{{ $fmtAvg($item['rate_' . $window]) }}</td>
-                                            <td>
-                                                <div class="form-group has-feedback" style="margin:0">
-                                                    <input type="text"
-                                                           class="form-control input-sm smart-thresh-field"
-                                                           style="width:90px"
-                                                           data-scope="{{ $scope }}"
-                                                           data-disk_key="{{ $diskKey }}"
-                                                           data-attribute_id="{{ $item['attribute_id'] }}"
-                                                           data-field="warn_rate_{{ $window }}"
-                                                           data-update-url="{{ route('device.apps.smart.settings.field', $device) }}"
-                                                           placeholder="{{ ! $isDefaultTab && is_numeric($item['default_warn_rate_' . $window]) ? number_format((float) $item['default_warn_rate_' . $window], 1) : '' }}"
-                                                           @if ($item['has_row'] && is_numeric($item['warn_rate_' . $window])) value="{{ $item['warn_rate_' . $window] }}" @endif>
-                                                </div>
-                                            </td>
-                                        @endforeach
-                                        <td>
-                                            <input type="checkbox"
-                                                   class="smart-thresh-alert"
-                                                   data-scope="{{ $scope }}"
-                                                   data-disk_key="{{ $diskKey }}"
-                                                   data-attribute_id="{{ $item['attribute_id'] }}"
-                                                   data-attribute_name="{{ $item['name'] }}"
-                                                   data-alert-url="{{ route('device.apps.smart.settings.alert', $device) }}"
-                                                   {{ $item['alert_enabled'] ? 'checked' : '' }}>
-                                        </td>
-                                        <td style="white-space:nowrap">
-                                            <a type="button"
-                                               class="btn btn-default btn-sm smart-thresh-reset {{ $item['has_row'] ? '' : 'disabled' }}"
-                                               data-scope="{{ $scope }}"
-                                               data-disk_key="{{ $diskKey }}"
-                                               data-attribute_id="{{ $item['attribute_id'] }}"
-                                               data-reset-url="{{ route('device.apps.smart.settings.reset', $device) }}"
-                                               title="{{ $isDefaultTab ? __('Delete the global default for this attribute') : __('Delete this override so it inherits the global default again') }}">{{ __('Reset') }}</a>
-                                            @if (! $isDefaultTab)
-                                                <a type="button"
-                                                   class="btn btn-default btn-sm smart-thresh-copy-default"
-                                                   data-disk_key="{{ $diskKey }}"
-                                                   data-attribute_id="{{ $item['attribute_id'] }}"
-                                                   data-copy-url="{{ route('device.apps.smart.settings.copy_default', $device) }}"
-                                                   title="{{ __('Copy the global default\'s values into this disk as an editable override') }}">{{ __('Copy to default') }}</a>
-                                            @endif
-                                        </td>
-                                    </tr>
-                                @endforeach
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                @endforeach
+            <div class="tab-content smart-settings-outer-tab-content">
+                <div role="tabpanel" class="tab-pane active" id="smart-outer-device">
+                    @include('device.apps.smart.settings-device')
+                </div>
+                <div role="tabpanel" class="tab-pane" id="smart-outer-global">
+                    @include('device.apps.smart.settings-global')
+                </div>
             </div>
-
         @endif
     </x-device.page>
 @endsection
@@ -177,8 +76,45 @@
     <script>
         (function () {
             var appId = {{ (int) ($appId ?? 0) }};
-            var resetUrl = '{{ $appId !== null ? route('device.apps.smart.settings.reset', $device) : '' }}';
             var token = '{{ csrf_token() }}';
+
+            // Outer Device/Global switch: plain client-side show/hide, no page reload.
+            // Deliberately not Bootstrap's data-toggle="tab" here -- that binds a
+            // document-level delegated click handler to any [data-toggle="tab"]
+            // element, which would fight this handler over the outer panes' active
+            // class. Scoped to direct children of .smart-settings-outer-tab-content
+            // so this never touches the per-disk tab-panes nested inside the Device
+            // pane, which still use Bootstrap's own tab plugin independently.
+            $('.smart-settings-outer-tabs a').on('click', function (event) {
+                event.preventDefault();
+                var target = $(this).attr('href');
+                $('.smart-settings-outer-tabs a').removeClass('pagemenu-selected');
+                $(this).addClass('pagemenu-selected');
+                $('.smart-settings-outer-tab-content > .tab-pane').removeClass('active');
+                $(target).addClass('active');
+            });
+
+            // Logs the full failed response to the console (status, server JSON/body)
+            // and returns a short message to append to the toastr error, since the
+            // generic "Could not update setting" text alone isn't enough to debug
+            // a 419/422/500 from here.
+            function debugAjaxError(context, jqXHR) {
+                console.error('[SMART settings] ' + context + ' failed', {
+                    status: jqXHR.status,
+                    statusText: jqXHR.statusText,
+                    responseJSON: jqXHR.responseJSON,
+                    responseText: jqXHR.responseText,
+                });
+
+                if (jqXHR.responseJSON && jqXHR.responseJSON.message) {
+                    return jqXHR.responseJSON.message;
+                }
+                if (jqXHR.responseJSON && jqXHR.responseJSON.errors) {
+                    return JSON.stringify(jqXHR.responseJSON.errors);
+                }
+
+                return jqXHR.status + ' ' + jqXHR.statusText;
+            }
 
             // Inline edit, save on blur or Enter. No save button.
             $('.smart-thresh-field').on('focusin', function () {
@@ -312,6 +248,231 @@
                     },
                     error: function () { toastr.error('{{ __('Could not copy from global default') }}'); },
                 });
+            });
+
+            // Disk naming: variable badges, live preview, and save-on-blur/Enter.
+            // Buttons exist on both the Device and Global tabs; each inserts into
+            // whichever .smart-naming-field was last focused, regardless of tab.
+            var diskFields = @json($diskFields ?? []);
+            var lastNamingInput = null;
+
+            function renderNamingPreview(template, diskKey) {
+                var fields = diskFields[diskKey] || diskFields[''] || {};
+                return (template || '').replace(/\$(device|model|serial|wwn|model_family)\b/g, function (m, name) {
+                    return fields[name] || '';
+                });
+            }
+
+            function updateNamingPreview($input) {
+                var diskKey = $input.data('disk_key');
+                var template = $input.val() || $input.attr('placeholder');
+                var previewKey = diskKey === '' ? (Object.keys(diskFields)[0] || '') : diskKey;
+                $('.smart-naming-preview[data-disk_key="' + diskKey + '"]').text(renderNamingPreview(template, previewKey));
+            }
+
+            $('.smart-naming-field').each(function () { updateNamingPreview($(this)); });
+
+            $('.smart-naming-field').on('focus', function () { lastNamingInput = this; });
+            $('.smart-naming-field').on('input', function () { updateNamingPreview($(this)); });
+
+            $('.smart-naming-var').on('click', function (event) {
+                event.preventDefault();
+                var input = lastNamingInput || document.querySelector('.smart-naming-field');
+                if (!input) return;
+                var token = '$' + $(this).data('var');
+                var start = input.selectionStart ?? input.value.length;
+                var end = input.selectionEnd ?? input.value.length;
+                input.value = input.value.slice(0, start) + token + input.value.slice(end);
+                input.selectionStart = input.selectionEnd = start + token.length;
+                input.focus();
+                updateNamingPreview($(input));
+            });
+
+            $('.smart-naming-field').on('focusin', function () {
+                $(this).data('val', $(this).val());
+            });
+
+            $('.smart-naming-field').on('blur keyup', function (e) {
+                if (e.type === 'keyup' && e.keyCode !== 13) return;
+                var prev = $(this).data('val');
+                var value = $(this).val();
+                if (prev === value) return;
+
+                var $this = $(this);
+                $.ajax({
+                    type: 'POST',
+                    url: $(this).data('update-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        disk_key: $(this).data('disk_key'),
+                        value: value,
+                    },
+                    success: function (data) {
+                        if (data.status === 'ok') {
+                            $this.data('val', value);
+                            toastr.success(data.message);
+                            $this.closest('tr').find('.smart-naming-reset').toggleClass('disabled', value === '');
+                        } else {
+                            toastr.error(data.message);
+                        }
+                    },
+                    error: function (jqXHR) { toastr.error('{{ __('Could not update naming template') }}' + ': ' + debugAjaxError('naming template', jqXHR)); },
+                });
+            });
+
+            $('.smart-naming-reset').on('click', function (event) {
+                event.preventDefault();
+                if ($(this).hasClass('disabled')) return;
+                var $input = $(this).closest('tr').find('.smart-naming-field');
+                $input.val('');
+                updateNamingPreview($input);
+                $input.trigger('blur');
+            });
+
+            $('#smart-default-view-mode').on('change', function () {
+                $.ajax({
+                    type: 'POST',
+                    url: $(this).data('update-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        value: $(this).val(),
+                    },
+                    success: function (data) { toastr.success(data.message); },
+                    error: function (jqXHR) { toastr.error('{{ __('Could not update default view mode') }}' + ': ' + debugAjaxError('default view mode', jqXHR)); },
+                });
+            });
+
+            function setStateBadge(id, enabled) {
+                var $badge = $('#' + id);
+                $badge.toggleClass('label-success', enabled).toggleClass('label-default', ! enabled);
+                $badge.text(enabled ? $badge.data('label-enabled') : $badge.data('label-disabled'));
+            }
+
+            // jQuery serializes JS booleans as the strings "true"/"false", but Laravel's
+            // `boolean` validation rule only accepts true, false, 0, 1, "0", "1" -- not
+            // the word strings -- so normalize to 1/0/null before every boolean-setting post.
+            function toBooleanParam(value) {
+                return value === null || value === undefined ? null : (value ? 1 : 0);
+            }
+
+            $('.smart-toggle-switch').bootstrapSwitch('onColor', 'success');
+
+            // Log extra Device Statistics: global default (Global tab) + per-device
+            // override (Device tab, tri-state via reset link).
+            function saveLogExtraDevStats(scope, value) {
+                return $.ajax({
+                    type: 'POST',
+                    url: $('#smart-log-extra-dev-stats-global').data('update-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        scope: scope,
+                        value: toBooleanParam(value),
+                    },
+                });
+            }
+
+            $('#smart-log-extra-dev-stats-global').on('switchChange.bootstrapSwitch', function (event, state) {
+                saveLogExtraDevStats('global', state)
+                    .done(function (data) {
+                        toastr.success(data.message);
+                        setStateBadge('smart-log-extra-dev-stats-global-badge', state);
+                        if ($('#smart-log-extra-dev-stats-override').data('tristate') === '') {
+                            setStateBadge('smart-log-extra-dev-stats-badge', state);
+                        }
+                    })
+                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('log extra dev stats (global)', jqXHR)); });
+            });
+
+            $('#smart-log-extra-dev-stats-override').on('switchChange.bootstrapSwitch', function (event, state) {
+                saveLogExtraDevStats('disk', state)
+                    .done(function (data) {
+                        toastr.success(data.message);
+                        $('#smart-log-extra-dev-stats-override').data('tristate', state ? '1' : '0');
+                        $('#smart-log-extra-dev-stats-reset').removeClass('disabled');
+                        setStateBadge('smart-log-extra-dev-stats-badge', state);
+                    })
+                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('log extra dev stats (override)', jqXHR)); });
+            });
+
+            $('#smart-log-extra-dev-stats-reset').on('click', function (event) {
+                event.preventDefault();
+                if ($(this).hasClass('disabled')) return;
+
+                var $reset = $(this);
+                saveLogExtraDevStats('disk', null)
+                    .done(function (data) {
+                        toastr.success(data.message);
+                        var globalChecked = $('#smart-log-extra-dev-stats-global').is(':checked');
+                        $('#smart-log-extra-dev-stats-override')
+                            .bootstrapSwitch('state', globalChecked, true)
+                            .data('tristate', '');
+                        $reset.addClass('disabled');
+                        setStateBadge('smart-log-extra-dev-stats-badge', globalChecked);
+                    })
+                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('log extra dev stats (reset)', jqXHR)); });
+            });
+
+            // Holt-Winters forecast: global default (Global tab) + per-device
+            // override (Device tab, tri-state via reset link).
+            function saveHwForecast(scope, value) {
+                return $.ajax({
+                    type: 'POST',
+                    url: $('#smart-hw-forecast-global').data('update-url'),
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        scope: scope,
+                        value: toBooleanParam(value),
+                    },
+                });
+            }
+
+            $('#smart-hw-forecast-global').on('switchChange.bootstrapSwitch', function (event, state) {
+                saveHwForecast('global', state)
+                    .done(function (data) {
+                        toastr.success(data.message);
+                        setStateBadge('smart-hw-forecast-global-badge', state);
+                        if ($('#smart-hw-forecast-override').data('tristate') === '') {
+                            setStateBadge('smart-hw-forecast-badge', state);
+                        }
+                    })
+                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('hw forecast (global)', jqXHR)); });
+            });
+
+            $('#smart-hw-forecast-override').on('switchChange.bootstrapSwitch', function (event, state) {
+                saveHwForecast('disk', state)
+                    .done(function (data) {
+                        toastr.success(data.message);
+                        $('#smart-hw-forecast-override').data('tristate', state ? '1' : '0');
+                        $('#smart-hw-forecast-reset').removeClass('disabled');
+                        setStateBadge('smart-hw-forecast-badge', state);
+                    })
+                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('hw forecast (override)', jqXHR)); });
+            });
+
+            $('#smart-hw-forecast-reset').on('click', function (event) {
+                event.preventDefault();
+                if ($(this).hasClass('disabled')) return;
+
+                var $reset = $(this);
+                saveHwForecast('disk', null)
+                    .done(function (data) {
+                        toastr.success(data.message);
+                        var globalChecked = $('#smart-hw-forecast-global').is(':checked');
+                        $('#smart-hw-forecast-override')
+                            .bootstrapSwitch('state', globalChecked, true)
+                            .data('tristate', '');
+                        $reset.addClass('disabled');
+                        setStateBadge('smart-hw-forecast-badge', globalChecked);
+                    })
+                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('hw forecast (reset)', jqXHR)); });
             });
         })();
     </script>
