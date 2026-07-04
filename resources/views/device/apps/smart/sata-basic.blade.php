@@ -116,6 +116,8 @@
                 'legend' => 'no',
             ]);
             $luGraph = \LibreNMS\Util\Url::lazyGraphTag($luGraphArray, 'tw:w-full tw:h-auto');
+            $luLink  = \LibreNMS\Util\Url::generate($luGraphArray, ['page' => 'graphs', 'width' => null, 'height' => null]);
+            $luGraph = '<a href="' . htmlspecialchars($luLink, ENT_QUOTES) . '">' . $luGraph . '</a>';
 
             // Current rate (B/s) from the last RRD interval, not the lifetime total.
             $luRrdFile = \App\Facades\Rrd::name($device['hostname'], ['app', 'smart', $data->app->app_id, $idx]);
@@ -160,6 +162,8 @@
                 'legend' => 'no',
             ]);
             $dioGraph = \LibreNMS\Util\Url::lazyGraphTag($dioGraphArray, 'tw:w-full tw:h-auto');
+            $dioLink  = \LibreNMS\Util\Url::generate($dioGraphArray, ['page' => 'graphs', 'width' => null, 'height' => null]);
+            $dioGraph = '<a href="' . htmlspecialchars($dioLink, ENT_QUOTES) . '">' . $dioGraph . '</a>';
 
             $dioRrdFile = \App\Facades\Rrd::name($device['hostname'], ['ucd_diskio', $diskioDescr]);
             $dioRates   = \App\Facades\Rrd::getLastRates($dioRrdFile, ['read', 'written']);

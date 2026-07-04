@@ -90,6 +90,8 @@
                 'legend' => 'no',
             ]);
             $duGraph = \LibreNMS\Util\Url::lazyGraphTag($duGraphArray, 'tw:w-full tw:h-auto');
+            $duLink  = \LibreNMS\Util\Url::generate($duGraphArray, ['page' => 'graphs', 'width' => null, 'height' => null]);
+            $duGraph = '<a href="' . htmlspecialchars($duLink, ENT_QUOTES) . '">' . $duGraph . '</a>';
 
             // Current rate (B/s) from the last RRD interval. 1 NVMe data unit = 512 000 B.
             $du = 512000;
