@@ -35,6 +35,12 @@ if (! in_array($metric, Rrd::listDatasets($rrd_filename), true)) {
 $graph_params->vertical_label = $spec['unit'];
 $descr = RrdStore::fixedSafeDescr($spec['label'], 22);
 
+// Same palette as sata_attr_value.inc.php: rawColor for a plain raw counter
+// (its "hasRaw"-only branch), normalizedColor for a 0-100 scale (its
+// Normalized line) -- ctrl_busy's % of time is that same kind of scale.
+$rawColor = '#ff9a9a66';
+$normalizedColor = session('applied_site_style') == 'dark' ? '#f2f2f2' : '#272b30';
+
 switch ($spec['kind']) {
     case 'pct_time':
         // ctrl_busy is a DERIVE of accumulated minutes; x6000 (60s/min x 100) = % of time.
@@ -49,8 +55,7 @@ switch ($spec['kind']) {
         $rrd_options[] = 'CDEF:valmn=rawmn,6000,*';
         $rrd_options[] = 'CDEF:valmx=rawmx,6000,*';
         $rrd_options[] = 'COMMENT:                         Now      Min      Max\l';
-        $rrd_options[] = 'AREA:val#ffa42044:';
-        $rrd_options[] = 'LINE2:val#ffa420:' . $descr;
+        $rrd_options[] = 'LINE2:val' . $normalizedColor . ':' . $descr;
         $rrd_options[] = 'GPRINT:val:LAST:%8.1lf%%';
         $rrd_options[] = 'GPRINT:valmn:MIN:%8.1lf%%';
         $rrd_options[] = 'GPRINT:valmx:MAX:%8.1lf%%\l';
@@ -65,8 +70,7 @@ switch ($spec['kind']) {
         $rrd_options[] = "DEF:valmn={$rrd_filename}:{$metric}:MIN";
         $rrd_options[] = "DEF:valmx={$rrd_filename}:{$metric}:MAX";
         $rrd_options[] = 'COMMENT:                         Last      Min      Max\l';
-        $rrd_options[] = 'AREA:val#ff666633';
-        $rrd_options[] = 'LINE2:val#cc0000:' . $descr;
+        $rrd_options[] = 'LINE1.5:val' . $rawColor . ':' . $descr;
         $rrd_options[] = 'GPRINT:val:LAST:%8.0lf';
         $rrd_options[] = 'GPRINT:valmn:MIN:%8.0lf';
         $rrd_options[] = 'GPRINT:valmx:MAX:%8.0lf\l';
@@ -92,8 +96,7 @@ switch ($spec['kind']) {
         $rrd_options[] = "DEF:valmn={$rrd_filename}:{$metric}:MIN";
         $rrd_options[] = "DEF:valmx={$rrd_filename}:{$metric}:MAX";
         $rrd_options[] = 'COMMENT:                         Now      Min      Max\l';
-        $rrd_options[] = 'AREA:val#9a9aff44:';
-        $rrd_options[] = 'LINE2:val#3a3aff:' . $descr;
+        $rrd_options[] = 'LINE1.5:val' . $rawColor . ':' . $descr;
         $rrd_options[] = 'GPRINT:val:LAST:%8.1lf%s';
         $rrd_options[] = 'GPRINT:valmn:MIN:%8.1lf%s';
         $rrd_options[] = 'GPRINT:valmx:MAX:%8.1lf%s\l';
