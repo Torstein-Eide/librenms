@@ -117,11 +117,13 @@ $normMax = 100.0;
 // HtmlData::attributeRateUnit().
 $rateUnit = $vars['rate_unit'] ?? '';
 $rateMultiplier = $rateUnit === 'hour' ? 3600.0 : 1.0;
+
 $rawLabelSuffix = match ($rateUnit) {
     'hour' => ' (changes/hour)',
     'second' => ' (changes/secound)',
     default => '',
 };
+$avgRateUnitText = $rateUnit === 'hour' ? 'changes/hour' : 'changes/second';
 
 /**
  * Fetch the MAX consolidation peak for $ds over the graphed period.
@@ -179,7 +181,7 @@ $fetchMaxAcross = static function (array $dsNames) use ($fetchDsMax, $rrd_filena
     return $peak;
 };
 
-$rrd_options[] = 'COMMENT:Series               Last      Min      Max\n';
+$rrd_options[] = 'COMMENT:Series           Last    Min     Max\n';
 
 /**
  * DEF/CDEF/LINE for Normalized, scaled against $rawMax: same peak-lock trick
@@ -202,9 +204,9 @@ $plotNormalizedAgainstPeak = function (?float $rawMax) use (&$rrd_options, $grap
         $graph_params->right_axis = '1:0';
         $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized  ';
     }
-    $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
-    $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
-    $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
+    $rrd_options[] = 'GPRINT:normalized:LAST:%5.1lf%s';
+    $rrd_options[] = 'GPRINT:normalized:MIN:%5.1lf%S';
+    $rrd_options[] = 'GPRINT:normalized:MAX:%5.1lf%S\l';
 };
 
 if ($hasDiv) {
@@ -238,13 +240,13 @@ if ($hasDiv) {
     }
 
     $rrd_options[] = 'LINE1.5:hi#9aff9a:Hi          ';
-    $rrd_options[] = 'GPRINT:hi:LAST:%8.1lf';
-    $rrd_options[] = 'GPRINT:hi:MIN:%8.1lf';
-    $rrd_options[] = 'GPRINT:hi:MAX:%8.1lf\l';
+    $rrd_options[] = 'GPRINT:hi:LAST:%5.1lf%s';
+    $rrd_options[] = 'GPRINT:hi:MIN:%5.1lf%S';
+    $rrd_options[] = 'GPRINT:hi:MAX:%5.1lf%S\l';
     $rrd_options[] = 'LINE1.5:div#9a9aff:Div         ';
-    $rrd_options[] = 'GPRINT:div:LAST:%8.1lf';
-    $rrd_options[] = 'GPRINT:div:MIN:%8.1lf';
-    $rrd_options[] = 'GPRINT:div:MAX:%8.1lf\l';
+    $rrd_options[] = 'GPRINT:div:LAST:%5.1lf%s';
+    $rrd_options[] = 'GPRINT:div:MIN:%5.1lf%S';
+    $rrd_options[] = 'GPRINT:div:MAX:%5.1lf%S\l';
 
     if ($hasNormalized) {
         $plotNormalizedAgainstPeak($rawMax);
@@ -281,9 +283,9 @@ if ($hasDiv) {
         $rrd_options[] = "DEF:{$suffix}_raw={$rrd_filename}:{$ds}:AVERAGE";
         $rrd_options[] = "CDEF:{$suffix}={$suffix}_raw,{$rateMultiplier},*";
         $rrd_options[] = "LINE1.5:{$suffix}{$color}:" . str_pad($suffix, 12);
-        $rrd_options[] = "GPRINT:{$suffix}:LAST:%8.1lf";
-        $rrd_options[] = "GPRINT:{$suffix}:MIN:%8.1lf";
-        $rrd_options[] = "GPRINT:{$suffix}:MAX:%8.1lf\\l";
+        $rrd_options[] = "GPRINT:{$suffix}:LAST:%5.1lf%s";
+        $rrd_options[] = "GPRINT:{$suffix}:MIN:%5.1lf%S";
+        $rrd_options[] = "GPRINT:{$suffix}:MAX:%5.1lf%S\\l";
     }
 
     if ($hasNormalized) {
@@ -296,8 +298,13 @@ if ($hasDiv) {
 } elseif ($hasRaw && $hasNormalized) {
     $rrd_options[] = "DEF:raw={$rrd_filename}:{$dsRaw}:AVERAGE";
     $rrd_options[] = "CDEF:rawDisplay=raw,{$rateMultiplier},*";
-    if ($rateUnit === 'hour') {
-        $rrd_options[] = 'CDEF:p_avg_1h=rawDisplay,3600,TRENDNAN';
+    if (in_array($rateUnit, ['hour', 'second'], true)) {
+        // VDEF+HRULE, not a CDEF:TRENDNAN line: TRENDNAN's window would need
+        // to reach back before $from to fill, which the DEF never fetches,
+        // so it draws as a single dot near the right edge instead of a
+        // line. VDEF's AVERAGE reduces the whole graphed period to one
+        // scalar and HRULE draws it as a flat line across the full width.
+        $rrd_options[] = 'VDEF:p_avg=rawDisplay,AVERAGE';
     }
 
     $graph_params->right_axis_label = 'Normalized';
@@ -327,19 +334,18 @@ if ($hasDiv) {
         }
 
         $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
-        $rrd_options[] = 'GPRINT:rawDisplay:LAST:%8.1lf';
-        $rrd_options[] = 'GPRINT:rawDisplay:MIN:%8.1lf';
-        $rrd_options[] = 'GPRINT:rawDisplay:MAX:%8.1lf\l';
-        if ($rateUnit === 'hour') {
-            $rrd_options[] = 'LINE2:p_avg_1h#ff6600:1h avg      ';
-            $rrd_options[] = 'GPRINT:p_avg_1h:LAST:%8.1lf';
-            $rrd_options[] = 'GPRINT:p_avg_1h:MIN:%8.1lf';
-            $rrd_options[] = 'GPRINT:p_avg_1h:MAX:%8.1lf\l';
-        }
+        $rrd_options[] = 'GPRINT:rawDisplay:LAST:%5.1lf%s';
+        $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%S';
+        $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%S\l';
         $rrd_options[] = 'LINE2:norm_display' . $normalizedColor . ':Normalized  ';
-        $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
-        $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
-        $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
+        $rrd_options[] = 'GPRINT:normalized:LAST:%5.1lf%s';
+        $rrd_options[] = 'GPRINT:normalized:MIN:%5.1lf%S';
+        $rrd_options[] = 'GPRINT:normalized:MAX:%5.1lf%S\l';
+        if (in_array($rateUnit, ['hour', 'second'], true)) {
+            $rrd_options[] = 'HRULE:p_avg#ff6600:Period average rate\: ';
+            $rrd_options[] = 'GPRINT:p_avg:%5.1lf%s';
+            $rrd_options[] = "COMMENT: {$avgRateUnitText}\\l";
+        }
     } else {
         // Raw is 0 or unavailable. Both sit naturally in the 0-255 range.
         $graph_params->right_axis = '1:0';
@@ -352,19 +358,18 @@ if ($hasDiv) {
 
         $rrd_options[] = "DEF:normalized={$rrd_filename}:{$dsNormalized}:AVERAGE";
         $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
-        $rrd_options[] = 'GPRINT:rawDisplay:LAST:%8.1lf';
-        $rrd_options[] = 'GPRINT:rawDisplay:MIN:%8.1lf';
-        $rrd_options[] = 'GPRINT:rawDisplay:MAX:%8.1lf\l';
-        if ($rateUnit === 'hour') {
-            $rrd_options[] = 'LINE2:p_avg_1h#ff6600:1h avg      ';
-            $rrd_options[] = 'GPRINT:p_avg_1h:LAST:%8.1lf';
-            $rrd_options[] = 'GPRINT:p_avg_1h:MIN:%8.1lf';
-            $rrd_options[] = 'GPRINT:p_avg_1h:MAX:%8.1lf\l';
-        }
+        $rrd_options[] = 'GPRINT:rawDisplay:LAST:%5.1lf%s';
+        $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%S';
+        $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%S\l';
         $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized  ';
-        $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
-        $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
-        $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
+        $rrd_options[] = 'GPRINT:normalized:LAST:%5.1lf%s';
+        $rrd_options[] = 'GPRINT:normalized:MIN:%5.1lf%S';
+        $rrd_options[] = 'GPRINT:normalized:MAX:%5.1lf%S\l';
+        if (in_array($rateUnit, ['hour', 'second'], true)) {
+            $rrd_options[] = 'HRULE:p_avg#ff6600:Period average rate\: ';
+            $rrd_options[] = 'GPRINT:p_avg:%5.1lf%s';
+            $rrd_options[] = "COMMENT: {$avgRateUnitText}\\l";
+        }
     }
 } elseif ($hasRaw) {
     $graph_params->vertical_label = $verticalLabel . $rawLabelSuffix;
@@ -376,18 +381,17 @@ if ($hasDiv) {
 
     $rrd_options[] = "DEF:raw={$rrd_filename}:{$dsRaw}:AVERAGE";
     $rrd_options[] = "CDEF:rawDisplay=raw,{$rateMultiplier},*";
-    if ($rateUnit === 'hour') {
-        $rrd_options[] = 'CDEF:p_avg_1h=rawDisplay,3600,TRENDNAN';
+    if (in_array($rateUnit, ['hour', 'second'], true)) {
+        $rrd_options[] = 'VDEF:p_avg=rawDisplay,AVERAGE';
     }
     $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
-    $rrd_options[] = 'GPRINT:rawDisplay:LAST:%8.1lf';
-    $rrd_options[] = 'GPRINT:rawDisplay:MIN:%8.1lf';
-    $rrd_options[] = 'GPRINT:rawDisplay:MAX:%8.1lf\l';
-    if ($rateUnit === 'hour') {
-        $rrd_options[] = 'LINE2:p_avg_1h#ff6600:1h avg      ';
-        $rrd_options[] = 'GPRINT:p_avg_1h:LAST:%8.1lf';
-        $rrd_options[] = 'GPRINT:p_avg_1h:MIN:%8.1lf';
-        $rrd_options[] = 'GPRINT:p_avg_1h:MAX:%8.1lf\l';
+    $rrd_options[] = 'GPRINT:rawDisplay:LAST:%5.1lf%s';
+    $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%S';
+    $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%S\l';
+    if (in_array($rateUnit, ['hour', 'second'], true)) {
+        $rrd_options[] = 'HRULE:p_avg#ff6600:Period average rate\: ';
+        $rrd_options[] = 'GPRINT:p_avg:%5.1lf%s';
+        $rrd_options[] = "COMMENT: {$avgRateUnitText}\\l";
     }
 } else {
     $graph_params->vertical_label = 'Normalized';
@@ -400,9 +404,9 @@ if ($hasDiv) {
 
     $rrd_options[] = "DEF:normalized={$rrd_filename}:{$dsNormalized}:AVERAGE";
     $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized  ';
-    $rrd_options[] = 'GPRINT:normalized:LAST:%8.1lf';
-    $rrd_options[] = 'GPRINT:normalized:MIN:%8.1lf';
-    $rrd_options[] = 'GPRINT:normalized:MAX:%8.1lf\l';
+    $rrd_options[] = 'GPRINT:normalized:LAST:%5.1lf%s';
+    $rrd_options[] = 'GPRINT:normalized:MIN:%5.1lf%S';
+    $rrd_options[] = 'GPRINT:normalized:MAX:%5.1lf%S\l';
 }
 
 /**
