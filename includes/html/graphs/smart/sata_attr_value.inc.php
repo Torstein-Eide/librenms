@@ -108,7 +108,7 @@ $normalizedColor = session('applied_site_style') == 'dark' ? '#f2f2f2' : '#272b3
 $rawColor = '#ff9a9a66';
 $threshRaw = $vars['attr_thresh'] ?? null;
 $thresh = (is_numeric($threshRaw) && (float) $threshRaw > 0) ? $threshRaw : null;
-$normMax = 100.0;
+$normMax = 110.0;
 
 // rate_unit: 'second' for COUNTER attributes whose average rate exceeds
 // 3600 raw-units/hour (i.e. >1/s on average; rrdtool already auto-rates
@@ -120,7 +120,7 @@ $rateMultiplier = $rateUnit === 'hour' ? 3600.0 : 1.0;
 
 $rawLabelSuffix = match ($rateUnit) {
     'hour' => ' (changes/hour)',
-    'second' => ' (changes/secound)',
+    'second' => ' (changes/second)',
     default => '',
 };
 $avgRateUnitText = $rateUnit === 'hour' ? 'changes/hour' : 'changes/second';

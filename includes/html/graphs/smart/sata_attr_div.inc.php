@@ -2,7 +2,9 @@
 
 use App\Facades\LibrenmsConfig;
 use App\Facades\Rrd;
+use Illuminate\Support\Facades\DB;
 use LibreNMS\Exceptions\RrdGraphException;
+use LibreNMS\Util\Number;
 use LibreNMS\Util\RrdTrendForecast;
 
 $rrd_filename = Rrd::name($device['hostname'], ['app', 'smart', $app->app_id, $vars['disk']]);
@@ -10,6 +12,50 @@ $attrId = isset($vars['attr_id']) ? (int) $vars['attr_id'] : 0;
 if ($attrId <= 0) {
     throw new RrdGraphException('Missing SMART attribute id');
 }
+
+$attrName = (string) (DB::table('smart_sata_attributes')
+    ->where('app_id', $app->app_id)
+    ->where('disk_key', $vars['disk'])
+    ->where('attribute_id', $attrId)
+    ->value('name') ?? '');
+
+// Same keyword -> [description, unit] guess used by attr_value.inc.php's Raw
+// label, kept in sync so the two graphs for one attribute agree on units.
+$attrUnitRules = [
+    '/temperature/i'                                 => ['Temperature', '°C'],
+    '/load-in time/i'                                 => ['Load Time', 'ms'],
+    '/spin.?up.?time/i'                                 => ['Spin-up Time', 'ms'],
+    '/performance/i'                                  => ['Performance', ''],
+    '/helium level/i'                                 => ['Helium Level', '%'],
+    '/(health monitor|head health)/i'                 => ['Health', ''],
+    '/(wear leveling|media wear)/i'                   => ['Wear', '%'],
+    '/rdwr ratio/i'                                   => ['Ratio', '%'],
+    '/workld timer/i'                                 => ['Time', 'min'],
+    '/(hours)/i'                                      => ['Time', 'h'],
+    '/(total.?lbas.?(written|read)|nand.?writes)/i'      => ['Data', ''],
+];
+
+$unit_text = 'Raw';
+$unit_label = '';
+foreach ($attrUnitRules as $pattern => $textLabel) {
+    if (preg_match($pattern, $attrName)) {
+        [$unit_text, $unit_label] = $textLabel;
+        break;
+    }
+}
+
+$verticalLabel = $unit_label !== '' ? "{$unit_text} ({$unit_label})" : $unit_text;
+
+/**
+ * Left axis tick format, SI-suffixed to match the period's raw magnitude,
+ * mirroring attr_value.inc.php's left_axis_format convention.
+ */
+$applyLeftAxisFormat = function (?float $rawMax) use (&$graph_params, $unit_label): void {
+    if ($rawMax === null || $rawMax <= 0) {
+        return;
+    }
+    $graph_params->left_axis_format = '%5.1lf' . trim(substr(Number::formatSi($rawMax, 0, 0, ''), -1) . $unit_label);
+};
 
 require 'includes/html/graphs/common.inc.php';
 
@@ -31,7 +77,7 @@ if (! in_array($dsHi, $existingDs, true) || ! in_array($dsLo, $existingDs, true)
 
 $rawColor = '#ff9a9a66';
 $thresh = $vars['attr_thresh'] ?? null;
-$normMax = 255.0;
+$normMax = 110.0;
 
 // rate_unit: 'second' for COUNTER attributes whose average rate exceeds
 // 3600 raw-units/hour (i.e. >1/s on average; rrdtool already auto-rates
@@ -42,7 +88,7 @@ $rateUnit = $vars['rate_unit'] ?? '';
 $rateMultiplier = $rateUnit === 'hour' ? 3600.0 : 1.0;
 $rawLabelSuffix = match ($rateUnit) {
     'hour' => ' (changes/hour)',
-    'second' => ' (changes/secound)',
+    'second' => ' (changes/second)',
     default => '',
 };
 
@@ -89,7 +135,7 @@ $fetchDsMax = static function (string $file, string $ds, int $start, int $end): 
     return $peak;
 };
 
-$rrd_options[] = 'COMMENT:Series               Last      Min      Max\n';
+$rrd_options[] = 'COMMENT:Series           Last    Min     Max\n';
 
 // raw24div24/raw24div32: Hi and Lo are independent 24/32-bit counters that
 // often differ by orders of magnitude, so Lo is plotted against its own
@@ -113,7 +159,8 @@ if ($loMax !== null) {
 $leftMax = ($hiMax !== null && $hiMax > 0) ? $hiMax : 10.0;
 
 $graph_params->right_axis_label = 'Lo';
-$graph_params->vertical_label = 'Raw' . $rawLabelSuffix;
+$graph_params->vertical_label = $verticalLabel . $rawLabelSuffix;
+$applyLeftAxisFormat($leftMax);
 
 $rrd_options[] = "DEF:hi_raw={$rrd_filename}:{$dsHi}:AVERAGE";
 $rrd_options[] = "DEF:lo_raw={$rrd_filename}:{$dsLo}:AVERAGE";
@@ -128,13 +175,13 @@ if (is_numeric($thresh)) {
 }
 
 $rrd_options[] = 'LINE1.5:hi#9aff9a:Hi          ';
-$rrd_options[] = 'GPRINT:hi:LAST:%8.1lf';
-$rrd_options[] = 'GPRINT:hi:MIN:%8.1lf';
-$rrd_options[] = 'GPRINT:hi:MAX:%8.1lf\l';
+$rrd_options[] = 'GPRINT:hi:LAST:%5.1lf%s';
+$rrd_options[] = 'GPRINT:hi:MIN:%5.1lf%S';
+$rrd_options[] = 'GPRINT:hi:MAX:%5.1lf%S\l';
 $rrd_options[] = 'LINE1.5:div#9a9aff:Div         ';
-$rrd_options[] = 'GPRINT:div:LAST:%8.1lf';
-$rrd_options[] = 'GPRINT:div:MIN:%8.1lf';
-$rrd_options[] = 'GPRINT:div:MAX:%8.1lf\l';
+$rrd_options[] = 'GPRINT:div:LAST:%5.1lf%s';
+$rrd_options[] = 'GPRINT:div:MIN:%5.1lf%S';
+$rrd_options[] = 'GPRINT:div:MAX:%5.1lf%S\l';
 
 // Trend/forecast overlay for Hi only -- it's the counter that actually grows
 // toward a failure threshold; Div is a ratio, not a magnitude to project. Shown
@@ -169,6 +216,6 @@ if ($loMax !== null && $loMax > 0) {
 // GPRINT reads the true (rate-adjusted) "lo" series; "lo_display" only
 // repositions the LINE into the left axis's plotting space.
 $rrd_options[] = 'LINE1.5:lo_display' . $rawColor . ':Lo          ';
-$rrd_options[] = 'GPRINT:lo:LAST:%8.1lf';
-$rrd_options[] = 'GPRINT:lo:MIN:%8.1lf';
-$rrd_options[] = 'GPRINT:lo:MAX:%8.1lf\l';
+$rrd_options[] = 'GPRINT:lo:LAST:%5.1lf%s';
+$rrd_options[] = 'GPRINT:lo:MIN:%5.1lf%S';
+$rrd_options[] = 'GPRINT:lo:MAX:%5.1lf%S\l';
