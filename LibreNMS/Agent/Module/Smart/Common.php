@@ -83,9 +83,14 @@ class Common extends Application
         'smart_sata_selftest_log', 'smart_sata_error_log', 'smart_sata_error_cmd',
         'smart_sata_erc', 'smart_sata_phy_events', 'smart_sata_selective_test',
         'smart_sata_log_dir', 'smart_sata_dev_stats', 'smart_sata_pending_defects',
+        'smart_sata_bad_sector_history',
         'smart_nvme_info', 'smart_nvme_health', 'smart_nvme_namespaces', 'smart_nvme_selftest_log',
         // 'smart_sas_info', 'smart_sas_health', 'smart_sas_error_counters', 'smart_sas_selftest_log', // SAS not yet supported
     ];
+
+    // Grace period before a disk that's stopped appearing in polls has its
+    // rows (attributes, error/selftest history, bad-sector history, ...) purged.
+    private const MISSING_DISK_RETENTION_DAYS = 30;
 
     private array  $sensorRows = [];
 
@@ -452,12 +457,19 @@ class Common extends Application
     }
 
     /**
-     * Remove DB rows for drives that no longer appear in the device table.
+     * Mark/unmark drives missing from the device table, and purge any drive
+     * (and all its child-table rows, including bad-sector history) that has
+     * been missing for longer than MISSING_DISK_RETENTION_DAYS.
      *
      * Covers two cases with one pass:
-     *  - a single drive removed while SNMP is healthy (prune by disk_key), and
+     *  - a single drive removed while SNMP is healthy (marked by disk_key), and
      *  - the device-table OID gone empty/unresponsive (commonDevices is empty,
-     *    so every row for this app is deleted; this is the full-wipe path).
+     *    so every currently-tracked disk is marked missing this run).
+     *
+     * A drive isn't deleted the instant it disappears -- it's flagged via
+     * smart_devices.missing_since and only purged once that grace period has
+     * elapsed, so transient removals (cabling, rename, brief SNMP hiccup)
+     * don't discard bad-sector history.
      */
     private function cleanupStaleDevices(): void
     {
@@ -466,28 +478,52 @@ class Common extends Application
             static fn ($dev) => $dev['disk_key'],
             $commonDevices
         ));
-        $keepIdx = array_map('intval', array_keys($commonDevices));
+
+        $appId = $this->context->appId;
+        $now = date('Y-m-d H:i:s');
+        $cutoff = date('Y-m-d H:i:s', strtotime('-' . self::MISSING_DISK_RETENTION_DAYS . ' days'));
+
+        // Disks seen again this run: clear any previous missing mark.
+        if ($keepKeys !== []) {
+            DB::table('smart_devices')
+                ->where('app_id', $appId)
+                ->whereIn('disk_key', $keepKeys)
+                ->whereNotNull('missing_since')
+                ->update(['missing_since' => null]);
+        }
+
+        // Disks absent this run for the first time: start their grace period.
+        $newlyMissing = DB::table('smart_devices')->where('app_id', $appId)->whereNull('missing_since');
+        if ($keepKeys !== []) {
+            $newlyMissing->whereNotIn('disk_key', $keepKeys);
+        }
+        $newlyMissing->update(['missing_since' => $now]);
+
+        // Disks missing longer than the grace period: purge them entirely.
+        $expired = DB::table('smart_devices')
+            ->where('app_id', $appId)
+            ->where('missing_since', '<=', $cutoff)
+            ->get(['disk_key', 'snmp_index'])
+            ->all();
 
         $totalDeleted = 0;
 
-        // Disk-keyed child tables + the device table itself.
-        foreach ([...self::DEVICE_CHILD_TABLES, 'smart_devices'] as $table) {
-            $query = DB::table($table)->where('app_id', $this->context->appId);
-            if ($keepKeys !== []) {
-                $query->whereNotIn('disk_key', $keepKeys);
-            }
-            $totalDeleted += $query->delete();
-        }
+        if ($expired !== []) {
+            $expiredKeys = array_map(static fn ($row) => $row->disk_key, $expired);
+            $expiredIdx = array_map('intval', array_filter(array_map(static fn ($row) => $row->snmp_index, $expired), static fn ($idx) => $idx !== null));
 
-        // smart_sata_change is keyed by device_idx (snmp_index), not disk_key.
-        $changeQuery = DB::table('smart_sata_change')->where('app_id', $this->context->appId);
-        if ($keepIdx !== []) {
-            $changeQuery->whereNotIn('device_idx', $keepIdx);
+            foreach ([...self::DEVICE_CHILD_TABLES, 'smart_devices'] as $table) {
+                $totalDeleted += DB::table($table)->where('app_id', $appId)->whereIn('disk_key', $expiredKeys)->delete();
+            }
+
+            // smart_sata_change is keyed by device_idx (snmp_index), not disk_key.
+            if ($expiredIdx !== []) {
+                $totalDeleted += DB::table('smart_sata_change')->where('app_id', $appId)->whereIn('device_idx', $expiredIdx)->delete();
+            }
         }
-        $totalDeleted += $changeQuery->delete();
 
         if ($totalDeleted > 0) {
-            echo PHP_EOL . "smart_mib: removed {$totalDeleted} stale device row(s)" . PHP_EOL;
+            echo PHP_EOL . "smart_mib: removed {$totalDeleted} stale device row(s) (missing > " . self::MISSING_DISK_RETENTION_DAYS . ' days)' . PHP_EOL;
         }
     }
 

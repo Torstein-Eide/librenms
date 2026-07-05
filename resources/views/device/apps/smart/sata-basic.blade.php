@@ -328,19 +328,110 @@
             $panelEnd();
         @endphp
 
-        {{-- Pending Defects --}}
+        @php
+            // Shared by both the Pending Defects list and the Bad Sector Map caption below.
+            $fmtLba = static fn ($v) => number_format((int) $v, 0, '.', ' ');
+        @endphp
+
+        {{-- Pending Defects: currently-active entries only, collapsed into ranges --}}
         @if(! empty($disk['pending_defects']))
         @php
-            $panelStart('Pending Defects', (string) count($disk['pending_defects']));
-            echo '<table class="table table-condensed table-hover" style="width:auto">';
-            echo '<thead><tr><th>#</th><th>LBA</th></tr></thead><tbody>';
-            foreach ($disk['pending_defects'] as $pd) {
-                echo '<tr><td>' . htmlspecialchars((string) ($pd['entry_num'] ?? ''))
-                    . '</td><td>' . htmlspecialchars((string) ($pd['lba'] ?? '')) . '</td></tr>';
+            $sortedDefects = $disk['pending_defects'];
+            usort($sortedDefects, static fn ($a, $b) => ($a['lba'] ?? PHP_INT_MAX) <=> ($b['lba'] ?? PHP_INT_MAX));
+
+            $defectRanges = [];
+            foreach ($sortedDefects as $pd) {
+                $lba  = $pd['lba'] ?? null;
+                $last = $defectRanges !== [] ? $defectRanges[array_key_last($defectRanges)] : null;
+                if ($lba !== null && $last !== null && $last['last'] !== null && (int) $lba === (int) $last['last'] + 1) {
+                    $defectRanges[array_key_last($defectRanges)]['last'] = $lba;
+                } else {
+                    $defectRanges[] = ['first' => $lba, 'last' => $lba];
+                }
             }
-            echo '</tbody></table>';
+
+            // Compact range display: "3 856 084 776–83" -- strip the digits
+            // $first and $last share as a common leading prefix, so only the
+            // differing tail of $last is shown.
+            $fmtRange = static function (array $r) use ($fmtLba): string {
+                if ($r['first'] === null) {
+                    return '—';
+                }
+                if ((string) $r['first'] === (string) $r['last']) {
+                    return $fmtLba($r['first']);
+                }
+                $firstStr = (string) $r['first'];
+                $lastStr  = (string) $r['last'];
+                if (strlen($firstStr) !== strlen($lastStr)) {
+                    return $fmtLba($r['first']) . '–' . $fmtLba($r['last']);
+                }
+                $prefixLen = 0;
+                while ($prefixLen < strlen($firstStr) && $firstStr[$prefixLen] === $lastStr[$prefixLen]) {
+                    $prefixLen++;
+                }
+
+                return $fmtLba($r['first']) . '–' . substr($lastStr, $prefixLen);
+            };
+
+            $panelStart('Pending Defects', (string) count($disk['pending_defects']));
+            echo '<div style="column-width:220px;column-count:2;column-gap:18px">';
+            foreach ($defectRanges as $r) {
+                echo '<div style="break-inside:avoid-column;-webkit-column-break-inside:avoid;padding:1px 0">'
+                    . htmlspecialchars($fmtRange($r)) . '</div>';
+            }
+            echo '</div>';
             $panelEnd();
         @endphp
+        @endif
+
+        {{-- Bad Sector Map: every LBA ever recorded as a pending defect, regardless --}}
+        {{-- of whether the controller has since relocated/cleared it. --}}
+        @if(! empty($disk['bad_sector_history']))
+        @php
+            $totalSectors = null;
+            if (is_numeric($info['user_capacity_blocks'] ?? null)) {
+                $totalSectors = (int) $info['user_capacity_blocks'];
+            } elseif (is_numeric($info['user_capacity_bytes'] ?? null) && is_numeric($info['logical_block_size'] ?? null) && (int) $info['logical_block_size'] > 0) {
+                $totalSectors = intdiv((int) $info['user_capacity_bytes'], (int) $info['logical_block_size']);
+            }
+        @endphp
+        @if($totalSectors !== null && $totalSectors > 0)
+        @php
+            $mapBlockCount   = 500;
+            $sectorsPerBlock = (int) ceil($totalSectors / $mapBlockCount);
+
+            $badBlocks = [];
+            foreach ($disk['bad_sector_history'] as $bs) {
+                $lba = $bs['lba'] ?? null;
+                if ($lba === null) { continue; }
+                $blockIdx = intdiv((int) $lba, $sectorsPerBlock);
+                if ($blockIdx >= 0 && $blockIdx < $mapBlockCount) {
+                    $badBlocks[$blockIdx] = true;
+                }
+            }
+            $knownBadCount = count($disk['bad_sector_history']);
+            $badBlockCount = count($badBlocks);
+
+            $panelStart('Bad Sector Map', (string) $knownBadCount);
+            echo '<div class="tw:flex tw:flex-wrap tw:gap-px">';
+            for ($b = 0; $b < $mapBlockCount; $b++) {
+                // Fixed pixel sizing via inline style, not a Tailwind width/height
+                // utility class -- those only exist in the compiled CSS if some
+                // other already-built view happens to use the exact same class,
+                // so a brand-new class here would render as an invisible
+                // zero-size box until the next `npm run build`.
+                $color = isset($badBlocks[$b]) ? 'tw:bg-red-500' : 'tw:bg-gray-300';
+                echo '<div class="' . $color . '" style="height:12px;width:4px"></div>';
+            }
+            echo '</div>';
+            echo '<div class="tw:text-[11px] tw:text-gray-400 tw:mt-1">1 block ≈ '
+                . htmlspecialchars($fmtLba($sectorsPerBlock)) . ' sectors &middot; '
+                . htmlspecialchars((string) $knownBadCount) . ' known bad sector' . ($knownBadCount === 1 ? '' : 's')
+                . ' across ' . htmlspecialchars((string) $badBlockCount) . ' region' . ($badBlockCount === 1 ? '' : 's')
+                . '</div>';
+            $panelEnd();
+        @endphp
+        @endif
         @endif
     </div>
 </div>

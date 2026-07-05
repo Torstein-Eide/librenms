@@ -253,6 +253,7 @@ class HtmlData
         $phyEvents = $this->groupByDiskKey('smart_sata_phy_events', $appId, $sataKeys, 'event_id');
         $erc = $this->groupByDiskKey('smart_sata_erc', $appId, $sataKeys, 'direction');
         $pending = $this->groupByDiskKey('smart_sata_pending_defects', $appId, $sataKeys, 'entry_num');
+        $badSectorHistory = $this->groupByDiskKey('smart_sata_bad_sector_history', $appId, $sataKeys, 'lba');
         $logDir = $this->groupByDiskKey('smart_sata_log_dir', $appId, $sataKeys, 'log_address');
         $selectiveTest = $this->groupByDiskKey('smart_sata_selective_test', $appId, $sataKeys, 'slot');
 
@@ -327,6 +328,7 @@ class HtmlData
                 'phy_events'       => $rowsToArrays($phyEvents[$key] ?? []),
                 'erc'              => $this->indexByColumn($erc[$key] ?? [], 'direction'),
                 'pending_defects'  => $rowsToArrays($pending[$key] ?? []),
+                'bad_sector_history' => $rowsToArrays($badSectorHistory[$key] ?? []),
                 'log_dir'          => $rowsToArrays($logDir[$key] ?? []),
                 'selective_test'   => $rowsToArrays($selectiveTest[$key] ?? []),
             ];

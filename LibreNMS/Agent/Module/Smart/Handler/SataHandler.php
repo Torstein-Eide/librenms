@@ -1180,6 +1180,13 @@ final class SataHandler implements DiskTypeHandler
 
     private function syncSataPendingDefectRows(array $dev, array $rows): void
     {
+        $newLbas = array_values(array_unique(array_filter(array_map(
+            static fn ($row) => $row['smartmonSataPendingDefectsLba'] ?? null,
+            $rows
+        ), static fn ($lba) => $lba !== null)));
+
+        $this->recordBadSectorHistory($dev, $newLbas);
+
         foreach ($rows as $entryIndex => $row) {
             DbSync::upsert('smart_sata_pending_defects', [
                 'app_id'    => $this->ctx->appId,
@@ -1190,6 +1197,66 @@ final class SataHandler implements DiskTypeHandler
             ], ['app_id', 'disk_key', 'entry_num']);
         }
         DbSync::pruneStaleRows('smart_sata_pending_defects', $this->ctx->appId, $dev['disk_key'], 'entry_num', array_keys($rows));
+    }
+
+    /**
+     * Keep a permanent record of every LBA ever reported as a pending defect,
+     * separate from smart_sata_pending_defects (which only reflects what the
+     * controller currently considers pending -- an entry drops out of that
+     * live table the moment the sector is reallocated). Without this, a
+     * relocated sector's history would vanish the instant it's no longer
+     * "currently" pending.
+     *
+     * @param  array<int,int|string>  $newLbas  deduplicated LBAs from this poll
+     */
+    private function recordBadSectorHistory(array $dev, array $newLbas): void
+    {
+        $previousLbas = DB::table('smart_sata_pending_defects')
+            ->where('app_id', $this->ctx->appId)
+            ->where('disk_key', $dev['disk_key'])
+            ->whereNotNull('lba')
+            ->pluck('lba')
+            ->all();
+
+        $historyLbas = DB::table('smart_sata_bad_sector_history')
+            ->where('app_id', $this->ctx->appId)
+            ->where('disk_key', $dev['disk_key'])
+            ->pluck('lba')
+            ->all();
+
+        $now = date('Y-m-d H:i:s');
+
+        $existingLbas = array_values(array_intersect($newLbas, $historyLbas));
+        if ($existingLbas !== []) {
+            DB::table('smart_sata_bad_sector_history')
+                ->where('app_id', $this->ctx->appId)
+                ->where('disk_key', $dev['disk_key'])
+                ->whereIn('lba', $existingLbas)
+                ->update(['last_seen' => $now, 'cleared_at' => null]);
+        }
+
+        $insertLbas = array_values(array_diff($newLbas, $historyLbas));
+        if ($insertLbas !== []) {
+            DB::table('smart_sata_bad_sector_history')->insert(array_map(fn ($lba) => [
+                'app_id'     => $this->ctx->appId,
+                'device_id'  => $this->ctx->deviceId,
+                'disk_key'   => $dev['disk_key'],
+                'lba'        => $lba,
+                'first_seen' => $now,
+                'last_seen'  => $now,
+                'cleared_at' => null,
+            ], $insertLbas));
+        }
+
+        $clearedLbas = array_values(array_diff($previousLbas, $newLbas));
+        if ($clearedLbas !== []) {
+            DB::table('smart_sata_bad_sector_history')
+                ->where('app_id', $this->ctx->appId)
+                ->where('disk_key', $dev['disk_key'])
+                ->whereIn('lba', $clearedLbas)
+                ->whereNull('cleared_at')
+                ->update(['cleared_at' => $now]);
+        }
     }
 
     /** Poll-time narrowed walk: value + overflow only (name/size already in DB from discovery). */
