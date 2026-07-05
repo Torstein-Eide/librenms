@@ -198,6 +198,7 @@ Route::middleware(['auth'])->group(function (): void {
         Route::post('apps/smart/settings/default-view-mode', [Device\Apps\SmartAttributeSettingsController::class, 'updateDefaultViewMode'])->name('apps.smart.settings.default_view_mode');
         Route::post('apps/smart/settings/log-extra-dev-stats', [Device\Apps\SmartAttributeSettingsController::class, 'updateLogExtraDevStats'])->name('apps.smart.settings.log_extra_dev_stats');
         Route::post('apps/smart/settings/hw-forecast', [Device\Apps\SmartAttributeSettingsController::class, 'updateHwForecast'])->name('apps.smart.settings.hw_forecast');
+        Route::post('apps/smart/settings/excluded-attributes', [Device\Apps\SmartAttributeSettingsController::class, 'updateExcludedAttributes'])->name('apps.smart.settings.excluded_attributes');
     });
 
     // fallback device routes

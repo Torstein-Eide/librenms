@@ -15,6 +15,7 @@ use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Agent\Module\Smart\Support\AttributeRateTracker;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Agent\Module\Smart\Support\DevStatRrdCatalog;
+use LibreNMS\Agent\Module\Smart\Support\ExcludedAttributesSetting;
 use LibreNMS\Agent\Module\Smart\Support\ExtraDevStatSetting;
 use LibreNMS\Agent\Module\Smart\Support\HwForecastSetting;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
@@ -48,6 +49,9 @@ final class SataHandler implements DiskTypeHandler
     private array $sataAttributes = [];
     private array $sataDeviceList = [];
     private readonly ChangeTracker $changes;
+
+    /** rotation_rate per disk_key, cached from smartmonSataInfoTable at discovery time (see syncSataInfoRow()), so discoverSataDeviceSensors() can gate the rotating-disk Wear sensor without a DB round-trip. */
+    private array $sataRotationRate = [];
 
     /**
      * DS the current disk's per-cycle RRD file carries, keyed by DS name ->
@@ -172,6 +176,7 @@ final class SataHandler implements DiskTypeHandler
             "{$idx}_selftest_status",
             "{$idx}_selftest_short",
             "{$idx}_selftest_long",
+            "{$idx}_wear",
         ];
     }
 
@@ -277,16 +282,46 @@ final class SataHandler implements DiskTypeHandler
                     StateTranslation::define('Self-test in progress', 0xf, Severity::Ok),
                 ]);
         }
+
+        // Rotating Wear: only for spinning (non-SSD) disks, which have no single
+        // standard "% used" attribute the way SSDs have Wear_Leveling_Count. Value
+        // is 1 - (the lowest SMART normalized value among this disk's attributes),
+        // excluding whatever ExcludedAttributesSetting says (see its doc comment).
+        // Trends upward as the disk wears (like percentageUsedSensor()). No default
+        // thresholds -- left for the user to set via the sensor's own edit page.
+        if ($this->isRotatingDisk($this->sataRotationRate[$diskKey] ?? null)) {
+            $normalizedAttrs = [];
+            foreach ($attrRows as $attrId => $row) {
+                $normalizedAttrs[] = [
+                    'id'         => (int) ($row['smartmonSataAttrId'] ?? $attrId),
+                    'name'       => $row['smartmonSataAttrName'] ?? null,
+                    'value_norm' => $row['smartmonSataAttrValue'] ?? null,
+                    'status'     => (int) ($row['smartmonSataAttrStatus'] ?? 0),
+                ];
+            }
+            $wear = $this->rotatingWearPercent($normalizedAttrs, $diskKey);
+            if ($wear !== null) {
+                $this->ctx->discoverSensor(
+                    class: 'percent',
+                    type: 'smart_rotating_wear',
+                    index: "{$idx}_wear",
+                    oid: "app:smart_mib:{$idx}_wear",
+                    descr: "{$group} {$devName} Rotating Wear",
+                    current: $wear,
+                    group: $group,
+                );
+            }
+        }
     }
 
     /**
-     * Sync the SATA state sensor types (registered in discoverSataDeviceSensors,
-     * which runs before this call). The generic SENSOR-MIB types are synced
-     * separately by Common::syncMibSensorTypes() after their registration loop.
+     * Sync the SATA sensor types (registered in discoverSataDeviceSensors, which
+     * runs before this call). The generic SENSOR-MIB types are synced separately
+     * by Common::syncMibSensorTypes() after their registration loop.
      */
     private function syncSensorTypes(): void
     {
-        foreach (['smart_mib_health', 'smart_selftest_status', 'smart_selftest_short', 'smart_selftest_long'] as $type) {
+        foreach (['smart_mib_health', 'smart_selftest_status', 'smart_selftest_short', 'smart_selftest_long', 'smart_rotating_wear'] as $type) {
             app('sensor-discovery')->sync(sensor_type: $type);
         }
     }
@@ -317,6 +352,32 @@ final class SataHandler implements DiskTypeHandler
         // Raw value is hours; updateSensorValues() applies the sensor's stored
         // multiplier (60) to convert to minutes, matching the 'runtime' sensor unit.
         $values += SelftestAge::values($this->ctx, $idx, $diskKey, 'smart_sata_health', 'smart_sata_selftest_log');
+
+        // Rotating Wear (recomputed each poll from the freshly-polled attribute
+        // rows). Info table isn't re-walked every poll, so rotation_rate comes
+        // from a DB lookup here rather than the discovery-time $sataRotationRate
+        // cache, which isn't populated on a poll-only cycle.
+        $rotationRate = DB::table('smart_sata_info')
+            ->where('app_id', $this->ctx->appId)
+            ->where('disk_key', $diskKey)
+            ->value('rotation_rate');
+        if ($this->isRotatingDisk($rotationRate)) {
+            $normalizedAttrs = DB::table('smart_sata_attributes')
+                ->where('app_id', $this->ctx->appId)
+                ->where('disk_key', $diskKey)
+                ->get(['attribute_id', 'name', 'value_norm', 'status'])
+                ->map(fn ($row) => [
+                    'id'         => (int) $row->attribute_id,
+                    'name'       => $row->name,
+                    'value_norm' => $row->value_norm,
+                    'status'     => (int) $row->status,
+                ])
+                ->all();
+            $wear = $this->rotatingWearPercent($normalizedAttrs, $diskKey);
+            if ($wear !== null) {
+                $values["{$idx}_wear"] = $wear;
+            }
+        }
 
         if ($values !== []) {
             $this->ctx->updateSensorValues($values, "app:smart_mib:{$idx}_");
@@ -671,6 +732,8 @@ final class SataHandler implements DiskTypeHandler
 
     private function syncSataInfoRow(array $dev, array $row): void
     {
+        $this->sataRotationRate[$dev['disk_key']] = $row['smartmonSataRotationRate'] ?? null;
+
         DbSync::upsert('smart_sata_info', [
             'app_id'                               => $this->ctx->appId,
             'device_id'                            => $this->ctx->deviceId,
@@ -808,6 +871,50 @@ final class SataHandler implements DiskTypeHandler
         }
 
         AttributeRateTracker::sync($this->ctx->appId, $this->ctx->deviceId, $this->ctx->device['hostname'], $diskKey, $rrdFilename, $attrs);
+    }
+
+    /** True for a spinning (non-SSD) disk: numeric rotation_rate greater than zero. */
+    private function isRotatingDisk(mixed $rotationRate): bool
+    {
+        return is_numeric($rotationRate) && (float) $rotationRate > 0;
+    }
+
+    /**
+     * This disk's Wear percentage: 1 - (lowest SMART normalized value among
+     * $normalizedAttrs / 100), excluding NA-status rows and anything this
+     * disk's ExcludedAttributesSetting list matches (see that class's doc
+     * comment for why -- temperature/workload counters/typically-SSD-specific
+     * spare-endurance attributes would otherwise corrupt this reading). SMART
+     * normalized values are 100=new decreasing toward each attribute's
+     * failure threshold as it wears; inverting puts this sensor on the same
+     * "higher = more worn/used" scale as percentageUsedSensor() (NVMe
+     * "Percentage Used" / SATA "Endurance Used"), so the two are directly
+     * comparable wherever a disk's Wear sensor is looked up regardless of
+     * whether it's rotating or solid-state. Returns null if nothing
+     * qualifies (no sensor is registered/updated that cycle).
+     *
+     * @param  array<int, array{id: int, name: ?string, value_norm: mixed, status: int}>  $normalizedAttrs
+     */
+    private function rotatingWearPercent(array $normalizedAttrs, string $diskKey): ?float
+    {
+        $excluded = ExcludedAttributesSetting::resolve($this->ctx->appId, $diskKey);
+        $lowest = null;
+
+        foreach ($normalizedAttrs as $attr) {
+            if ($attr['status'] === -1 || ! is_numeric($attr['value_norm'])) {
+                continue;
+            }
+            if (ExcludedAttributesSetting::isExcluded($attr['name'], $attr['id'], $excluded)) {
+                continue;
+            }
+
+            $value = (float) $attr['value_norm'];
+            if ($lowest === null || $value < $lowest) {
+                $lowest = $value;
+            }
+        }
+
+        return $lowest === null ? null : max(0.0, min(100.0, 100.0 - $lowest));
     }
 
     /**

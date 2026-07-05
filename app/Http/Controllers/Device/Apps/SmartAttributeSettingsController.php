@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
+use LibreNMS\Agent\Module\Smart\Support\ExcludedAttributesSetting;
 use LibreNMS\Agent\Module\Smart\Support\ExtraDevStatSetting;
 use LibreNMS\Agent\Module\Smart\Support\HwForecastSetting;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
@@ -224,6 +225,37 @@ class SmartAttributeSettingsController
             $enableHwForecastOverride = $rawHwOverride === null ? null : (bool) $rawHwOverride;
         }
 
+        // Rotating Wear sensor's excluded attributes: global default list
+        // (falls back to the built-in defaults until customized) plus this
+        // device's per-disk overrides, if any. Affects only which attributes
+        // feed that sensor's calculation -- see ExcludedAttributesSetting.
+        $excludedAttributesGlobal = ExcludedAttributesSetting::resolve(ExcludedAttributesSetting::GLOBAL_APP_ID, '');
+        $excludedAttributesGlobalCustomized = DB::table('smart_app_settings')
+            ->where('app_id', ExcludedAttributesSetting::GLOBAL_APP_ID)
+            ->value('wear_excluded_attributes') !== null;
+
+        $perDiskExcludes = $appId !== null ? $this->perDiskExcludedAttributes($appId) : [];
+        $excludedAttributesByDisk = [];
+        $excludedAttributesHasOverride = [];
+        foreach ($diskKeys as $diskKey) {
+            $excludedAttributesHasOverride[$diskKey] = array_key_exists($diskKey, $perDiskExcludes);
+            $excludedAttributesByDisk[$diskKey] = $excludedAttributesHasOverride[$diskKey]
+                ? $perDiskExcludes[$diskKey]
+                : $excludedAttributesGlobal;
+        }
+
+        // Distinct attribute names ever discovered on any device, for the
+        // "add a pattern" datalist autocomplete (unlike $attributeNames above,
+        // not limited to the COUNTER/"count" subset used for rate thresholds).
+        $knownAttributeNames = DB::table('smart_sata_attributes')
+            ->whereNotNull('name')
+            ->distinct()
+            ->orderBy('name')
+            ->pluck('name')
+            ->filter(fn ($name) => trim((string) $name) !== '')
+            ->values()
+            ->all();
+
         return view('device.apps.smart.settings', [
             'device' => $device,
             'appId' => $appId,
@@ -240,6 +272,11 @@ class SmartAttributeSettingsController
             'logExtraDevStatsOverride' => $logExtraDevStatsOverride,
             'enableHwForecastGlobal' => $enableHwForecastGlobal,
             'enableHwForecastOverride' => $enableHwForecastOverride,
+            'excludedAttributesGlobal' => $excludedAttributesGlobal,
+            'excludedAttributesGlobalCustomized' => $excludedAttributesGlobalCustomized,
+            'excludedAttributesByDisk' => $excludedAttributesByDisk,
+            'excludedAttributesHasOverride' => $excludedAttributesHasOverride,
+            'knownAttributeNames' => $knownAttributeNames,
         ]);
     }
 
@@ -386,6 +423,93 @@ class SmartAttributeSettingsController
     private function perDiskTemplates(int $appId): array
     {
         $json = DB::table('smart_app_settings')->where('app_id', $appId)->value('disk_naming_templates');
+
+        return $json !== null ? (json_decode((string) $json, true) ?: []) : [];
+    }
+
+    /**
+     * Save the global default excluded-attributes list, or a per-disk override
+     * on this device when scope=disk. reset=true clears the target (global
+     * reverts to the built-in defaults; disk reverts to inheriting the global
+     * list) instead of saving an explicit (possibly empty) entries array.
+     */
+    public function updateExcludedAttributes(Device $device, Request $request): JsonResponse
+    {
+        $this->authorize('update', $device);
+
+        $validated = $request->validate([
+            'app_id' => 'required|integer',
+            'scope' => 'required|in:disk,global',
+            'disk_key' => 'required_if:scope,disk|string|nullable',
+            'reset' => 'nullable|boolean',
+            'entries' => 'nullable|array',
+            'entries.*.type' => 'required|in:name,regex,id',
+            'entries.*.pattern' => 'required|string|max:200',
+            'entries.*.comment' => 'nullable|string|max:255',
+        ]);
+
+        $appId = $this->ownedAppId($device, (int) $validated['app_id']);
+        if ($appId === null) {
+            return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
+        }
+
+        // jQuery's default $.param() serialization drops an "entries" key
+        // entirely when the JS array is empty (e.g. Reset, or the last row
+        // removed), so it's routinely absent from the request rather than an
+        // empty array -- treat "not sent" the same as "sent empty".
+        $entries = array_map(static fn (array $e) => [
+            'type' => $e['type'],
+            'pattern' => $e['pattern'],
+            'comment' => trim((string) ($e['comment'] ?? '')) ?: null,
+        ], $validated['entries'] ?? []);
+
+        foreach ($entries as $entry) {
+            if ($entry['type'] === 'regex' && @preg_match($entry['pattern'], '') === false) {
+                return response()->json(['status' => 'error', 'message' => "Invalid regex: {$entry['pattern']}"], 422);
+            }
+            if ($entry['type'] === 'id' && ! ctype_digit($entry['pattern'])) {
+                return response()->json(['status' => 'error', 'message' => "Invalid attribute ID: {$entry['pattern']}"], 422);
+            }
+        }
+
+        $reset = (bool) ($validated['reset'] ?? false);
+
+        if ($validated['scope'] === 'global') {
+            DB::table('smart_app_settings')->updateOrInsert(
+                ['app_id' => ExcludedAttributesSetting::GLOBAL_APP_ID],
+                ['wear_excluded_attributes' => $reset ? null : json_encode($entries)]
+            );
+        } else {
+            $diskKey = (string) $validated['disk_key'];
+            $perDisk = $this->perDiskExcludedAttributes($appId);
+            if ($reset) {
+                unset($perDisk[$diskKey]);
+            } else {
+                $perDisk[$diskKey] = $entries;
+            }
+
+            DB::table('smart_app_settings')->updateOrInsert(
+                ['app_id' => $appId],
+                ['disk_wear_excluded_attributes' => $perDisk !== [] ? json_encode($perDisk) : null]
+            );
+        }
+
+        $this->invalidateHtmlData($device, $appId);
+
+        $diskKeyForResolve = $validated['scope'] === 'global' ? '' : (string) $validated['disk_key'];
+        $resolveAppId = $validated['scope'] === 'global' ? ExcludedAttributesSetting::GLOBAL_APP_ID : $appId;
+
+        return response()->json([
+            'status' => 'ok',
+            'message' => 'Excluded attributes updated',
+            'entries' => ExcludedAttributesSetting::resolve($resolveAppId, $diskKeyForResolve),
+        ]);
+    }
+
+    /** @return array<string, array<int, array<string, mixed>>> Per-disk excluded-attribute overrides for this app, keyed by disk_key. */
+    private function perDiskExcludedAttributes(int $appId): array
+    {
+        $json = DB::table('smart_app_settings')->where('app_id', $appId)->value('disk_wear_excluded_attributes');
 
         return $json !== null ? (json_decode((string) $json, true) ?: []) : [];
     }

@@ -838,7 +838,12 @@ SCRIPT;
                         $serialCell = $serial !== ''
                             ? '<a href="' . htmlspecialchars($smartUrl($key), ENT_QUOTES) . '">' . htmlspecialchars($serial) . '</a>'
                             : '-';
-                        $usedSensor = $data->percentageUsedSensor($key);
+                        // percentageUsedSensor() is an agentx-reported generic SENSOR-MIB
+                        // "used" sensor (NVMe-only in practice); rotatingWearSensor() is
+                        // the rotating-disk (HDD) Wear sensor computed by SataHandler
+                        // (see rotatingWearPercent()) -- there is no SENSOR-MIB source
+                        // for HDD wear, so it's the only reading available for them.
+                        $usedSensor = $data->percentageUsedSensor($key) ?? $data->rotatingWearSensor($key);
                         $spareSensor = $data->availableSpareSensor($key);
                     @endphp
                     <tr>

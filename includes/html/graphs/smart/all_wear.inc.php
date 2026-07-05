@@ -16,10 +16,12 @@ $printtotal = 0;
 $addarea = 1;
 $transparency = 15;
 
-// MIB-driven wear ("Percentage Used" / "Endurance Used") sensors, relabeled
-// per the saved naming template, same approach as the all-temperatures
-// overview graph. Legacy rev1 "smart_wear" sensors have no disk_key to map
-// to, so they keep falling back to their stored sensor_descr below.
+// MIB-driven wear ("Percentage Used" / "Endurance Used" SENSOR-MIB sensor, or
+// the rotating-disk Wear sensor for HDDs -- see HtmlData::wearRemaining())
+// sensors, relabeled per the saved naming template, same approach as the
+// all-temperatures overview graph. Legacy rev1 "smart_wear" sensors have no
+// disk_key to map to, so they keep falling back to their stored sensor_descr
+// below.
 $htmlData = isset($app) ? HtmlData::forDevice($app, $device) : null;
 $labelMode = 'device';
 if ($htmlData !== null) {
@@ -33,7 +35,7 @@ $mibSensorIds = [];
 
 if ($htmlData !== null) {
     foreach ($htmlData->diskKeys() as $diskKey) {
-        $sensor = $htmlData->percentageUsedSensor($diskKey);
+        $sensor = $htmlData->percentageUsedSensor($diskKey) ?? $htmlData->rotatingWearSensor($diskKey);
         if ($sensor === null) {
             continue;
         }

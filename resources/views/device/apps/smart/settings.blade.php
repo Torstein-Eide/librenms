@@ -474,6 +474,164 @@
                     })
                     .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('hw forecast (reset)', jqXHR)); });
             });
+
+            // Excluded ATA Attributes: one instance per scope (Global tab's
+            // defaults, one per disk-key tab on the Device tab). Add/remove
+            // rows client-side; any row change (or add/remove) re-POSTs the
+            // whole entries array for that instance -- no submit button.
+            var excludedAttrsUrl = '{{ route('device.apps.smart.settings.excluded_attributes', $device) }}';
+
+            function excludedAttrRowHtml() {
+                return '<tr class="smart-excluded-attr-row">'
+                    + '<td><select class="form-control input-sm smart-excluded-attr-type">'
+                    + '<option value="name">{{ __('Name') }}</option>'
+                    + '<option value="regex">{{ __('Regex') }}</option>'
+                    + '<option value="id">{{ __('ID') }}</option>'
+                    + '</select></td>'
+                    + '<td><input type="text" class="form-control input-sm smart-excluded-attr-pattern" list="smart-attr-names"></td>'
+                    + '<td><input type="text" class="form-control input-sm smart-excluded-attr-comment" style="font-size:12px" placeholder="{{ __('Optional note') }}"></td>'
+                    + '<td><a href="#" class="btn btn-default btn-sm smart-excluded-attr-remove" title="{{ __('Remove') }}"><i class="fa fa-times"></i></a></td>'
+                    + '</tr>';
+            }
+
+            // ID/Regex-type rows match differently from Name -- swap the pattern
+            // input's autocomplete/placeholder to match whenever the Type select
+            // changes (existing rows, newly-added rows, and rows repopulated
+            // after a Reset all go through this same handler).
+            function updateExcludedAttrPatternField($row) {
+                var $pattern = $row.find('.smart-excluded-attr-pattern');
+                var type = $row.find('.smart-excluded-attr-type').val();
+                $pattern.attr('list', type === 'name' ? 'smart-attr-names' : null);
+                $pattern.attr('placeholder', type === 'id' ? '{{ __('Numeric attribute ID') }}' : (type === 'regex' ? '/^Pattern/i' : ''));
+            }
+
+            $(document).on('change', '.smart-excluded-attr-type', function () {
+                updateExcludedAttrPatternField($(this).closest('tr'));
+            });
+
+            $('.smart-excluded-attr-row').each(function () {
+                updateExcludedAttrPatternField($(this));
+            });
+
+            // A disk with no override of its own shows the Global tab's rows as a
+            // read-only preview (disabled fields, no Add/Remove) until "Override
+            // for this device" is clicked, which enables editing and immediately
+            // saves those rows as this disk's own override. Reset (below) reverts
+            // back to this read-only state. Never applies on the Global tab.
+            function setExcludedAttrsReadOnly($container, readOnly) {
+                $container.find('.smart-excluded-attr-type, .smart-excluded-attr-pattern, .smart-excluded-attr-comment').prop('disabled', readOnly);
+                $container.find('.smart-excluded-attr-row').toggleClass('text-muted', readOnly);
+                $container.find('.smart-excluded-attr-remove').toggleClass('hidden', readOnly);
+                $container.find('.smart-excluded-attr-add').toggleClass('hidden', readOnly);
+                $container.find('.smart-excluded-attr-override-start').toggleClass('hidden', ! readOnly);
+            }
+
+            $(document).on('click', '.smart-excluded-attr-override-start', function (event) {
+                event.preventDefault();
+                var $container = $(this).closest('.smart-excluded-attrs');
+                setExcludedAttrsReadOnly($container, false);
+                saveExcludedAttrs($container);
+            });
+
+            function collectExcludedAttrEntries($container) {
+                var entries = [];
+                $container.find('.smart-excluded-attr-row').each(function () {
+                    var pattern = $.trim($(this).find('.smart-excluded-attr-pattern').val());
+                    if (pattern === '') return;
+                    entries.push({
+                        type: $(this).find('.smart-excluded-attr-type').val(),
+                        pattern: pattern,
+                        comment: $.trim($(this).find('.smart-excluded-attr-comment').val()),
+                    });
+                });
+                return entries;
+            }
+
+            function saveExcludedAttrs($container) {
+                $.ajax({
+                    type: 'POST',
+                    url: excludedAttrsUrl,
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        scope: $container.data('scope'),
+                        disk_key: $container.data('disk_key'),
+                        entries: collectExcludedAttrEntries($container),
+                    },
+                    success: function (data) {
+                        if (data.status === 'ok') {
+                            toastr.success(data.message);
+                            $container.find('.smart-excluded-attr-reset').removeClass('disabled');
+                        } else {
+                            toastr.error(data.message);
+                        }
+                    },
+                    error: function (jqXHR) { toastr.error('{{ __('Could not update excluded attributes') }}' + ': ' + debugAjaxError('excluded attributes', jqXHR)); },
+                });
+            }
+
+            $(document).on('change', '.smart-excluded-attr-type, .smart-excluded-attr-pattern, .smart-excluded-attr-comment', function () {
+                saveExcludedAttrs($(this).closest('.smart-excluded-attrs'));
+            });
+
+            $(document).on('click', '.smart-excluded-attr-remove', function (event) {
+                event.preventDefault();
+                var $container = $(this).closest('.smart-excluded-attrs');
+                $(this).closest('tr').remove();
+                saveExcludedAttrs($container);
+            });
+
+            $(document).on('click', '.smart-excluded-attr-add', function (event) {
+                event.preventDefault();
+                $(this).closest('.smart-excluded-attrs').find('.smart-excluded-attrs-rows').append(excludedAttrRowHtml());
+            });
+
+            $(document).on('click', '.smart-excluded-attr-reset', function (event) {
+                event.preventDefault();
+                if ($(this).hasClass('disabled')) return;
+
+                var $resetLink = $(this);
+                var $container = $(this).closest('.smart-excluded-attrs');
+                $.ajax({
+                    type: 'POST',
+                    url: excludedAttrsUrl,
+                    dataType: 'json',
+                    data: {
+                        _token: token,
+                        app_id: appId,
+                        scope: $container.data('scope'),
+                        disk_key: $container.data('disk_key'),
+                        reset: 1,
+                        entries: [],
+                    },
+                    success: function (data) {
+                        if (data.status !== 'ok') {
+                            toastr.error(data.message);
+                            return;
+                        }
+                        toastr.success(data.message);
+                        var $rows = $container.find('.smart-excluded-attrs-rows');
+                        $rows.empty();
+                        (data.entries || []).forEach(function (entry) {
+                            var $row = $(excludedAttrRowHtml());
+                            $row.find('.smart-excluded-attr-type').val(entry.type);
+                            $row.find('.smart-excluded-attr-pattern').val(entry.pattern);
+                            $row.find('.smart-excluded-attr-comment').val(entry.comment || '');
+                            updateExcludedAttrPatternField($row);
+                            $rows.append($row);
+                        });
+                        $resetLink.addClass('disabled');
+                        // A disk reset means "back to inheriting the Global list" --
+                        // the rows just repopulated above are that inherited preview,
+                        // so re-lock them read-only (no-op on the Global tab itself).
+                        if ($container.data('scope') === 'disk') {
+                            setExcludedAttrsReadOnly($container, true);
+                        }
+                    },
+                    error: function (jqXHR) { toastr.error('{{ __('Could not reset excluded attributes') }}' + ': ' + debugAjaxError('excluded attributes reset', jqXHR)); },
+                });
+            });
         })();
     </script>
 @endpush

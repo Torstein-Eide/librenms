@@ -181,4 +181,44 @@
             </div>
         </div>
     </div>
+
+    <div class="panel panel-default">
+        <div class="panel-heading">
+            <h4 class="panel-title">
+                <a data-toggle="collapse" data-parent="#smart-settings-device-accordion" href="#smart-settings-excluded-attrs-device-body">
+                    {{ __('Rotating Wear Sensor: Excluded Attributes') }}
+                </a>
+            </h4>
+        </div>
+        <div id="smart-settings-excluded-attrs-device-body" class="panel-collapse collapse">
+            <div class="panel-body">
+                @if (empty($diskKeys))
+                    <div class="alert alert-info">{{ __('No per-disk SMART attributes discovered yet for this device.') }}</div>
+                @else
+                    <ul class="nav nav-tabs" role="tablist">
+                        @foreach ($diskKeys as $i => $diskKey)
+                            @php $tabId = 'smart-excluded-attrs-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey ?: 'default'); @endphp
+                            <li role="presentation" class="{{ $i === 0 ? 'active' : '' }}">
+                                <a href="#{{ $tabId }}" aria-controls="{{ $tabId }}" role="tab" data-toggle="tab">{{ $diskLabels[$diskKey] ?? $diskKey }}</a>
+                            </li>
+                        @endforeach
+                    </ul>
+
+                    <div class="tab-content" style="margin-top:12px">
+                        @foreach ($diskKeys as $i => $diskKey)
+                            @php
+                                $tabId = 'smart-excluded-attrs-disk-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $diskKey ?: 'default');
+                                $scope = 'disk';
+                                $entries = $excludedAttributesByDisk[$diskKey] ?? [];
+                                $isReset = ! ($excludedAttributesHasOverride[$diskKey] ?? false);
+                            @endphp
+                            <div role="tabpanel" class="tab-pane {{ $i === 0 ? 'active' : '' }}" id="{{ $tabId }}">
+                                @include('device.apps.smart.settings-excluded-attributes')
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
 </div>

@@ -133,7 +133,7 @@
 
             $sensor = match ($active['type']) {
                 'all_temp'            => $data->temperatureSensor($key),
-                'all_wear'            => $data->percentageUsedSensor($key),
+                'all_wear'            => $data->percentageUsedSensor($key) ?? $data->rotatingWearSensor($key),
                 'all_spare'           => $data->availableSpareSensor($key),
                 'all_health'          => $data->healthSensor($key),
                 'all_selftest_status' => $data->selftestStatusSensor($key),

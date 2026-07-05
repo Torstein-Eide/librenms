@@ -1,7 +1,14 @@
 {{-- Global tab: install-wide attribute-threshold defaults, the global naming
-     template, this device's default view mode, and the global-default toggles
-     for log-extra-dev-stats / hw-forecast. Included by settings.blade.php.
-     Expects $stateBadge from the parent view. --}}
+     template, this device's default view mode, the global-default toggles
+     for log-extra-dev-stats / hw-forecast, and the global excluded-attributes
+     list. Included by settings.blade.php. Expects $stateBadge from the parent
+     view. --}}
+<datalist id="smart-attr-names">
+    @foreach ($knownAttributeNames ?? [] as $attrName)
+        <option value="{{ str_replace('_', ' ', (string) $attrName) }}">
+    @endforeach
+</datalist>
+
 <div class="panel-group" id="smart-settings-global-accordion">
     <div class="panel panel-default">
         <div class="panel-heading">
@@ -137,6 +144,27 @@
                         {{ __('Enabled by default') }}
                     </label>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel panel-default">
+        <div class="panel-heading">
+            <h4 class="panel-title">
+                <a data-toggle="collapse" data-parent="#smart-settings-global-accordion" href="#smart-settings-excluded-attrs-global-body">
+                    {{ __('Rotating Wear Sensor: Excluded Attributes') }}
+                </a>
+            </h4>
+        </div>
+        <div id="smart-settings-excluded-attrs-global-body" class="panel-collapse collapse">
+            <div class="panel-body">
+                @php
+                    $scope = 'global';
+                    $diskKey = '';
+                    $entries = $excludedAttributesGlobal ?? [];
+                    $isReset = ! ($excludedAttributesGlobalCustomized ?? false);
+                @endphp
+                @include('device.apps.smart.settings-excluded-attributes')
             </div>
         </div>
     </div>

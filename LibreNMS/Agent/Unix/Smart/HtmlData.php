@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
+use LibreNMS\Agent\Module\Smart\Support\ExcludedAttributesSetting;
 use LibreNMS\Data\Store\TimeSeriesPoint;
 use LibreNMS\Util\Number;
 
@@ -430,6 +431,12 @@ class HtmlData
         return $this->allSensors->get($this->diskIndex($diskKey) . '_health');
     }
 
+    /** Rotating-disk (HDD) "Wear" percent sensor (see SataHandler::rotatingWearPercent()), or null for SSD/NVMe disks. */
+    public function rotatingWearSensor(string $diskKey): ?Sensor
+    {
+        return $this->allSensors->get($this->diskIndex($diskKey) . '_wear');
+    }
+
     /** NVMe "Available Spare" SENSOR-MIB percent sensor for a disk, or null. */
     public function availableSpareSensor(string $diskKey): ?Sensor
     {
@@ -744,12 +751,15 @@ class HtmlData
     }
 
     /**
-     * SSD wear-remaining percentage, from the "Percentage Used" (NVMe) /
-     * "Endurance Used" (SATA) SENSOR-MIB sensor.
+     * Wear-remaining percentage: SSD from the "Percentage Used" (NVMe) /
+     * "Endurance Used" (SATA) SENSOR-MIB sensor; rotating (HDD) disks fall back
+     * to the Wear sensor (see SataHandler::rotatingWearPercent()), which has no
+     * SENSOR-MIB source since HDDs have no standard "remaining life %" attribute.
      */
     public function wearRemaining(array $disk): ?float
     {
-        $sensor = $this->percentageUsedSensor((string) $disk['disk_key']);
+        $sensor = $this->percentageUsedSensor((string) $disk['disk_key'])
+            ?? $this->rotatingWearSensor((string) $disk['disk_key']);
 
         return $sensor && is_numeric($sensor->sensor_current)
             ? max(0.0, min(100.0, (float) $sensor->sensor_current))
@@ -758,12 +768,14 @@ class HtmlData
 
     /**
      * Estimated total service life in years, extrapolated from wear consumed so far
-     * against power-on age (assumes a constant wear rate). SATA is gated to attribute
-     * 177 "Wear_Leveling_Count" specifically. Its normalised value (100 = new, falling
-     * to the failure threshold as the drive wears) is a reliable remaining-life percentage,
-     * unlike some of the other vendor-specific wear attributes. NVMe uses the
-     * spec-defined "Percentage Used" sensor directly. Returns null when the required
-     * attribute/sensor is absent or power-on hours are unknown/zero.
+     * against power-on age (assumes a constant wear rate). SATA SSDs are gated to
+     * attribute 177 "Wear_Leveling_Count" specifically -- its normalised value
+     * (100 = new, falling to the failure threshold as the drive wears) is a
+     * reliable remaining-life percentage, unlike some of the other vendor-specific
+     * wear attributes -- falling back to the rotating-disk Wear sensor for HDDs,
+     * which have no Wear_Leveling_Count. NVMe uses the spec-defined "Percentage
+     * Used" sensor directly. Returns null when nothing is available or power-on
+     * hours are unknown/zero.
      */
     public function estimatedLifetimeYears(array $disk): ?float
     {
@@ -772,9 +784,20 @@ class HtmlData
             return null;
         }
 
-        $wearRemaining = $this->isNvme($disk)
-            ? $this->nvmePercentageUsedRemaining((string) $disk['disk_key'])
-            : $this->wearLevelingCountRemaining($disk);
+        if ($this->isNvme($disk)) {
+            $wearRemaining = $this->nvmePercentageUsedRemaining((string) $disk['disk_key']);
+        } else {
+            $wearRemaining = $this->wearLevelingCountRemaining($disk);
+            if ($wearRemaining === null) {
+                // rotatingWearSensor() is on the "% used" scale (see
+                // SataHandler::rotatingWearPercent()), same as percentageUsedSensor();
+                // invert back to "% remaining" like nvmePercentageUsedRemaining() does.
+                $sensor = $this->rotatingWearSensor((string) $disk['disk_key']);
+                $wearRemaining = $sensor && is_numeric($sensor->sensor_current)
+                    ? 100.0 - max(0.0, min(100.0, (float) $sensor->sensor_current))
+                    : null;
+            }
+        }
 
         if ($wearRemaining === null) {
             return null;
