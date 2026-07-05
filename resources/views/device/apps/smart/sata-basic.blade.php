@@ -616,7 +616,7 @@
         if ($attrId > 0) {
             $mini = $graphPopup(
                 'smart_sata_attr_value',
-                ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'rate_unit' => $attr['rate_unit'] ?? ''],
+                ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'attr_thresh' => is_numeric($thresh) ? (string) $thresh : '', 'rate_unit' => $attr['rate_unit'] ?? ''],
                 null,
                 $popupTitle($disk, $name, $attrCurrentDisp),
                 60,
@@ -632,7 +632,7 @@
         if ($attrId > 0 && in_array($rawFormat, [12, 13], true)) {
             $miniDiv = $graphPopup(
                 'smart_sata_attr_div',
-                ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'rate_unit' => $attr['rate_unit'] ?? ''],
+                ['id' => $attrAppId, 'disk' => $idx, 'attr_id' => $attrId, 'attr_thresh' => is_numeric($thresh) ? (string) $thresh : '', 'rate_unit' => $attr['rate_unit'] ?? ''],
                 null,
                 $popupTitle($disk, $name . ' (Hi/Lo)', $attrCurrentDisp),
                 60,

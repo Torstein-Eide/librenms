@@ -13,11 +13,28 @@ if ($attrId <= 0) {
     throw new RrdGraphException('Missing SMART attribute id');
 }
 
-$attrName = (string) (DB::table('smart_sata_attributes')
+$attrRow = DB::table('smart_sata_attributes')
     ->where('app_id', $app->app_id)
     ->where('disk_key', $vars['disk'])
     ->where('attribute_id', $attrId)
-    ->value('name') ?? '');
+    ->first(['name', 'rate_672h', 'rate_168h', 'rate_24h', 'rate_8h']);
+$attrName = (string) ($attrRow->name ?? '');
+
+// Longest available lookback window wins -- it's the smoothest estimate of
+// long-term drift, same preference order the settings threshold tables use
+// when picking which Δ column to trust for a "trend" read. Only used to feed
+// RrdTrendForecast's HWPREDICT branch a "crosses threshold in ~N days"
+// estimate (see below); the linear-fallback branch derives its own slope and
+// ignores this.
+$persistedRatePerHour = null;
+if ($attrRow !== null) {
+    foreach (['rate_672h', 'rate_168h', 'rate_24h', 'rate_8h'] as $column) {
+        if (is_numeric($attrRow->$column ?? null)) {
+            $persistedRatePerHour = (float) $attrRow->$column;
+            break;
+        }
+    }
+}
 
 /**
  * Keyword -> [vertical-axis description, unit] for the Raw line's label.
@@ -105,6 +122,10 @@ if (! $hasRaw && ! $hasNormalized && ! $hasDiv && $partSuffixes === []) {
 }
 
 $normalizedColor = session('applied_site_style') == 'dark' ? '#f2f2f2' : '#272b30';
+// Faded version of Normalized's own color for its trend overlay, so the two
+// visibly belong together instead of competing for a distinct hue -- same
+// alpha-suffix convention $rawColor below already uses.
+$normalizedTrendColor = $normalizedColor . '66';
 $rawColor = '#ff9a9a66';
 $threshRaw = $vars['attr_thresh'] ?? null;
 $thresh = (is_numeric($threshRaw) && (float) $threshRaw > 0) ? $threshRaw : null;
@@ -123,7 +144,6 @@ $rawLabelSuffix = match ($rateUnit) {
     'second' => ' (changes/second)',
     default => '',
 };
-$avgRateUnitText = $rateUnit === 'hour' ? 'changes/hour' : 'changes/second';
 
 /**
  * Fetch the MAX consolidation peak for $ds over the graphed period.
@@ -181,7 +201,7 @@ $fetchMaxAcross = static function (array $dsNames) use ($fetchDsMax, $rrd_filena
     return $peak;
 };
 
-$rrd_options[] = 'COMMENT:Series           Last    Min     Max\n';
+$rrd_options[] = 'COMMENT:Series           Last    Min     Max     Avg/Trend\n';
 
 /**
  * DEF/CDEF/LINE for Normalized, scaled against $rawMax: same peak-lock trick
@@ -327,48 +347,104 @@ if ($hasDiv) {
         $rrd_options[] = "DEF:normalized={$rrd_filename}:{$dsNormalized}:AVERAGE";
         $rrd_options[] = 'CDEF:norm_display=normalized,' . $rawMax . ',*,' . $normMax . ',/';
 
+        // Legend rows grouped by series below (Raw's own rows, then everything
+        // Normalized's), rather than interleaved -- Raw's threshold/rate context
+        // stayed next to Normalized's data before, which read as bouncing between
+        // the two series.
+        $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
+        $rrd_options[] = 'GPRINT:rawDisplay:LAST:%5.1lf%s';
+        // %s (not %S) on MIN/MAX -- Raw's own scale, not locked to LAST's. A COUNTER
+        // attribute's LAST (current rate) can be orders of magnitude smaller than its
+        // historical MAX, so %S here previously left MAX showing a long unscaled
+        // number instead of an SI-suffixed one.
+        $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%s';
+        $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%s';
+        if (in_array($rateUnit, ['hour', 'second'], true)) {
+            // Merged into Raw's own row (Avg/Trend column) instead of a separate
+            // "Period average rate" line -- HRULE kept for the visual reference line,
+            // just without its own legend text.
+            $rrd_options[] = 'HRULE:p_avg#ff6600';
+            $rrd_options[] = 'GPRINT:p_avg:  %5.1lf%s' . ($rateUnit === 'second' ? '/s' : '/h') . '\l';
+        } else {
+            $rrd_options[] = 'COMMENT:\l';
+        }
+        $rrd_options[] = 'COMMENT:\l';
+
+        $showNormalizedTrend = $to > time() && ! in_array($attrId, [194, 190], true);
+        $normalizedTrend = null;
+        // Paint drawn before the Normalized line itself so Normalized paints on top of
+        // (not under) its own trend overlay; legend text grouped after Normalized's own
+        // Last/Min/Max row instead -- see the "Trend/forecast overlay" note below.
+        if ($showNormalizedTrend) {
+            RrdTrendForecast::appendPaint($rrd_options, $rrd_filename, $dsNormalized, 'nhw', 1.0, $normalizedTrendColor, $rawMax, $normMax);
+            $normalizedTrend = RrdTrendForecast::computeTrendSummary($rrd_filename, $dsNormalized, 1.0, $graph_params->from, $graph_params->to, is_numeric($thresh) ? (float) $thresh : null);
+        }
+        $rrd_options[] = 'LINE2:norm_display' . $normalizedColor . ':Normalized  ';
+        $rrd_options[] = 'GPRINT:normalized:LAST:%5.1lf%s';
+        $rrd_options[] = 'GPRINT:normalized:MIN:%5.1lf%S';
+        $rrd_options[] = 'GPRINT:normalized:MAX:%5.1lf%S';
+        // Avg/Trend column: the day-rate computed alongside the trend line's crossing
+        // estimate (see RrdTrendForecast::computeTrendSummary()), not repeated again
+        // in the trend legend line below.
+        $rrd_options[] = $normalizedTrend !== null
+            ? 'COMMENT:  ' . Rrd::safeDescr($normalizedTrend['rateText']) . '\l'
+            : 'COMMENT:\l';
+        if ($showNormalizedTrend) {
+            RrdTrendForecast::appendLegend($rrd_options, 'nhw', $normalizedTrend['crossingText'] ?? null);
+        }
         if (is_numeric($thresh)) {
             $threshDisplay = round((float) $thresh * $rawMax / $normMax, 4);
             $rrd_options[] = 'COMMENT:Alert thresholds\:';
             $rrd_options[] = 'LINE1.5:' . $threshDisplay . '#005bdf:low_warn = ' . rtrim(rtrim(number_format((float) $thresh, 2, '.', ''), '0'), '.') . '\l:dashes';
         }
-
-        $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
-        $rrd_options[] = 'GPRINT:rawDisplay:LAST:%5.1lf%s';
-        $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%S';
-        $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%S\l';
-        $rrd_options[] = 'LINE2:norm_display' . $normalizedColor . ':Normalized  ';
-        $rrd_options[] = 'GPRINT:normalized:LAST:%5.1lf%s';
-        $rrd_options[] = 'GPRINT:normalized:MIN:%5.1lf%S';
-        $rrd_options[] = 'GPRINT:normalized:MAX:%5.1lf%S\l';
-        if (in_array($rateUnit, ['hour', 'second'], true)) {
-            $rrd_options[] = 'HRULE:p_avg#ff6600:Period average rate\: ';
-            $rrd_options[] = 'GPRINT:p_avg:%5.1lf%s';
-            $rrd_options[] = "COMMENT: {$avgRateUnitText}\\l";
-        }
     } else {
         // Raw is 0 or unavailable. Both sit naturally in the 0-255 range.
         $graph_params->right_axis = '1:0';
 
+        $rrd_options[] = "DEF:normalized={$rrd_filename}:{$dsNormalized}:AVERAGE";
+        // Legend rows grouped by series below (Raw's own rows, then everything
+        // Normalized's), rather than interleaved.
+        $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
+        $rrd_options[] = 'GPRINT:rawDisplay:LAST:%5.1lf%s';
+        // %s (not %S) on MIN/MAX -- Raw's own scale, not locked to LAST's. A COUNTER
+        // attribute's LAST (current rate) can be orders of magnitude smaller than its
+        // historical MAX, so %S here previously left MAX showing a long unscaled
+        // number instead of an SI-suffixed one.
+        $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%s';
+        $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%s';
+        if (in_array($rateUnit, ['hour', 'second'], true)) {
+            // Merged into Raw's own row (Avg/Trend column) instead of a separate
+            // "Period average rate" line -- HRULE kept for the visual reference line,
+            // just without its own legend text.
+            $rrd_options[] = 'HRULE:p_avg#ff6600';
+            $rrd_options[] = 'GPRINT:p_avg:  %5.1lf%s' . ($rateUnit === 'second' ? '/s' : '/h') . '\l';
+        } else {
+            $rrd_options[] = 'COMMENT:\l';
+        }
+        $rrd_options[] = 'COMMENT:\l';
+
+        // No remap here -- Normalized is plotted directly (no rawMax to scale
+        // against), so its trend overlay needs none either.
+        $showNormalizedTrend = $to > time() && ! in_array($attrId, [194, 190], true);
+        $normalizedTrend = null;
+        if ($showNormalizedTrend) {
+            RrdTrendForecast::appendPaint($rrd_options, $rrd_filename, $dsNormalized, 'nhw', 1.0, $normalizedTrendColor);
+            $normalizedTrend = RrdTrendForecast::computeTrendSummary($rrd_filename, $dsNormalized, 1.0, $graph_params->from, $graph_params->to, is_numeric($thresh) ? (float) $thresh : null);
+        }
+        $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized  ';
+        $rrd_options[] = 'GPRINT:normalized:LAST:%5.1lf%s';
+        $rrd_options[] = 'GPRINT:normalized:MIN:%5.1lf%S';
+        $rrd_options[] = 'GPRINT:normalized:MAX:%5.1lf%S';
+        $rrd_options[] = $normalizedTrend !== null
+            ? 'COMMENT:  ' . Rrd::safeDescr($normalizedTrend['rateText']) . '\l'
+            : 'COMMENT:\l';
+        if ($showNormalizedTrend) {
+            RrdTrendForecast::appendLegend($rrd_options, 'nhw', $normalizedTrend['crossingText'] ?? null);
+        }
         if (is_numeric($thresh)) {
             $threshold = (float) $thresh;
             $rrd_options[] = 'COMMENT:Alert thresholds\:';
             $rrd_options[] = 'LINE1.5:' . $threshold . '#005bdf:low_warn = ' . rtrim(rtrim(number_format($threshold, 2, '.', ''), '0'), '.') . '\l:dashes';
-        }
-
-        $rrd_options[] = "DEF:normalized={$rrd_filename}:{$dsNormalized}:AVERAGE";
-        $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
-        $rrd_options[] = 'GPRINT:rawDisplay:LAST:%5.1lf%s';
-        $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%S';
-        $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%S\l';
-        $rrd_options[] = 'LINE2:normalized' . $normalizedColor . ':Normalized  ';
-        $rrd_options[] = 'GPRINT:normalized:LAST:%5.1lf%s';
-        $rrd_options[] = 'GPRINT:normalized:MIN:%5.1lf%S';
-        $rrd_options[] = 'GPRINT:normalized:MAX:%5.1lf%S\l';
-        if (in_array($rateUnit, ['hour', 'second'], true)) {
-            $rrd_options[] = 'HRULE:p_avg#ff6600:Period average rate\: ';
-            $rrd_options[] = 'GPRINT:p_avg:%5.1lf%s';
-            $rrd_options[] = "COMMENT: {$avgRateUnitText}\\l";
         }
     }
 } elseif ($hasRaw) {
@@ -386,12 +462,16 @@ if ($hasDiv) {
     }
     $rrd_options[] = 'LINE1.5:rawDisplay' . $rawColor . ':Raw         ';
     $rrd_options[] = 'GPRINT:rawDisplay:LAST:%5.1lf%s';
-    $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%S';
-    $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%S\l';
+    // %s (not %S) on MIN/MAX -- see the note on the other Raw GPRINT triplets above.
+    $rrd_options[] = 'GPRINT:rawDisplay:MIN:%5.1lf%s';
+    $rrd_options[] = 'GPRINT:rawDisplay:MAX:%5.1lf%s';
     if (in_array($rateUnit, ['hour', 'second'], true)) {
-        $rrd_options[] = 'HRULE:p_avg#ff6600:Period average rate\: ';
-        $rrd_options[] = 'GPRINT:p_avg:%5.1lf%s';
-        $rrd_options[] = "COMMENT: {$avgRateUnitText}\\l";
+        // Merged into Raw's own row (Avg/Trend column) -- see the note on the other
+        // Raw blocks above.
+        $rrd_options[] = 'HRULE:p_avg#ff6600';
+        $rrd_options[] = 'GPRINT:p_avg:  %5.1lf%s' . ($rateUnit === 'second' ? '/s' : '/h') . '\l';
+    } else {
+        $rrd_options[] = 'COMMENT:\l';
     }
 } else {
     $graph_params->vertical_label = 'Normalized';
@@ -410,25 +490,25 @@ if ($hasDiv) {
 }
 
 /**
- * Trend/forecast overlay, plotted only for the single-raw-value branches above
- * (plain id{N}/id{N}Normalized) -- the div/multi-part formats plot several
- * independent counters with no single "the" raw value to project. Excludes the
- * temperature attributes (194/190), which have their own dedicated graph (see
- * HwForecastSetting's "except temperature" behavior). Shown when the graph's
- * end time extends into the future (same convention as the sensor and
- * port_bits graphs -- see includes/html/pages/graphs.inc.php's "set to future
- * date" hint), not behind a separate UI toggle.
+ * Normalized's forecast/trend overlay is drawn inline, inside the
+ * `hasRaw && hasNormalized` branch above (see its RrdTrendForecast::appendPaint()/
+ * computeTrendSummary()/appendLegend() calls) -- not here -- specifically so its
+ * LINE draws *before* the Normalized data line itself: rrdtool paints in
+ * emission order, so Normalized needs to come after its own overlay to render
+ * on top of it, not the other way round. computeTrendSummary()'s day-rate is
+ * also embedded directly into Normalized's own Last/Min/Max row (its Avg/Trend
+ * column) rather than repeated in the trend legend line.
+ * Excludes the temperature attributes (194/190), which have their own
+ * dedicated graph (see HwForecastSetting's "except temperature" behavior).
+ * Shown when the graph's end time extends into the future (same convention as
+ * the sensor and port_bits graphs -- see includes/html/pages/graphs.inc.php's
+ * "set to future date" hint), not behind a separate UI toggle.
  *
- * Delegates the HWPREDICT-vs-linear-fallback decision entirely to
- * RrdTrendForecast::append() -- see that class for details. $threshRawValue
- * converts the SMART attribute's normalized-scale threshold into the raw
- * scale actually being graphed here, which only the linear fallback path
- * uses (for a "days until threshold" estimate).
+ * The Raw overlay (against $dsRaw, using $threshRawValue converted from
+ * Normalized's 0-110 scale and $persistedRatePerHour) is temporarily disabled
+ * -- see the commented-out block that used to live here -- since Normalized is
+ * the more meaningful trajectory to project and the two fighting for attention
+ * made it harder to read either. Re-enable by restoring that call (also inline,
+ * before the Raw data line, for the same draw-order reason) if Raw-side
+ * trending is wanted again.
  */
-if ($to > time() && $hasRaw && ! $hasDiv && $partSuffixes === [] && ! in_array($attrId, [194, 190], true)) {
-    $threshRawValue = is_numeric($thresh)
-        ? (($hasNormalized && $rawMax !== null && $rawMax > 0) ? (float) $thresh * $rawMax / $normMax : (float) $thresh)
-        : null;
-
-    RrdTrendForecast::append($rrd_options, $rrd_filename, $dsRaw, 'hw', $rateMultiplier, $graph_params->from, $graph_params->to, '#ff6600', $threshRawValue);
-}
