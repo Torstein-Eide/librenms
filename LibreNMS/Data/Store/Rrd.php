@@ -454,11 +454,24 @@ class Rrd extends BaseDatastore
 
     /**
      * Get a single AVERAGE-consolidated value for one or more datasets over an
-     * arbitrary [start, end] window (one xport bucket spanning the whole
-     * window, all requested datasets in a single rrdtool invocation).
+     * arbitrary [start, end] window, all requested datasets in a single
+     * rrdtool invocation.
+     *
+     * Uses `rrdtool graph` with one DEF/VDEF:AVERAGE/PRINT triple per dataset
+     * instead of `xport` with a custom `--step`: xport interprets a large
+     * custom step as a literal single-bucket request and aligns [start, end]
+     * to an absolute grid anchored at epoch 0 (the nearest multiple of that
+     * step), which can silently shift the queried window past all real data
+     * whenever `time()` (almost always) doesn't land on such a boundary --
+     * making the result NaN even though real data exists in the originally
+     * intended range. `graph`'s DEF instead fetches at whatever resolution
+     * actually covers [start, end] (picking a coarser RRA only as needed) and
+     * VDEF:AVERAGE reduces that to one mean, correctly ignoring UNKN samples --
+     * the same mechanism the SMART attribute graphs already use for their
+     * "Period average rate" HRULE (see sata_attr_value.inc.php).
      *
      * Always batch every dataset you need for the same window into one call:
-     * each call spawns a separate rrdtool subprocess (see runXportRates()),
+     * each call spawns a separate rrdtool subprocess (see runGraphAverages()),
      * so looping this per-dataset instead of passing the full list multiplies
      * subprocess (and file descriptor) usage for no benefit.
      *
@@ -486,12 +499,12 @@ class Rrd extends BaseDatastore
             return [];
         }
 
-        $xportOutput = $this->runXportRates($filename, $datasets, 'AVERAGE', $start, $end, $end - $start);
-        if ($xportOutput === null) {
+        $graphOutput = $this->runGraphAverages($filename, $datasets, 'AVERAGE', $start, $end);
+        if ($graphOutput === null) {
             return null;
         }
 
-        return $this->parseXportRates($xportOutput, $datasets);
+        return $this->parseGraphAverages($graphOutput, $datasets);
     }
 
     /**
@@ -563,6 +576,49 @@ class Rrd extends BaseDatastore
         return substr($output, 0, $endTagPos + 8);
     }
 
+    /**
+     * @param  array<string>  $datasets
+     * @return string|null raw `rrdtool graph` stdout (image-size line + one PRINT line per
+     *         dataset, in the same order as $datasets), or null on a hard process failure
+     */
+    private function runGraphAverages(string $filename, array $datasets, string $cf, int $start, int $end): ?string
+    {
+        // Match command() path handling when rrdcached expects relative file paths.
+        $filename = $this->shortenFilenameForReadCommand($filename);
+
+        $options = [
+            '--start',
+            (string) $start,
+            '--end',
+            (string) $end,
+        ];
+
+        foreach ($datasets as $index => $dataset) {
+            // Keep DEF/VDEF variable names simple; PRINT order (not its text) is how
+            // parseGraphAverages() maps each printed value back to its dataset.
+            $varName = 'd' . $index;
+            $options[] = "DEF:$varName=$filename:$dataset:$cf";
+            $options[] = "VDEF:avg$index=$varName,AVERAGE";
+            $options[] = "PRINT:avg$index:%lf";
+        }
+
+        try {
+            // rrdtool's interactive-mode `graph` completes with the same "OK u:" marker as
+            // every other command (unlike `xport`, which needs the `</xport>` marker
+            // instead) -- image bytes go to /dev/null, so stdout is just the "WxH" line
+            // followed by one numeric PRINT line per dataset.
+            return app(RrdProcess::class, ['timeout' => 15])->run('graph /dev/null ' . implode(' ', $options));
+        } catch (RrdException|ProcessRuntimeException $e) {
+            // Catches both rrdtool-reported errors (RrdException) and Symfony Process
+            // failures: timeout, signal, failed start (ProcessRuntimeException and its
+            // subclasses). A slow/unavailable rrdtool degrades to "no rate this
+            // window" like any other fetch failure, instead of throwing out of discovery.
+            Log::error('RRD[graph average failed for ' . $filename . ']: ' . $e::class . ': ' . $e->getMessage());
+
+            return null;
+        }
+    }
+
     private function shortenFilenameForReadCommand(string $filename): string
     {
         // rrdcached read operations use paths relative to rrd_dir.
@@ -571,6 +627,31 @@ class Rrd extends BaseDatastore
         }
 
         return $filename;
+    }
+
+    /**
+     * @param  array<string>  $datasets  same order the PRINT lines were requested in by runGraphAverages()
+     * @return array<string, float> dataset => VDEF:AVERAGE value; a dataset is absent if its
+     *         PRINT line was nan/-nan (no data in the window) or missing outright
+     */
+    private function parseGraphAverages(string $graphOutput, array $datasets): array
+    {
+        // First line is rrdtool's "WxH" image-size line (even though the image itself
+        // went to /dev/null); every line after it is one PRINT value, in request order.
+        $lines = array_values(array_filter(preg_split('/\r?\n/', trim($graphOutput))));
+        array_shift($lines);
+
+        $rates = [];
+        foreach ($datasets as $index => $dataset) {
+            $rawValue = trim($lines[$index] ?? '');
+            if ($rawValue === '' || strcasecmp($rawValue, 'nan') === 0 || strcasecmp($rawValue, '-nan') === 0 || ! is_numeric($rawValue)) {
+                continue;
+            }
+
+            $rates[$dataset] = (float) $rawValue;
+        }
+
+        return $rates;
     }
 
     /**
