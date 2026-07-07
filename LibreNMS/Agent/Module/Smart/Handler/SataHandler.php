@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Log;
 use LibreNMS\Agent\Module\Smart\ChangeTracker;
 use LibreNMS\Agent\Module\Smart\Common;
 use LibreNMS\Agent\Module\Smart\Context;
+use LibreNMS\Agent\Module\Smart\DeviceTable;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Agent\Module\Smart\Support\AttributeRateTracker;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
@@ -38,6 +39,14 @@ final class SataHandler implements DiskTypeHandler
     public const TYPES = [1, 2];
 
     private const SATA_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-SATA-MIB'];
+
+    // Per-disk RRD DS heartbeat: generous enough (24h) that a disk sleeping
+    // through several poll cycles gets its value distributed across the gap
+    // when it wakes, rather than the DS going unknown at the global default
+    // heartbeat. Missing disks are the exception -- they get an explicit 'U'
+    // written every poll (see markDeviceMissingRrd()) so their gap stays a
+    // gap instead of being smoothed over by this wider heartbeat.
+    private const RRD_HEARTBEAT = 86400;
 
     // V1 RRD datasets that have no equivalent in V2 and should be discarded on migration.
     // V1 stored these as self-test pass/fail counters; V2 handles self-test via the log table.
@@ -68,7 +77,7 @@ final class SataHandler implements DiskTypeHandler
      */
     private array $devStatCatalog = [];
 
-    public function __construct(private readonly Context $ctx)
+    public function __construct(private readonly Context $ctx, private readonly DeviceTable $deviceTable)
     {
         $this->changes = new ChangeTracker($ctx);
     }
@@ -98,6 +107,15 @@ final class SataHandler implements DiskTypeHandler
         // For each SATA device: register SATA-specific sensors and sync health + attributes to DB.
         foreach ($this->sataDeviceList as $devIdx => $dev) {
             $this->ctx->vlog("SataHandler::discover: device idx={$devIdx} disk_key={$dev['disk_key']}");
+
+            // Missing (grace-period) devices carry no fresh SNMP data to discover
+            // against -- just keep their Health sensor registered as Unavailable.
+            if (! empty($dev['missing_since'])) {
+                $this->deviceTable->markMissingHealthDiscovered($dev, 'smart_mib_health', 6, self::healthStateTranslations());
+
+                continue;
+            }
+
             $this->discoverSataDeviceSensors(
                 $dev,
                 $this->sataHealth[$devIdx] ?? [],
@@ -165,10 +183,33 @@ final class SataHandler implements DiskTypeHandler
         // call per device so stored multipliers (selftest age -> minutes), threshold
         // alerts, and state-change events are all applied.
         foreach ($this->sataDeviceList as $dev) {
+            $skip = $this->deviceTable->pollSkipReason($dev);
+            if ($skip === 'missing') {
+                $this->deviceTable->markMissingHealthPolled($dev, 6);
+                $this->markDeviceMissingRrd($dev);
+                continue;
+            }
+            if ($skip === 'idle') {
+                continue;
+            }
             $this->pollSataDeviceSensors($dev);
         }
 
         $this->changes->persist();
+    }
+
+    /**
+     * Write an explicit 'U' (unknown) to a missing disk's RRD file this poll
+     * cycle, so the gap while it's gone reads as unknown rather than being
+     * linearly smoothed over once real data resumes -- RRD_HEARTBEAT is
+     * generous enough (24h) that a silent gap that long would otherwise get
+     * interpolated across, same as a legitimate sleep.
+     */
+    private function markDeviceMissingRrd(array $dev): void
+    {
+        $idx = DiskIdentity::index($dev['disk_key']);
+        $rrdFile = app(Rrd::class)->name($this->ctx->device->hostname, ['app', 'smart', $this->ctx->appId, $idx]);
+        app(Rrd::class)->writeUnknown($rrdFile);
     }
 
     public function expectedSensorOids(string $idx): array
@@ -225,6 +266,19 @@ final class SataHandler implements DiskTypeHandler
         }
     }
 
+    /** @return array<int, StateTranslation> */
+    private static function healthStateTranslations(): array
+    {
+        return [
+            StateTranslation::define('OK', 1, Severity::Ok),
+            StateTranslation::define('Warning', 2, Severity::Warning),
+            StateTranslation::define('Warning: Attr Failed', 3, Severity::Warning),
+            StateTranslation::define('Warning: Attr Rate', 4, Severity::Warning),
+            StateTranslation::define('Error: Attr Failing', 5, Severity::Error),
+            StateTranslation::define('Unavailable', 6, Severity::Error),
+        ];
+    }
+
     /**
      * Register LibreNMS sensors for one SATA device.
      * Called once per device with pre-fetched table data.
@@ -247,15 +301,7 @@ final class SataHandler implements DiskTypeHandler
                 descr: "{$group} {$devName} Health",
                 current: $synthesized,
                 group: $group,
-            )
-                ->withStateTranslations('smart_mib_health', [
-                    StateTranslation::define('OK', 1, Severity::Ok),
-                    StateTranslation::define('Warning', 2, Severity::Warning),
-                    StateTranslation::define('Warning: Attr Failed', 3, Severity::Warning),
-                    StateTranslation::define('Warning: Attr Rate', 4, Severity::Warning),
-                    StateTranslation::define('Error: Attr Failing', 5, Severity::Error),
-                    StateTranslation::define('Unavailable', 6, Severity::Warning),
-                ]);
+            )->withStateTranslations('smart_mib_health', self::healthStateTranslations());
         }
 
         // Self-test execution status (MIB returns the decoded nibble directly)
@@ -479,7 +525,7 @@ final class SataHandler implements DiskTypeHandler
                 $format = (int) ($meta->format ?? null);
                 $rawString = $row['smartmonSataAttrRawString'] ?? null;
 
-                $rrd_def->addDataset($dsNorm, 'GAUGE', 0);
+                $rrd_def->addDataset($dsNorm, 'GAUGE', 0, null, self::RRD_HEARTBEAT);
                 $fields[$dsNorm] = $row['smartmonSataAttrValue'] ?? null;
 
                 // Multi-value formats (raw8, raw16, raw16raw16, raw24raw8, raw24div24,
@@ -494,7 +540,7 @@ final class SataHandler implements DiskTypeHandler
                         if (strlen($dsSub) > 19) {
                             continue;
                         }
-                        $rrd_def->addDataset($dsSub, 'GAUGE', 0);
+                        $rrd_def->addDataset($dsSub, 'GAUGE', 0, null, self::RRD_HEARTBEAT);
                         $fields[$dsSub] = $value;
                     }
 
@@ -509,7 +555,7 @@ final class SataHandler implements DiskTypeHandler
                     $rawType = 'GAUGE';
                 }
 
-                $rrd_def->addDataset($dsRaw, $rawType, 0);
+                $rrd_def->addDataset($dsRaw, $rawType, 0, null, self::RRD_HEARTBEAT);
                 $fields[$dsRaw] = $singleValue ?? ($row['smartmonSataAttrRawValue'] ?? null);
             }
         }
@@ -1413,7 +1459,7 @@ final class SataHandler implements DiskTypeHandler
         $rrd = app(Rrd::class);
         $rrdFile = $rrd->name($this->ctx->device->hostname, ['app', 'smart', $this->ctx->appId, $idx]);
 
-        $heartbeat = LibrenmsConfig::get('rrd.heartbeat');
+        $heartbeat = self::RRD_HEARTBEAT;
 
         // Seeds $this->devStatCatalog with power_state + any allowlisted dev-stat
         // DS; the attribute loop below appends directly into the same property,
@@ -1521,7 +1567,7 @@ final class SataHandler implements DiskTypeHandler
      */
     private function resolveSataDsCatalog(array $dev): array
     {
-        $heartbeat = LibrenmsConfig::get('rrd.heartbeat');
+        $heartbeat = self::RRD_HEARTBEAT;
 
         $this->devStatCatalog = [
             'power_state' => ['type' => 'GAUGE', 'heartbeat' => $heartbeat, 'min' => 0, 'max' => 8, 'value' => (int) ($dev['power_state'] ?? null)],

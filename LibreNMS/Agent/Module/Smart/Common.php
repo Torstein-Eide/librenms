@@ -220,8 +220,8 @@ class Common extends Application
             $this,
         );
         $this->deviceTable = new DeviceTable($this->context);
-        $this->sataHandler = new SataHandler($this->context);
-        $this->nvmeHandler = new NvmeHandler($this->context);
+        $this->sataHandler = new SataHandler($this->context, $this->deviceTable);
+        $this->nvmeHandler = new NvmeHandler($this->context, $this->deviceTable);
     }
 
     /** @internal public delegate for Context; only Context should call this. */
@@ -283,12 +283,26 @@ class Common extends Application
         $this->sensorTable();
         $this->vlog('discoverMib: sensorTable has ' . count($this->sensorRows) . ' device entry/entries');
 
-        // Type: SATA
+        // Disks currently within their missing-disk grace period, one query for
+        // every type, grouped by protocol_type so each handler's merge below
+        // stays a single array union.
+        $missingByType = $this->deviceTable->missingDevicesByType([...SataHandler::TYPES, ...NvmeHandler::TYPES]);
+
+        // Type: SATA. Merge in the missing SATA disks too (live entries win on
+        // key collision -- e.g. a disk whose missing_since hasn't been cleared
+        // yet this run but just reappeared), so discovery still runs (in
+        // short-circuited form) for them instead of skipping them outright.
         $this->sataDeviceList = $this->sataDevices();
+        foreach (SataHandler::TYPES as $type) {
+            $this->sataDeviceList += $missingByType[$type];
+        }
         $this->sataHandler->discover($this->sataDeviceList, $this->sensorRows);
 
         // Type: NVMe
         $this->nvmeDeviceList = $this->nvmeDevices();
+        foreach (NvmeHandler::TYPES as $type) {
+            $this->nvmeDeviceList += $missingByType[$type];
+        }
         $this->nvmeHandler->discover($this->nvmeDeviceList, $this->sensorRows);
 
         // Type: SAS. Not yet implemented.
@@ -421,10 +435,11 @@ class Common extends Application
     {
         $device = $this->context->device;
         $expected = [];
+
+        // Generic SENSOR-MIB sensors (temperature, NVMe spare/used) are only
+        // ever known for devices actually visible in this run's SNMP walk.
         foreach ($this->deviceTable->ensureCommonDevices() as $snmpIndex => $dev) {
             $idx = $this->mibDiskIndex($dev['disk_key']);
-
-            // Generic SENSOR-MIB sensors (temperature, NVMe spare/used). Applies to all device types.
             foreach ($this->sensorRows[$snmpIndex] ?? [] as $sensorIdx => $row) {
                 $type = (int) ($row['smartmonSensorType'] ?? null);
                 $meta = self::SENSOR_TYPE_MAP[$type] ?? null;
@@ -432,10 +447,20 @@ class Common extends Application
                     $expected[] = "app:smart_mib:{$idx}_{$meta[2]}_{$sensorIdx}";
                 }
             }
+        }
 
-            // Per-type state sensors: ask whichever handler owns this device's
-            // type for the OIDs it expects, so adding a future SasHandler to
-            // handlers() is the only change needed to cover a third type here.
+        // Per-type state sensors (Health, Self-test Status/age, Wear, ...):
+        // every device this run considered, live or still within its
+        // missing-disk grace period -- sataDeviceList/nvmeDeviceList already
+        // carry both (see discoverMib()) -- asked of whichever handler owns
+        // its type, so adding a future SasHandler to handlers() is the only
+        // change needed to cover a third type here. Grace-period disks keep
+        // every sensor a live device of their type would have even though
+        // there's no fresh SNMP data to derive it from this run;
+        // cleanupStaleDevices() (below) is what actually purges them once the
+        // grace period elapses.
+        foreach ($this->sataDeviceList + $this->nvmeDeviceList as $dev) {
+            $idx = $this->mibDiskIndex($dev['disk_key']);
             $deviceType = $dev['device_type'] ?? 0;
             foreach ($this->handlers() as $handler) {
                 if (in_array($deviceType, $handler::types(), true)) {

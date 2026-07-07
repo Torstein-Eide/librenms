@@ -2,10 +2,10 @@
 
 namespace LibreNMS\Agent\Module\Smart\Handler;
 
-use App\Facades\LibrenmsConfig;
 use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Module\Smart\Context;
+use LibreNMS\Agent\Module\Smart\DeviceTable;
 use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
@@ -27,6 +27,9 @@ final class NvmeHandler implements DiskTypeHandler
 
     private const NVME_MIBS = ['SMARTMON-TC-MIB', 'SMARTMON-COMMON-MIB', 'SMARTMON-NVME-MIB'];
 
+    // Per-disk RRD DS heartbeat: see SataHandler::RRD_HEARTBEAT for the rationale.
+    private const RRD_HEARTBEAT = 86400;
+
     // NVMe SMART/Health columns written to the per-disk smart_nvme RRD: MIB column => [DS name, type].
     // DS names + types MUST match the V1 nvmeDsMap (smart.php) and includes/html/graphs/smart/nvme.inc.php graph,
     // since V1 and V2 share the same smart_nvme RRD file. Rate-style figures are DERIVE.
@@ -46,7 +49,7 @@ final class NvmeHandler implements DiskTypeHandler
         'smartmonNvmeCriticalWarning'                => ['crit_warn',    'GAUGE'],
     ];
 
-    public function __construct(private readonly Context $ctx)
+    public function __construct(private readonly Context $ctx, private readonly DeviceTable $deviceTable)
     {
     }
 
@@ -79,13 +82,21 @@ final class NvmeHandler implements DiskTypeHandler
             $key = (string) $devIdx;
             $this->ctx->vlog("NvmeHandler::discover: device idx={$key} disk_key={$dev['disk_key']}");
 
+            // Missing (grace-period) devices carry no fresh SNMP data to discover
+            // against -- just keep their Health sensor registered as Unavailable.
+            if (! empty($dev['missing_since'])) {
+                $this->deviceTable->markMissingHealthDiscovered($dev, 'smart_nvme_health', 5, self::healthStateTranslations());
+
+                continue;
+            }
+
             // Retrofit power_state onto a pre-existing RRD file that predates it;
             // no-op tune if already present, skipped entirely if the file doesn't
             // exist yet (a new device gets it at create time from pollNvmeDeviceRrd()).
             $idx = DiskIdentity::index($dev['disk_key']);
             $rrdFile = app(Rrd::class)->name($this->ctx->device->hostname, ['app', 'smart_nvme', $this->ctx->appId, $idx]);
             app(Rrd::class)->addDatasetsFromConfig($rrdFile, [
-                'power_state' => ['type' => 'GAUGE', 'heartbeat' => LibrenmsConfig::get('rrd.heartbeat'), 'min' => 0, 'max' => 8],
+                'power_state' => ['type' => 'GAUGE', 'heartbeat' => self::RRD_HEARTBEAT, 'min' => 0, 'max' => 8],
             ]);
 
             if ($ctrl = $this->firstSubRow($controllers[$key] ?? null)) {
@@ -126,6 +137,16 @@ final class NvmeHandler implements DiskTypeHandler
         $errors = $this->walkNvmeTable('smartmonNvmeErrorLogTable', 2);
 
         foreach ($devices as $devIdx => $dev) {
+            $skip = $this->deviceTable->pollSkipReason($dev);
+            if ($skip === 'missing') {
+                $this->deviceTable->markMissingHealthPolled($dev, 5);
+                $this->markDeviceMissingRrd($dev);
+                continue;
+            }
+            if ($skip === 'idle') {
+                continue;
+            }
+
             $key = (string) $devIdx;
             if ($healthRow = $this->firstSubRow($health[$key] ?? null)) {
                 $this->syncNvmeHealthRow($dev, $healthRow);
@@ -140,6 +161,17 @@ final class NvmeHandler implements DiskTypeHandler
             // state-change events are all applied.
             $this->pollNvmeDeviceSensors($dev);
         }
+    }
+
+    /**
+     * Write an explicit 'U' (unknown) to a missing disk's RRD file this poll
+     * cycle. See SataHandler::markDeviceMissingRrd() for why.
+     */
+    private function markDeviceMissingRrd(array $dev): void
+    {
+        $idx = DiskIdentity::index($dev['disk_key']);
+        $rrdFile = app(Rrd::class)->name($this->ctx->device->hostname, ['app', 'smart_nvme', $this->ctx->appId, $idx]);
+        app(Rrd::class)->writeUnknown($rrdFile);
     }
 
     public function expectedSensorOids(string $idx): array
@@ -176,14 +208,19 @@ final class NvmeHandler implements DiskTypeHandler
             descr: "{$group} {$devName} Health",
             current: $state,
             group: $group,
-        )
-            ->withStateTranslations('smart_nvme_health', [
-                StateTranslation::define('OK', 1, Severity::Ok),
-                StateTranslation::define('Warning', 2, Severity::Warning),
-                StateTranslation::define('Failed', 3, Severity::Error),
-                StateTranslation::define('Critical Warning', 4, Severity::Error),
-                StateTranslation::define('Unavailable', 5, Severity::Warning),
-            ]);
+        )->withStateTranslations('smart_nvme_health', self::healthStateTranslations());
+    }
+
+    /** @return array<int, StateTranslation> */
+    private static function healthStateTranslations(): array
+    {
+        return [
+            StateTranslation::define('OK', 1, Severity::Ok),
+            StateTranslation::define('Warning', 2, Severity::Warning),
+            StateTranslation::define('Failed', 3, Severity::Error),
+            StateTranslation::define('Critical Warning', 4, Severity::Error),
+            StateTranslation::define('Unavailable', 5, Severity::Error),
+        ];
     }
 
     /** Register the NVMe self-test status sensor (current op, else most recent log result) for one device. */
@@ -329,14 +366,14 @@ final class NvmeHandler implements DiskTypeHandler
         $rrd_def = RrdDefinition::make();
         $fields = [];
         foreach (self::NVME_HEALTH_RRD as $col => [$ds, $type]) {
-            $rrd_def->addDataset($ds, $type, 0);
+            $rrd_def->addDataset($ds, $type, 0, null, self::RRD_HEARTBEAT);
             $value = $col === 'smartmonNvmeCriticalWarning'
                 ? SnmpDecode::parseBitsValue($health[$col] ?? null)
                 : (int) ($health[$col] ?? null);
             $fields[$ds] = $value;
         }
 
-        $rrd_def->addDataset('power_state', 'GAUGE', 0, 8);
+        $rrd_def->addDataset('power_state', 'GAUGE', 0, 8, self::RRD_HEARTBEAT);
         $fields['power_state'] = (int) ($dev['power_state'] ?? null);
 
         $rrdName = ['app', 'smart_nvme', $this->ctx->appId, $idx];

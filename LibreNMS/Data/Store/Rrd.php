@@ -768,6 +768,20 @@ class Rrd extends BaseDatastore
     // rrdtool_update
 
     /**
+     * Write an explicit 'U' (unknown) to every dataset in an RRD file, e.g. to
+     * mark a gap explicitly (a device that's stopped reporting) rather than
+     * relying on the file's heartbeat to blank the gap out once real data
+     * resumes. No-op if the file doesn't exist yet.
+     */
+    public function writeUnknown(string $filename): void
+    {
+        $dsNames = $this->listDatasets($filename);
+        if ($dsNames !== []) {
+            $this->update($filename, array_fill(0, count($dsNames), null), $dsNames);
+        }
+    }
+
+    /**
      * Modify an rrd file's max value and trim the peaks as defined by rrdtool
      *
      * @param  string  $type  only 'port' is supported at this time

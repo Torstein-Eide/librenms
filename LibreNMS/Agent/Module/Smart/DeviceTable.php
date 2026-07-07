@@ -2,7 +2,9 @@
 
 namespace LibreNMS\Agent\Module\Smart;
 
+use App\Models\StateTranslation;
 use Illuminate\Support\Facades\DB;
+use LibreNMS\Agent\Module\Smart\Helpers\DiskIdentity;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Util\SnmpDecode;
 use SnmpQuery;
@@ -71,6 +73,72 @@ final class DeviceTable
         return $filtered;
     }
 
+    /**
+     * Devices of any of the given protocol types currently within their
+     * missing-disk grace period, shaped like devicesOfTypes()'s per-device
+     * array (so callers can merge the two device lists together) and
+     * carrying missing_since -- the same field pollSkipReason() reads --
+     * so callers use one consistent signal for "is this device missing"
+     * whether they got the device from a live SNMP walk or from here.
+     *
+     * @return array<int, array<string, array<string, mixed>>> keyed by protocol_type, each a devicesOfTypes()-shaped list keyed by snmp_index
+     */
+    public function missingDevicesByType(array $protocolTypes): array
+    {
+        $rows = DB::table('smart_devices')
+            ->where('app_id', $this->ctx->appId)
+            ->whereIn('protocol_type', $protocolTypes)
+            ->whereNotNull('missing_since')
+            ->whereNotNull('snmp_index')
+            ->get(['snmp_index', 'disk_key', 'device_name', 'model_name', 'serial_number', 'protocol_type', 'missing_since']);
+
+        $devicesByType = array_fill_keys($protocolTypes, []);
+        foreach ($rows as $row) {
+            $devicesByType[(int) $row->protocol_type][(string) $row->snmp_index] = [
+                'snmp_index'    => (string) $row->snmp_index,
+                'disk_key'      => $row->disk_key,
+                'device_name'   => $row->device_name,
+                'model_name'    => $row->model_name,
+                'serial_number' => $row->serial_number,
+                'device_type'   => (int) $row->protocol_type,
+                'missing_since' => $row->missing_since,
+            ];
+        }
+
+        return $devicesByType;
+    }
+
+    /** Flip a missing/grace-period disk's Health sensor to Unavailable at poll time (updates an already-registered sensor's value only). */
+    public function markMissingHealthPolled(array $dev, int $unavailableValue): void
+    {
+        $idx = DiskIdentity::index($dev['disk_key']);
+        $this->ctx->updateSensorValues(["{$idx}_health" => (float) $unavailableValue], "app:smart_mib:{$idx}_");
+    }
+
+    /**
+     * Register/refresh a missing/grace-period disk's Health sensor as
+     * Unavailable at discovery time -- self-healing, since discoverSensor()
+     * (unlike updateSensorValues()) (re)creates the sensor row if it's gone.
+     *
+     * @param  array<int, StateTranslation>  $translations
+     */
+    public function markMissingHealthDiscovered(array $dev, string $sensorType, int $unavailableValue, array $translations): void
+    {
+        $diskKey = $dev['disk_key'];
+        $devName = DiskIdentity::label($dev, $dev['snmp_index'] ?? $diskKey);
+        $idx = DiskIdentity::index($diskKey);
+
+        $this->ctx->discoverSensor(
+            class: 'state',
+            type: $sensorType,
+            index: "{$idx}_health",
+            oid: "app:smart_mib:{$idx}_health",
+            descr: "SMART {$devName} Health",
+            current: $unavailableValue,
+            group: 'SMART',
+        )->withStateTranslations($sensorType, $translations);
+    }
+
     /** Load devices of the given protocol types from DB, keyed by snmp_index (no SNMP walk). */
     public function devicesFromDb(array $protocolTypes): array
     {
@@ -78,17 +146,41 @@ final class DeviceTable
             ->where('app_id', $this->ctx->appId)
             ->whereIn('protocol_type', $protocolTypes)
             ->whereNotNull('snmp_index')
-            ->get(['snmp_index', 'disk_key', 'power_state']);
+            ->get(['snmp_index', 'disk_key', 'power_state', 'missing_since']);
 
         $devices = [];
         foreach ($rows as $row) {
             $devices[(string) $row->snmp_index] = [
-                'disk_key'    => $row->disk_key,
-                'power_state' => $row->power_state !== null ? (int) $row->power_state : null,
+                'disk_key'      => $row->disk_key,
+                'power_state'   => $row->power_state !== null ? (int) $row->power_state : null,
+                'missing_since' => $row->missing_since,
             ];
         }
 
         return $devices;
+    }
+
+    /**
+     * Whether polling should skip this device this cycle, and why:
+     *  - 'missing': gone from the SNMP device table (still within its grace
+     *    period) -- caller should flip its health sensor to Unavailable.
+     *  - 'idle':    present but in a low-power/sleeping tier this agent
+     *    didn't wake this cycle -- caller should leave its sensors untouched.
+     *  - null:      poll normally.
+     */
+    public function pollSkipReason(array $dev): ?string
+    {
+        if (! empty($dev['missing_since'])) {
+            return 'missing';
+        }
+
+        $state = $dev['power_state'] ?? null;
+        // idleA(2)..standby(8): anything beyond active(1)/unknown(0).
+        if (is_numeric($state) && (int) $state >= 2) {
+            return 'idle';
+        }
+
+        return null;
     }
 
     private function loadCommonDeviceTable(): void
