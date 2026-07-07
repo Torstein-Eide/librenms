@@ -112,14 +112,25 @@ final class AttributeRateTracker
     /**
      * Average change per hour, per RRD dataset, for every lookback window.
      *
-     * Every dataset for a given window is fetched in ONE batched rrdtool call
-     * (Rrd::getWindowAverages() takes the whole dataset list). Each call
-     * spawns a separate rrdtool subprocess, so this is 4 calls for all COUNTER
-     * datasets plus 8 for all GAUGE datasets (2 boundary probes x 4 windows),
-     * regardless of how many SMART attributes the disk has. Looping a single
-     * dataset per call here previously spawned one subprocess per attribute
-     * per window, which exhausted the open-file limit on disks with 30+
-     * attributes.
+     * 5 rrdtool subprocesses total per disk, regardless of how many SMART
+     * attributes it has:
+     *  - 1 shared call for GAUGE's "current" end-of-window boundary probe
+     *    ([now-probe, now]) -- identical for every lookback window (probe is
+     *    far smaller than the shortest window, 8h), so it's fetched once
+     *    here instead of once per window as before.
+     *  - 4 calls, one per lookback window, each combining that window's
+     *    COUNTER full-window rate AND its GAUGE start-of-window boundary
+     *    probe into a single rrdtool invocation via
+     *    Rrd::getMultiWindowAverages() (per-dataset DEF start=/end=
+     *    overrides), instead of two separate calls per window.
+     * Trade-off: a process failure (timeout/crash) on one of the 4 per-window
+     * calls now fails BOTH that window's COUNTER and GAUGE datasets together,
+     * where they previously failed independently -- an acceptable loss of
+     * fault isolation for a rare failure mode, in exchange for a third of the
+     * subprocess count (was up to 12: 4 COUNTER + 8 GAUGE boundary probes).
+     * Looping a single dataset per call here previously spawned one
+     * subprocess per attribute per window, which exhausted the open-file
+     * limit on disks with 30+ attributes -- still avoided.
      *
      * @param  array<string>  $counterDs
      * @param  array<string>  $gaugeDs
@@ -129,36 +140,46 @@ final class AttributeRateTracker
     {
         $ratesByDs = [];
         $failedWindows = [];
-        $probe = 600; // 10 minutes, well above the default 5-minute poll step
+        $probe = 600; // 10 minutes, well above the default 5-minute poll step, and every RATE_WINDOWS entry
+
+        $endVals = [];
+        if ($gaugeDs !== []) {
+            $endVals = $rrd->getWindowAverages($filename, $gaugeDs, $now - $probe, $now);
+            if ($endVals === null) {
+                Log::error("smart_mib: fetchAttributeRates: gauge current-value fetch FAILED file={$filename}, keeping previously persisted rates for every window");
+                foreach (self::RATE_WINDOWS as $suffix => $seconds) {
+                    $failedWindows[$suffix] = true;
+                }
+                $endVals = [];
+                $gaugeDs = [];
+            }
+        }
 
         foreach (self::RATE_WINDOWS as $suffix => $seconds) {
             $start = $now - $seconds;
             $hours = $seconds / 3600;
 
-            if ($counterDs !== []) {
-                $counterRates = $rrd->getWindowAverages($filename, $counterDs, $start, $now);
-                if ($counterRates === null) {
-                    $failedWindows[$suffix] = true;
-                    Log::error("smart_mib: fetchAttributeRates: counter fetch FAILED for window={$suffix} file={$filename}, keeping previously persisted rates for this window");
-                } else {
-                    foreach ($counterRates as $ds => $perSecond) {
-                        $ratesByDs[$ds][$suffix] = $perSecond * 3600;
-                    }
-                }
+            $windows = array_fill_keys($counterDs, [$start, $now])
+                + array_fill_keys($gaugeDs, [$start, min($start + $probe, $now)]);
+            if ($windows === []) {
+                continue;
             }
 
-            if ($gaugeDs !== []) {
-                $startVals = $rrd->getWindowAverages($filename, $gaugeDs, $start, min($start + $probe, $now));
-                $endVals = $rrd->getWindowAverages($filename, $gaugeDs, max($now - $probe, $start), $now);
-                if ($startVals === null || $endVals === null) {
-                    $failedWindows[$suffix] = true;
-                    Log::error("smart_mib: fetchAttributeRates: gauge fetch FAILED for window={$suffix} file={$filename}, keeping previously persisted rates for this window");
-                } else {
-                    foreach ($gaugeDs as $ds) {
-                        if (isset($startVals[$ds], $endVals[$ds])) {
-                            $ratesByDs[$ds][$suffix] = ($endVals[$ds] - $startVals[$ds]) / $hours;
-                        }
-                    }
+            $combined = $rrd->getMultiWindowAverages($filename, $windows);
+            if ($combined === null) {
+                $failedWindows[$suffix] = true;
+                Log::error("smart_mib: fetchAttributeRates: fetch FAILED for window={$suffix} file={$filename}, keeping previously persisted rates for this window");
+                continue;
+            }
+
+            foreach ($counterDs as $ds) {
+                if (isset($combined[$ds])) {
+                    $ratesByDs[$ds][$suffix] = $combined[$ds] * 3600;
+                }
+            }
+            foreach ($gaugeDs as $ds) {
+                if (isset($combined[$ds], $endVals[$ds])) {
+                    $ratesByDs[$ds][$suffix] = ($endVals[$ds] - $combined[$ds]) / $hours;
                 }
             }
         }

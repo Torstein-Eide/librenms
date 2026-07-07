@@ -499,12 +499,41 @@ class Rrd extends BaseDatastore
             return [];
         }
 
-        $graphOutput = $this->runGraphAverages($filename, $datasets, 'AVERAGE', $start, $end);
+        return $this->getMultiWindowAverages($filename, array_fill_keys($datasets, [$start, $end]));
+    }
+
+    /**
+     * Like getWindowAverages(), but each dataset can have its own [start, end]
+     * window within the SAME rrdtool invocation, via DEF's own per-dataset
+     * start=/end= override (which always wins over the graph-wide --start/--end
+     * for that one DEF's fetch). For a caller that otherwise needs two
+     * separate getWindowAverages() calls back-to-back for the same file --
+     * e.g. AttributeRateTracker combining a COUNTER dataset's full-window rate
+     * with a GAUGE dataset's short boundary probe -- this collapses both into
+     * one rrdtool subprocess instead of two.
+     *
+     * Dataset names must be unique across the whole map: if the same name were
+     * given two different windows, only the later one survives in the
+     * returned array (parseGraphAverages() keys its result by name), so this
+     * is only meant for combining genuinely disjoint dataset sets in one call,
+     * not for requesting the same dataset over multiple windows at once.
+     *
+     * @param  array<string, array{0:int,1:int}>  $windows  dataset name => [start, end]
+     * @return array<string, float>|null null means the rrdtool call itself failed; see getWindowAverages()
+     */
+    public function getMultiWindowAverages(string $filename, array $windows): ?array
+    {
+        $windows = array_filter($windows, fn (array $w, string $ds): bool => is_string($ds) && $ds !== '' && $w[1] > $w[0], ARRAY_FILTER_USE_BOTH);
+        if ($windows === []) {
+            return [];
+        }
+
+        $graphOutput = $this->runGraphAverages($filename, $windows);
         if ($graphOutput === null) {
             return null;
         }
 
-        return $this->parseGraphAverages($graphOutput, $datasets);
+        return $this->parseGraphAverages($graphOutput, array_keys($windows));
     }
 
     /**
@@ -577,29 +606,36 @@ class Rrd extends BaseDatastore
     }
 
     /**
-     * @param  array<string>  $datasets
+     * @param  array<string, array{0:int,1:int}>  $windows  dataset name => [start, end], each DEF's own start=/end=
      * @return string|null raw `rrdtool graph` stdout (image-size line + one PRINT line per
-     *         dataset, in the same order as $datasets), or null on a hard process failure
+     *         dataset, in the same order as $windows), or null on a hard process failure
      */
-    private function runGraphAverages(string $filename, array $datasets, string $cf, int $start, int $end): ?string
+    private function runGraphAverages(string $filename, array $windows): ?string
     {
         // Match command() path handling when rrdcached expects relative file paths.
         $filename = $this->shortenFilenameForReadCommand($filename);
 
+        // The graph-wide --start/--end is only a fallback time axis here -- every DEF
+        // below overrides it with its own start=/end=, so this just needs to bound the
+        // union of every dataset's actual window.
+        $starts = array_column($windows, 0);
+        $ends = array_column($windows, 1);
         $options = [
             '--start',
-            (string) $start,
+            (string) min($starts),
             '--end',
-            (string) $end,
+            (string) max($ends),
         ];
 
-        foreach ($datasets as $index => $dataset) {
+        $index = 0;
+        foreach ($windows as $dataset => [$dsStart, $dsEnd]) {
             // Keep DEF/VDEF variable names simple; PRINT order (not its text) is how
             // parseGraphAverages() maps each printed value back to its dataset.
             $varName = 'd' . $index;
-            $options[] = "DEF:$varName=$filename:$dataset:$cf";
+            $options[] = "DEF:$varName=$filename:$dataset:AVERAGE:start=$dsStart:end=$dsEnd";
             $options[] = "VDEF:avg$index=$varName,AVERAGE";
             $options[] = "PRINT:avg$index:%lf";
+            $index++;
         }
 
         try {
