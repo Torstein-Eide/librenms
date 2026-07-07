@@ -126,14 +126,43 @@ final class RrdTrendForecast
      * showing nothing, and a crossing estimate beyond 10 years is capped to
      * '>10 years' rather than printing a huge, not-really-meaningful day count.
      *
-     * @return array{rateText: string, crossingText: ?string} crossingText is only
-     *     null when $thresholdRawValue itself is null (no threshold to project against)
+     * Thin fetch-then-delegate wrapper around computeTrendFromSeries() -- see that
+     * method for the actual regression, kept as a pure function so a caller with
+     * its own already-fetched series (e.g. a per-disk table batching one
+     * multi-DS fetch across many attributes, see RrdForecastSupport::fetchAverageSeriesMulti())
+     * can skip this method's own fetch entirely.
+     *
+     * @return array{rateText: string, crossingText: ?string, daysUntil: ?float} crossingText is only
+     *     null when $thresholdRawValue itself is null (no threshold to project against);
+     *     see computeTrendFromSeries() for daysUntil's own nullability
      */
     public static function computeTrendSummary(string $rrdFilename, string $ds, float $multiplier, int $from, int $to, ?float $thresholdRawValue): array
     {
-        $unknown = ['rateText' => 'unknown', 'crossingText' => $thresholdRawValue !== null ? 'unknown' : null];
-
         $series = RrdForecastSupport::fetchAverageSeries($rrdFilename, $ds, $from, $to, $multiplier);
+
+        return self::computeTrendFromSeries($series, $to, $thresholdRawValue);
+    }
+
+    /**
+     * Pure least-squares regression over an already-fetched series -- see
+     * computeTrendSummary() for the fetch-then-delegate wrapper most callers
+     * want. Split out so a caller that's already batched its own multi-DS fetch
+     * (avoiding one rrdtool exec per DS against what's typically the same RRD
+     * file) can call straight into the regression without re-fetching.
+     *
+     * @param  array<int, float>  $series  timestamp => value, as returned by
+     *     RrdForecastSupport::fetchAverageSeries()/fetchAverageSeriesMulti()
+     * @return array{rateText: string, crossingText: ?string, daysUntil: ?float} daysUntil is
+     *     the raw (unrounded, uncapped) day count to threshold-crossing, relative to
+     *     now -- null whenever crossingText is null or 'unknown'/'already past
+     *     threshold trajectory', for a caller (e.g. a table formatting its own
+     *     compound y/mo range) that needs the number itself rather than this
+     *     method's own pre-formatted text.
+     */
+    public static function computeTrendFromSeries(array $series, int $to, ?float $thresholdRawValue): array
+    {
+        $unknown = ['rateText' => 'unknown', 'crossingText' => $thresholdRawValue !== null ? 'unknown' : null, 'daysUntil' => null];
+
         if (count($series) < 2) {
             return $unknown;
         }
@@ -177,6 +206,7 @@ final class RrdTrendForecast
         $rateText = ($dayRate >= 0 ? '+' : '') . trim(Number::formatSi($dayRate, 3, 0, '')) . '/day';
 
         $crossingText = null;
+        $daysUntilOut = null;
         if ($thresholdRawValue !== null) {
             // $intercept is the fitted value *at $to*, not at now -- $to is the
             // graph's end time, which is already in the future here (this overlay
@@ -195,8 +225,11 @@ final class RrdTrendForecast
                 $daysUntil > 0 => sprintf('crosses threshold %s in %d days', $threshDisplayText, (int) round($daysUntil)),
                 default => 'already past threshold trajectory',
             };
+            // Raw/uncapped -- only withheld when already past (a caller formatting
+            // its own range wants to know that distinctly from "still ahead").
+            $daysUntilOut = $daysUntil > 0 ? $daysUntil : null;
         }
 
-        return ['rateText' => $rateText, 'crossingText' => $crossingText];
+        return ['rateText' => $rateText, 'crossingText' => $crossingText, 'daysUntil' => $daysUntilOut];
     }
 }

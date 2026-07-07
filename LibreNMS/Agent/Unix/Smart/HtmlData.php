@@ -1204,6 +1204,99 @@ class HtmlData
     }
 
     /**
+     * "Time until Normalized crosses Thresh" for every attribute on one disk,
+     * as a d/m/y compound range between a 1-month and a 6-month trend fit --
+     * formatted from smart_sata_attributes.trend_days_1mo/trend_days_6mo,
+     * which NormalizedTrendTracker::sync() computes and persists at
+     * discovery time (RRD history accrues via polling; discovery is the
+     * natural cadence to re-evaluate a multi-month trend, same reasoning as
+     * the existing rate_8h/24h/168h/672h columns -- see
+     * SataHandler::syncSataAttributeRates()). No RRD access here: this is a
+     * pure read-and-format pass over already-loaded attribute rows, not a
+     * live rrdtool fetch on every page view.
+     *
+     * Two independent fits (not one over the combined window) so a drive
+     * whose recent trend has accelerated or decelerated relative to its
+     * longer-term trend shows that as a range, instead of a single number
+     * that hides it.
+     *
+     * @return array<int, string> attribute_id => formatted range text (never omitted -- '-' when nothing is computable)
+     */
+    public function attrNormalizedTrendRanges(string $diskKey): array
+    {
+        $disk = $this->disks[$diskKey] ?? null;
+        if ($disk === null) {
+            return [];
+        }
+
+        $ranges = [];
+        foreach ($disk['attributes'] as $attr) {
+            $attrId = (int) ($attr['attribute_id'] ?? 0);
+            if ($attrId <= 0) {
+                continue;
+            }
+            $days1mo = is_numeric($attr['trend_days_1mo'] ?? null) ? (float) $attr['trend_days_1mo'] : null;
+            $days6mo = is_numeric($attr['trend_days_6mo'] ?? null) ? (float) $attr['trend_days_6mo'] : null;
+            $ranges[$attrId] = $this->formatCrossingRange($days1mo, $days6mo);
+        }
+
+        return $ranges;
+    }
+
+    /** Compound years+months duration, capped like the graph overlay's own '>10 years' text (see RrdTrendForecast::computeTrendFromSeries()). */
+    private function formatYearsMonths(float $days): string
+    {
+        if ($days > 3650) {
+            return '>10y';
+        }
+
+        $totalMonths = (int) round($days / 30.4368);
+        if ($totalMonths < 1) {
+            return '<1mo';
+        }
+
+        $years = intdiv($totalMonths, 12);
+        $months = $totalMonths % 12;
+        $parts = [];
+        if ($years > 0) {
+            $parts[] = $years . 'y';
+        }
+        if ($months > 0) {
+            $parts[] = $months . 'mo';
+        }
+
+        return implode(' ', $parts);
+    }
+
+    /**
+     * Range text combining the 1-month and 6-month crossing-day estimates:
+     * '-' when neither fit produced one, the single formatted value when
+     * only one did (or both round to the same label), and '{shorter} –
+     * {longer}' otherwise. 'past' when a fit is already trending past
+     * threshold (daysUntil null but the fit itself wasn't 'unknown' --
+     * see computeTrendFromSeries()) is intentionally not distinguished from
+     * 'no estimate' here: both resolve to that window being dropped from
+     * the range, since a stale reading that's already past a low-severity
+     * threshold isn't actionable as a projected date either way.
+     */
+    private function formatCrossingRange(?float $days1mo, ?float $days6mo): string
+    {
+        $label1mo = $days1mo !== null ? $this->formatYearsMonths($days1mo) : null;
+        $label6mo = $days6mo !== null ? $this->formatYearsMonths($days6mo) : null;
+
+        if ($label1mo === null && $label6mo === null) {
+            return '-';
+        }
+        if ($label1mo === null || $label6mo === null || $label1mo === $label6mo) {
+            return $label1mo ?? $label6mo;
+        }
+
+        [$shorter, $longer] = $days1mo <= $days6mo ? [$label1mo, $label6mo] : [$label6mo, $label1mo];
+
+        return "{$shorter} \u{2013} {$longer}";
+    }
+
+    /**
      * Single-DS NVMe health-log metrics selectable by nvme_attr_value.inc.php's
      * `metric` var, keyed by RRD DS name. Single source of truth for that
      * template's rendering switch and auth.inc.php's metric-selector dropdown.

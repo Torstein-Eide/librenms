@@ -46,34 +46,63 @@ final class RrdForecastSupport
     /** @return array<int, float> timestamp => AVERAGE value (already multiplier-scaled) */
     public static function fetchAverageSeries(string $rrdFilename, string $ds, int $from, int $to, float $multiplier): array
     {
+        return self::fetchAverageSeriesMulti($rrdFilename, [$ds], $from, $to, $multiplier)[$ds] ?? [];
+    }
+
+    /**
+     * Same one-exec `rrdtool fetch` as fetchAverageSeries(), but keeps every
+     * requested DS column instead of discarding all but one -- for a caller
+     * (e.g. a per-disk table computing a per-attribute estimate for many
+     * attributes at once) that would otherwise need one shell exec per DS
+     * against what is, in every SMART case, the exact same RRD file.
+     *
+     * @param  array<int, string>  $dsNames
+     * @return array<string, array<int, float>> ds name => (timestamp => AVERAGE value, already multiplier-scaled)
+     */
+    public static function fetchAverageSeriesMulti(string $rrdFilename, array $dsNames, int $from, int $to, float $multiplier = 1.0): array
+    {
+        $result = array_fill_keys($dsNames, []);
+        if ($dsNames === []) {
+            return $result;
+        }
+
         $bin = LibrenmsConfig::get('rrdtool', 'rrdtool');
         $cmd = escapeshellcmd($bin) . ' fetch ' . escapeshellarg($rrdFilename)
               . ' AVERAGE --start ' . $from . ' --end ' . $to;
         exec($cmd . ' 2>/dev/null', $lines, $rc);
         if ($rc !== 0 || empty($lines)) {
-            return [];
+            return $result;
         }
 
         $header = array_shift($lines);
-        $dsNames = preg_split('/\s+/', trim($header));
-        $col = array_search($ds, $dsNames, true);
-        if ($col === false) {
-            return [];
+        $fileDsNames = preg_split('/\s+/', trim($header));
+        $cols = [];
+        foreach ($dsNames as $ds) {
+            $col = array_search($ds, $fileDsNames, true);
+            if ($col !== false) {
+                $cols[$ds] = $col;
+            }
+        }
+        if ($cols === []) {
+            return $result;
         }
 
-        $series = [];
         foreach ($lines as $line) {
             $line = trim($line);
             if ($line === '' || ! preg_match('/^(\d+):\s*(.*)$/', $line, $m)) {
                 continue;
             }
-            $val = preg_split('/\s+/', trim($m[2]))[$col] ?? null;
-            if ($val === null || ! is_numeric($val)) {
-                continue;
+            $values = preg_split('/\s+/', trim($m[2]));
+            $ts = (int) $m[1];
+            foreach ($cols as $ds => $col) {
+                $val = $values[$col] ?? null;
+                if ($val === null || ! is_numeric($val)) {
+                    continue;
+                }
+                $result[$ds][$ts] = (float) $val * $multiplier;
             }
-            $series[(int) $m[1]] = (float) $val * $multiplier;
         }
 
-        return $series;
+        return $result;
     }
 }

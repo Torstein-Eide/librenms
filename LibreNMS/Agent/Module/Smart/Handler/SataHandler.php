@@ -18,6 +18,7 @@ use LibreNMS\Agent\Module\Smart\Support\DevStatRrdCatalog;
 use LibreNMS\Agent\Module\Smart\Support\ExcludedAttributesSetting;
 use LibreNMS\Agent\Module\Smart\Support\ExtraDevStatSetting;
 use LibreNMS\Agent\Module\Smart\Support\HwForecastSetting;
+use LibreNMS\Agent\Module\Smart\Support\NormalizedTrendTracker;
 use LibreNMS\Agent\Module\Smart\Support\SelftestAge;
 use LibreNMS\Agent\Module\Smart\Support\SnmpDecode as SmartSnmpDecode;
 use LibreNMS\Data\Store\Rrd;
@@ -108,6 +109,7 @@ final class SataHandler implements DiskTypeHandler
             if (isset($this->sataAttributes[$devIdx])) {
                 $this->syncSataAttributeRows($dev, $this->sataAttributes[$devIdx]);
                 $this->syncSataAttributeRates($dev, $this->sataAttributes[$devIdx]);
+                $this->syncSataAttributeTrend($dev, $this->sataAttributes[$devIdx]);
             }
             $this->reconcileSataDeviceRrds($dev, $this->sataAttributes[$devIdx] ?? []);
             $hwForecastEnabled = HwForecastSetting::resolve($this->ctx->appId);
@@ -871,6 +873,33 @@ final class SataHandler implements DiskTypeHandler
         }
 
         AttributeRateTracker::sync($this->ctx->appId, $this->ctx->deviceId, $this->ctx->device['hostname'], $diskKey, $rrdFilename, $attrs);
+    }
+
+    /**
+     * Fit two straight-line trends (1-month and 6-month lookback) per
+     * attribute against its Normalized DS and persist the resulting "days
+     * until Thresh crossing" estimates, backing the SATA Basic view's "Time
+     * to Thresh" column (HtmlData::attrNormalizedTrendRanges()). Runs at
+     * discovery time only, same reasoning as syncSataAttributeRates() above --
+     * see NormalizedTrendTracker's own class doc for why this one especially
+     * doesn't need every-poll freshness.
+     */
+    private function syncSataAttributeTrend(array $dev, array $attrRows): void
+    {
+        $diskKey = $dev['disk_key'];
+        $idx = DiskIdentity::index($diskKey);
+        $rrdFilename = app(Rrd::class)->name($this->ctx->device['hostname'], ['app', 'smart', $this->ctx->appId, $idx]);
+
+        $attrs = [];
+        foreach ($attrRows as $attrId => $row) {
+            $id = (int) ($row['smartmonSataAttrId'] ?? $attrId);
+            $attrs[$id] = [
+                'threshold' => is_numeric($row['smartmonSataAttrThreshold'] ?? null) ? (float) $row['smartmonSataAttrThreshold'] : null,
+                'status'    => (int) ($row['smartmonSataAttrStatus'] ?? null),
+            ];
+        }
+
+        NormalizedTrendTracker::sync($this->ctx->appId, $this->ctx->deviceId, $diskKey, $rrdFilename, $attrs);
     }
 
     /** True for a spinning (non-SSD) disk: numeric rotation_rate greater than zero. */

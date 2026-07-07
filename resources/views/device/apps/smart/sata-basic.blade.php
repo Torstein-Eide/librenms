@@ -496,6 +496,7 @@
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change over the last 24 hours (per-second for high-volume counters, per-hour otherwise)">&Delta; 24h</th>'
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change over the last 168 hours / 1 week (per-second for high-volume counters, per-hour otherwise)">&Delta; 1w</th>'
         . '<th class="smart-attr-sort" data-type="num" onclick="smartAttrSort(this)" style="cursor:pointer;max-width:48px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Average raw value change over the last 672 hours / 1 month (per-second for high-volume counters, per-hour otherwise)">&Delta; 1mo</th>'
+        . '<th style="max-width:90px" title="Projected time until Normalized crosses Thresh, from separate 1-month and 6-month trend fits">Time to Thresh</th>'
         . '</tr></thead><tbody>';
 
     $dark = session('applied_site_style') === 'dark';
@@ -507,6 +508,7 @@
     // "current" reading). That fetch is batched once per disk here (not once
     // per attribute row) via HtmlData::attrCurrentPoint().
     $attrLast = $data->attrCurrentPoint($selectedDisk);
+    $trendRanges = $data->attrNormalizedTrendRanges($selectedDisk);
 
     foreach ($disk['attributes'] as $attr) {
         $status = (int) ($attr['status'] ?? 0);
@@ -655,6 +657,7 @@
             . '<td style="' . $rateCellStyle . '" title="' . htmlspecialchars($rateTitle($rate24h), ENT_QUOTES) . '" data-sort="' . htmlspecialchars((string) ($rate24h ?? ''), ENT_QUOTES) . '">' . $fmtRate($rate24h) . '</td>'
             . '<td style="' . $rateCellStyle . '" title="' . htmlspecialchars($rateTitle($rate168h), ENT_QUOTES) . '" data-sort="' . htmlspecialchars((string) ($rate168h ?? ''), ENT_QUOTES) . '">' . $fmtRate($rate168h) . '</td>'
             . '<td style="' . $rateCellStyle . '" title="' . htmlspecialchars($rateTitle($rate672h), ENT_QUOTES) . '" data-sort="' . htmlspecialchars((string) ($rate672h ?? ''), ENT_QUOTES) . '">' . $fmtRate($rate672h) . '</td>'
+            . '<td>' . htmlspecialchars($trendRanges[$attrId] ?? '-') . '</td>'
             . '</tr>';
     }
     echo '</tbody></table></div>';
