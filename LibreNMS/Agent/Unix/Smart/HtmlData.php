@@ -646,13 +646,16 @@ class HtmlData
     /** Render a naming template's $variable placeholders against a disk's data. */
     public function renderNamingTemplate(array $disk, string $template): string
     {
-        return preg_replace_callback('/\$(device|model|serial|wwn|model_family)\b/', function (array $m) use ($disk): string {
+        return preg_replace_callback('/\$(device|model|serial|short_serial|model_family|type|size|wwn)\b/', function (array $m) use ($disk): string {
             return match ($m[1]) {
                 'device'       => $this->deviceLabel($disk),
                 'model'        => $this->model($disk),
                 'serial'       => $this->serial($disk),
-                'wwn'          => trim((string) ($disk['wwn'] ?? '')),
+                'short_serial' => $this->shortSerial($disk),
                 'model_family' => trim((string) ($disk['model_family'] ?? '')),
+                'type'         => $this->typeLabel($disk),
+                'size'         => $this->sizeLabel($disk),
+                'wwn'          => trim((string) ($disk['wwn'] ?? '')),
             };
         }, $template);
     }
@@ -750,6 +753,32 @@ class HtmlData
         $label = trim(($protocol === 'SAT' ? 'SATA' : $protocol) . ' ' . (string) $media);
 
         return $label !== '' ? $label : '-';
+    }
+
+    /** Drive capacity in bytes, from whichever field the disk's protocol reports it under. */
+    public function capacityBytes(array $disk): ?float
+    {
+        $bytes = $this->isNvme($disk)
+            ? ($disk['info']['total_nvm_capacity_bytes'] ?? null)
+            : ($disk['info']['user_capacity_bytes'] ?? null);
+
+        return is_numeric($bytes) ? (float) $bytes : null;
+    }
+
+    /** Drive capacity as an SI-scaled label (e.g. "2TB"), or '-' when unknown. */
+    public function sizeLabel(array $disk): string
+    {
+        $bytes = $this->capacityBytes($disk);
+
+        return $bytes !== null ? str_replace(' ', '', Number::formatSi($bytes, 0, 0, 'B')) : '-';
+    }
+
+    /** Last 5 characters of the drive's serial number, for compact labels. */
+    public function shortSerial(array $disk): string
+    {
+        $serial = $this->serial($disk);
+
+        return $serial !== '' ? substr($serial, -5) : '';
     }
 
     /**

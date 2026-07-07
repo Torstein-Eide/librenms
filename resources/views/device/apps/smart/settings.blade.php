@@ -258,7 +258,7 @@
 
             function renderNamingPreview(template, diskKey) {
                 var fields = diskFields[diskKey] || diskFields[''] || {};
-                return (template || '').replace(/\$(device|model|serial|wwn|model_family)\b/g, function (m, name) {
+                return (template || '').replace(/\$(device|model|serial|short_serial|model_family|type|size|wwn)\b/g, function (m, name) {
                     return fields[name] || '';
                 });
             }
