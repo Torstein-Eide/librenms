@@ -11,6 +11,7 @@ use LibreNMS\Enum\Sensor as SensorEnum;
 use LibreNMS\Enum\Severity;
 use LibreNMS\Exceptions\JsonAppException;
 use LibreNMS\Exceptions\JsonAppMissingKeysException;
+use LibreNMS\Exceptions\JsonAppParsingFailedException;
 use LibreNMS\OS;
 use LibreNMS\RRD\RrdDefinition;
 use LibreNMS\Util\Number;
@@ -339,20 +340,43 @@ abstract class Application
             return \json_app_get($this->os->getDeviceArray(), $extend_name, $min_version);
         } catch (JsonAppMissingKeysException $e) {
             return $e->getParsedJson();
-        } catch (JsonAppException $e) {
-            $cached = $this->agent_data[$extend_name] ?? null;
-            if ($cached !== null) {
-                $decoded = json_decode($cached, true);
-                if (is_array($decoded)) {
-                    return $decoded;
-                }
-                \update_application($this->app, 'ERROR: Invalid JSON from agent data', []);
-
-                return null;
+        } catch (JsonAppParsingFailedException $e) {
+            $legacy = $this->parseLegacyPayload($e);
+            if ($legacy !== null) {
+                return $legacy;
             }
-            \update_application($this->app, $e->getCode() . ':' . $e->getMessage(), []);
+
+            return $this->fetchPayloadError($e, $extend_name);
+        } catch (JsonAppException $e) {
+            return $this->fetchPayloadError($e, $extend_name);
+        }
+    }
+
+    /**
+     * Hook for subclasses that can translate a legacy (pre-JSON) extend
+     * script's raw output into this app's expected payload shape. Returning
+     * null falls through to the standard cached/error handling.
+     */
+    protected function parseLegacyPayload(JsonAppParsingFailedException $e): ?array
+    {
+        return null;
+    }
+
+    /** Shared fallback-to-cache / error-recording path for a caught JsonAppException. */
+    private function fetchPayloadError(JsonAppException $e, string $extend_name): ?array
+    {
+        $cached = $this->agent_data[$extend_name] ?? null;
+        if ($cached !== null) {
+            $decoded = json_decode($cached, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+            \update_application($this->app, 'ERROR: Invalid JSON from agent data', []);
 
             return null;
         }
+        \update_application($this->app, $e->getCode() . ':' . $e->getMessage(), []);
+
+        return null;
     }
 }

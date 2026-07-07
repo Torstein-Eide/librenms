@@ -321,7 +321,7 @@ final class NvmeHandler implements DiskTypeHandler
      */
     private function nvmeHealthLevel(mixed $overallRaw, mixed $critRaw): int
     {
-        if (SnmpDecode::parseBitsValue($critRaw)) {
+        if (SmartSnmpDecode::bitsValue($critRaw)) {
             return 4; // Critical Warning
         }
 
@@ -392,7 +392,7 @@ final class NvmeHandler implements DiskTypeHandler
         foreach (self::NVME_HEALTH_RRD as $col => [$ds, $type]) {
             $rrd_def->addDataset($ds, $type, 0, null, self::RRD_HEARTBEAT);
             $value = $col === 'smartmonNvmeCriticalWarning'
-                ? SnmpDecode::parseBitsValue($health[$col] ?? null)
+                ? SmartSnmpDecode::bitsValue($health[$col] ?? null)
                 : (int) ($health[$col] ?? null);
             $fields[$ds] = $value;
         }
@@ -468,7 +468,7 @@ final class NvmeHandler implements DiskTypeHandler
             'device_id'            => $this->ctx->deviceId,
             'disk_key'             => $dev['disk_key'],
             'overall_status'       => $this->healthStatusValue($row['smartmonNvmeHealthOverallStatus'] ?? null),
-            'critical_warning'     => SnmpDecode::parseBitsValue($row['smartmonNvmeCriticalWarning'] ?? null),
+            'critical_warning'     => SmartSnmpDecode::bitsValue($row['smartmonNvmeCriticalWarning'] ?? null),
             'data_units_read'      => (int) ($row['smartmonNvmeDataUnitsRead'] ?? null),
             'data_units_written'   => (int) ($row['smartmonNvmeDataUnitsWritten'] ?? null),
             'data_bytes_read'      => (int) ($row['smartmonNvmeDataBytesRead'] ?? null),

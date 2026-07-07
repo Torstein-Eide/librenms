@@ -9,6 +9,7 @@ use LibreNMS\Agent\Module\Smart\Support\AttributeRateTracker;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Data\Store\Rrd;
 use LibreNMS\Enum\Severity;
+use LibreNMS\Exceptions\JsonAppParsingFailedException;
 use LibreNMS\RRD\RrdDefinition;
 
 /**
@@ -146,6 +147,7 @@ class SmartJsonV1 extends Application
             $logEntries = $this->parseSelftestLog((string) ($disk['selftest_log'] ?? ''));
 
             $this->discoverDiskInDb($diskKey, $disk);
+            $this->reconcileDiskRrd($diskKey);
             $expectedOids = array_merge($expectedOids, $this->discoverDiskSensors($idx, $disk, $label, $logEntries));
             $presentAttrIds = $this->syncDiskAttributes($diskKey, $disk);
             $this->syncDiskAttributeRates($diskKey, $presentAttrIds);
@@ -221,6 +223,62 @@ class SmartJsonV1 extends Application
         }
 
         return array_values((array) $payload['data']['disks']);
+    }
+
+    /**
+     * Translate the old CSV-line output (pre-JSON smart extend script) into
+     * this class's expected {data:{disks:[...]}} shape. One line per disk:
+     * disk,id5,id10,id173,id177,id183,id184,id187,id188,id190,id194,id196,
+     * id197,id198,id199,id231,id233,completed,interrupted,read_failure,
+     * unknown_failure,extended,short,conveyance,selective,id9 -- matches
+     * master's includes/polling/applications/smart.inc.php fallback. This
+     * legacy format carries no model_name/serial/fw_version/health_pass/
+     * max_temp/selftest_log/id232/over_temp/dev_error, so diskKey() falls
+     * back to the device path and those sensors/fields are simply absent
+     * (not a regression: the legacy script never reported them either).
+     */
+    protected function parseLegacyPayload(JsonAppParsingFailedException $e): ?array
+    {
+        $disks = [];
+
+        foreach (explode("\n", (string) $e->getOutput()) as $line) {
+            $parts = explode(',', trim($line));
+            if (count($parts) < 26) {
+                continue;
+            }
+            [$disk, $id5, $id10, $id173, $id177, $id183, $id184, $id187, $id188, $id190, $id194,
+                $id196, $id197, $id198, $id199, $id231, $id233, , , $readFailure,
+                $unknownFailure, , , , , $id9] = $parts;
+
+            if (trim($disk) === '') {
+                continue;
+            }
+
+            $disks[] = [
+                'disk'            => $disk,
+                '5'               => $id5,
+                '9'               => $id9,
+                '10'              => $id10,
+                '173'             => $id173,
+                '177'             => $id177,
+                '183'             => $id183,
+                '184'             => $id184,
+                '187'             => $id187,
+                '188'             => $id188,
+                '190'             => $id190,
+                '194'             => $id194,
+                '196'             => $id196,
+                '197'             => $id197,
+                '198'             => $id198,
+                '199'             => $id199,
+                '231'             => $id231,
+                '233'             => $id233,
+                'read_failure'    => $readFailure,
+                'unknown_failure' => $unknownFailure,
+            ];
+        }
+
+        return $disks === [] ? null : ['data' => ['disks' => $disks]];
     }
 
     private function discoverDiskInDb(string $diskKey, array $disk): void
@@ -589,6 +647,33 @@ class SmartJsonV1 extends Application
         return $values;
     }
 
+    /**
+     * Retrofit this disk's main attribute RRD file's dataset set to match
+     * MAIN_RRD_ATTR_KEYS via a single Rrd::addDatasetsFromConfig() call --
+     * a no-op tune for DS that already exist, skipped entirely if the file
+     * doesn't exist yet. Needed because rev1's smart-v1.php used the same
+     * ['app','smart',$appId,$diskKey] filename pattern for its own main
+     * attribute RRD, but with a different DS set (no id9/id232, plus 8
+     * self-test-counter DS this class no longer writes): without this,
+     * pollRrds()'s update against a pre-existing rev1 file would send a
+     * template containing id9/id232, which rrdtool rejects outright since
+     * those DS were never created in that file.
+     */
+    private function reconcileDiskRrd(string $diskKey): void
+    {
+        $appId = $this->app->app_id;
+        $hostname = $this->os->getDeviceArray()['hostname'];
+        $rrdFilename = app(Rrd::class)->name($hostname, ['app', 'smart', $appId, $diskKey]);
+
+        $config = [];
+        foreach (self::mainRrdAttrKeys() as $ds => $attrKey) {
+            $type = isset(Common::ATA_COUNTER_ATTRS[(int) $attrKey]) ? 'COUNTER' : 'GAUGE';
+            $config[$ds] = ['type' => $type, 'heartbeat' => 86400, 'min' => 0, 'max' => 'U'];
+        }
+
+        app(Rrd::class)->addDatasetsFromConfig($rrdFilename, $config);
+    }
+
     private function pollRrds(string $diskKey, array $disk): void
     {
         $appId = $this->app->app_id;
@@ -768,7 +853,7 @@ class SmartJsonV1 extends Application
                 'result_passed'  => $this->selftestResultEnum($status) === 1,
                 'remaining_pct'  => (int) $pctStr,
                 'power_on_hours' => (int) $hours,
-                'lba_first_error' => ($lbaStr === '-' || $lbaStr === '') ? null : (int) hexdec(ltrim($lbaStr, '0x')),
+                'lba_first_error' => ($lbaStr === '-' || $lbaStr === '' || ! is_numeric($lbaStr)) ? null : (int) $lbaStr,
             ];
         }
 

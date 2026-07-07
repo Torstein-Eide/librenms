@@ -905,7 +905,7 @@ final class SataHandler implements DiskTypeHandler
                 'status'           => $row['smartmonSataAttrStatus'] ?? null,
                 'format'           => (int) ($row['smartmonSataAttrFormat'] ?? null),
                 'flags'            => SmartSnmpDecode::bitsValue($row['smartmonSataAttrFlags'] ?? null),
-                'rrd_type'         => $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null)
+                'rrd_type'         => $this->isCounterAttrName($row['smartmonSataAttrName'] ?? null) || isset(Common::ATA_COUNTER_ATTRS[(int) ($row['smartmonSataAttrId'] ?? $attrId)])
                     ? 'COUNTER' : 'GAUGE',
             ], ['app_id', 'disk_key', 'attribute_id']);
         }
@@ -1245,7 +1245,7 @@ final class SataHandler implements DiskTypeHandler
                 continue;
             }
             foreach ($offsets as $offset => $row) {
-                $flagsRaw = SnmpDecode::parseBitsValue($row['smartmonSataDevStatFlagsValue'] ?? null);
+                $flagsRaw = SmartSnmpDecode::bitsValue($row['smartmonSataDevStatFlagsValue'] ?? null);
                 $valid = $flagsRaw !== null ? (bool) ($flagsRaw & 0x40) : null;
                 $normalized = $flagsRaw !== null ? (bool) ($flagsRaw & 0x20) : null;
 
