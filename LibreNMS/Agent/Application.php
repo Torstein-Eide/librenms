@@ -220,10 +220,10 @@ abstract class Application
                 $value = null;
             }
 
-            if ($sensor->sensor_divisor && $value !== 0) {
+            if ($value !== null && $sensor->sensor_divisor && $value !== 0) {
                 $value /= $sensor->sensor_divisor;
             }
-            if ($sensor->sensor_multiplier) {
+            if ($value !== null && $sensor->sensor_multiplier) {
                 $value *= $sensor->sensor_multiplier;
             }
 
