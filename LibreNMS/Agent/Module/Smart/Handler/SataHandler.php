@@ -971,10 +971,15 @@ final class SataHandler implements DiskTypeHandler
 
     /**
      * This disk's Wear percentage: 1 - (lowest SMART normalized value among
-     * $normalizedAttrs / 100), excluding NA-status rows and anything this
-     * disk's ExcludedAttributesSetting list matches (see that class's doc
-     * comment for why -- temperature/workload counters/typically-SSD-specific
-     * spare-endurance attributes would otherwise corrupt this reading). SMART
+     * $normalizedAttrs / 100), excluding anything this disk's
+     * ExcludedAttributesSetting list matches (see that class's doc comment for
+     * why -- temperature/workload counters/typically-SSD-specific
+     * spare-endurance attributes would otherwise corrupt this reading). A
+     * device-reported notRelevant(-1) status (no failure threshold defined
+     * for that attribute) does NOT exclude it here -- the normalized value
+     * itself can still be a meaningful wear signal even when the vendor
+     * hasn't defined a pass/fail threshold for it, so only the configurable
+     * exclusion list decides what's left out. SMART
      * normalized values are 100=new decreasing toward each attribute's
      * failure threshold as it wears; inverting puts this sensor on the same
      * "higher = more worn/used" scale as percentageUsedSensor() (NVMe
@@ -991,9 +996,6 @@ final class SataHandler implements DiskTypeHandler
         $lowest = null;
 
         foreach ($normalizedAttrs as $attr) {
-            if ($attr['status'] === -1 || ! is_numeric($attr['value_norm'])) {
-                continue;
-            }
             if (ExcludedAttributesSetting::isExcluded($attr['name'], $attr['id'], $excluded)) {
                 continue;
             }

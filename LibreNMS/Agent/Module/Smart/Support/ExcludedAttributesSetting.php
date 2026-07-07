@@ -39,10 +39,6 @@ final class ExcludedAttributesSetting
             'comment' => 'Temperature fluctuates independently of mechanical wear.',
         ],
         [
-            'type' => 'name', 'pattern' => 'Head Flying Hours',
-            'comment' => 'Workload/usage counter, not a wear indicator by itself.',
-        ],
-        [
             'type' => 'name', 'pattern' => 'Total LBAs Written',
             'comment' => 'Workload counter (bytes written) that would give a busy but healthy drive a falsely low Wear score.',
         ],
@@ -112,7 +108,7 @@ final class ExcludedAttributesSetting
 
             if ($type === 'id') {
                 $idPattern = $entry['pattern'] ?? '';
-                if ($attrId !== null && is_numeric($idPattern) && $attrId === (int) $idPattern) {
+                if ($attrId !== null && $attrId === (int) $idPattern) {
                     return true;
                 }
 

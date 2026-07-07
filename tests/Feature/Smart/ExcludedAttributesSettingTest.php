@@ -26,7 +26,7 @@ class ExcludedAttributesSettingTest extends TestCase
 
         $this->assertNotEmpty($entries);
         $this->assertTrue(ExcludedAttributesSetting::isExcluded('Temperature_Celsius', 194, $entries));
-        $this->assertTrue(ExcludedAttributesSetting::isExcluded('Head_Flying_Hours', 240, $entries));
+        $this->assertFalse(ExcludedAttributesSetting::isExcluded('Head_Flying_Hours', 240, $entries));
 
         // Ids 5 and 17 are excluded by id regardless of reported name, e.g. a
         // vendor reporting id 17 as "Current_TRIM_Percent".
