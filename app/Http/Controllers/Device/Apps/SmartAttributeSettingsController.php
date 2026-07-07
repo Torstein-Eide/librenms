@@ -36,7 +36,7 @@ class SmartAttributeSettingsController
     private const GLOBAL_SETTINGS_APP_ID = 0;
 
     /** Placeholder variables accepted in a naming template; anything else is rejected. */
-    private const NAMING_TEMPLATE_VARS = ['device', 'model', 'serial', 'short_serial', 'model_family', 'type', 'size', 'wwn'];
+    private const NAMING_TEMPLATE_VARS = ['device', 'model', 'serial', 'short_serial', 'model_family', 'type', 'protocol', 'size', 'wwn'];
 
     /**
      * Common::ATA_COUNTER_ATTRS entries that are genuine failure indicators
@@ -147,7 +147,8 @@ class SmartAttributeSettingsController
                     'serial' => $htmlData->serial($disk),
                     'short_serial' => $htmlData->shortSerial($disk),
                     'model_family' => trim((string) ($disk['model_family'] ?? '')),
-                    'type' => $htmlData->typeLabel($disk),
+                    'type' => $htmlData->mediaLabel($disk),
+                    'protocol' => $htmlData->protocolLabel($disk),
                     'size' => $htmlData->sizeLabel($disk),
                     'wwn' => trim((string) ($disk['wwn'] ?? '')),
                 ] : [];

@@ -646,14 +646,15 @@ class HtmlData
     /** Render a naming template's $variable placeholders against a disk's data. */
     public function renderNamingTemplate(array $disk, string $template): string
     {
-        return preg_replace_callback('/\$(device|model|serial|short_serial|model_family|type|size|wwn)\b/', function (array $m) use ($disk): string {
+        return preg_replace_callback('/\$(device|model|serial|short_serial|model_family|type|protocol|size|wwn)\b/', function (array $m) use ($disk): string {
             return match ($m[1]) {
                 'device'       => $this->deviceLabel($disk),
                 'model'        => $this->model($disk),
                 'serial'       => $this->serial($disk),
                 'short_serial' => $this->shortSerial($disk),
                 'model_family' => trim((string) ($disk['model_family'] ?? '')),
-                'type'         => $this->typeLabel($disk),
+                'type'         => $this->mediaLabel($disk),
+                'protocol'     => $this->protocolLabel($disk),
                 'size'         => $this->sizeLabel($disk),
                 'wwn'          => trim((string) ($disk['wwn'] ?? '')),
             };
@@ -738,21 +739,35 @@ class HtmlData
     /** Human label for the device protocol/media (e.g. "SATA SSD", "NVMe SSD"). */
     public function typeLabel(array $disk): string
     {
-        $protocol = $this->decode('protocol', $disk['protocol'] ?? null);
+        $protocol = $this->protocolLabel($disk);
         $protocol = $protocol === '-' ? '' : $protocol;
 
-        // NVMe is always solid-state; SATA media is derived from the rotation rate.
-        $rotation = $disk['info']['rotation_rate'] ?? null;
-        $media = null;
-        if ($this->isNvme($disk)) {
-            $media = 'SSD';
-        } elseif (is_numeric($rotation)) {
-            $media = (int) $rotation === 0 ? 'SSD' : 'HDD';
-        }
-
-        $label = trim(($protocol === 'SAT' ? 'SATA' : $protocol) . ' ' . (string) $media);
+        $label = trim($protocol . ' ' . $this->mediaLabel($disk));
 
         return $label !== '' ? $label : '-';
+    }
+
+    /** Device protocol only (e.g. "SATA", "ATA", "NVMe"), without the media suffix. */
+    public function protocolLabel(array $disk): string
+    {
+        $protocol = $this->decode('protocol', $disk['protocol'] ?? null);
+
+        return $protocol === 'SAT' ? 'SATA' : $protocol;
+    }
+
+    /** Drive media only (e.g. "SSD", "HDD"), without the protocol prefix. */
+    public function mediaLabel(array $disk): string
+    {
+        // NVMe is always solid-state; SATA media is derived from the rotation rate.
+        $rotation = $disk['info']['rotation_rate'] ?? null;
+        if ($this->isNvme($disk)) {
+            return 'SSD';
+        }
+        if (is_numeric($rotation)) {
+            return (int) $rotation === 0 ? 'SSD' : 'HDD';
+        }
+
+        return '-';
     }
 
     /** Drive capacity in bytes, from whichever field the disk's protocol reports it under. */

@@ -79,7 +79,7 @@
             <div class="panel-body">
                 <p class="text-muted">
                     {{ __('Used by the "Custom" label mode on the overview page and in per-disk graph titles. Available variables:') }}
-                    @foreach (['device', 'model', 'serial', 'short_serial', 'model_family', 'type', 'size', 'wwn'] as $var)
+                    @foreach (['device', 'model', 'serial', 'short_serial', 'model_family', 'type', 'protocol', 'size', 'wwn'] as $var)
                         <a href="#" class="btn btn-default btn-xs smart-naming-var" data-var="{{ $var }}" style="margin:0 2px">${{ $var }}</a>
                     @endforeach
                 </p>
