@@ -109,9 +109,20 @@ final class SataHandler implements DiskTypeHandler
             $this->ctx->vlog("SataHandler::discover: device idx={$devIdx} disk_key={$dev['disk_key']}");
 
             // Missing (grace-period) devices carry no fresh SNMP data to discover
-            // against -- just keep their Health sensor registered as Unavailable.
+            // against. Health is explicitly overridden to Unavailable; the rest
+            // (currently just Self-test Status) is re-registered by feeding
+            // discoverSataDeviceSensors() the last persisted DB values in place
+            // of a live SNMP walk -- omitting smartmonSataHealthOverallStatus
+            // keeps its Health block from running and clobbering the override.
             if (! empty($dev['missing_since'])) {
                 $this->deviceTable->markMissingHealthDiscovered($dev, 'smart_mib_health', 6, self::healthStateTranslations());
+
+                $selftestExecRaw = DB::table('smart_sata_health')
+                    ->where('app_id', $this->ctx->appId)
+                    ->where('disk_key', $dev['disk_key'])
+                    ->value('selftest_exec_status_raw');
+                $dbHealth = $selftestExecRaw !== null ? ['smartmonSataSelfTestExecutionStatusValue' => $selftestExecRaw] : [];
+                $this->discoverSataDeviceSensors($dev, $dbHealth, []);
 
                 continue;
             }
@@ -279,6 +290,23 @@ final class SataHandler implements DiskTypeHandler
         ];
     }
 
+    /** @return array<int, StateTranslation> */
+    private static function selftestStatusTranslations(): array
+    {
+        return [
+            StateTranslation::define('Completed without error', 0x0, Severity::Ok),
+            StateTranslation::define('Aborted by host', 0x1, Severity::Ok),
+            StateTranslation::define('Interrupted (host reset)', 0x2, Severity::Ok),
+            StateTranslation::define('Fatal or unknown error', 0x3, Severity::Warning),
+            StateTranslation::define('Completed: unknown failure', 0x4, Severity::Warning),
+            StateTranslation::define('Completed: electrical fail', 0x5, Severity::Warning),
+            StateTranslation::define('Completed: servo failure', 0x6, Severity::Warning),
+            StateTranslation::define('Completed: read failure', 0x7, Severity::Warning),
+            StateTranslation::define('Completed: handling damage', 0x8, Severity::Warning),
+            StateTranslation::define('Self-test in progress', 0xf, Severity::Ok),
+        ];
+    }
+
     /**
      * Register LibreNMS sensors for one SATA device.
      * Called once per device with pre-fetched table data.
@@ -307,28 +335,15 @@ final class SataHandler implements DiskTypeHandler
         // Self-test execution status (MIB returns the decoded nibble directly)
         $statusRaw = $health['smartmonSataSelfTestExecutionStatusValue'] ?? null;
         if ($statusRaw !== null) {
-            $statusNibble = (int) $statusRaw;
             $this->ctx->discoverSensor(
                 class: 'state',
                 type: 'smart_selftest_status',
                 index: "{$idx}_selftest_status",
                 oid: "app:smart_mib:{$idx}_selftest_status",
                 descr: "{$group} {$devName} Self-test Status",
-                current: $statusNibble,
+                current: (int) $statusRaw,
                 group: $group,
-            )
-                ->withStateTranslations('smart_selftest_status', [
-                    StateTranslation::define('Completed without error', 0x0, Severity::Ok),
-                    StateTranslation::define('Aborted by host', 0x1, Severity::Ok),
-                    StateTranslation::define('Interrupted (host reset)', 0x2, Severity::Ok),
-                    StateTranslation::define('Fatal or unknown error', 0x3, Severity::Warning),
-                    StateTranslation::define('Completed: unknown failure', 0x4, Severity::Warning),
-                    StateTranslation::define('Completed: electrical fail', 0x5, Severity::Warning),
-                    StateTranslation::define('Completed: servo failure', 0x6, Severity::Warning),
-                    StateTranslation::define('Completed: read failure', 0x7, Severity::Warning),
-                    StateTranslation::define('Completed: handling damage', 0x8, Severity::Warning),
-                    StateTranslation::define('Self-test in progress', 0xf, Severity::Ok),
-                ]);
+            )->withStateTranslations('smart_selftest_status', self::selftestStatusTranslations());
         }
 
         // Rotating Wear: only for spinning (non-SSD) disks, which have no single

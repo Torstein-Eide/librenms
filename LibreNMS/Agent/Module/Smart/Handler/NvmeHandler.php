@@ -83,9 +83,28 @@ final class NvmeHandler implements DiskTypeHandler
             $this->ctx->vlog("NvmeHandler::discover: device idx={$key} disk_key={$dev['disk_key']}");
 
             // Missing (grace-period) devices carry no fresh SNMP data to discover
-            // against -- just keep their Health sensor registered as Unavailable.
+            // against. Health is explicitly overridden to Unavailable; Self-test
+            // Status is re-registered by feeding discoverNvmeSelftestStatusSensor()
+            // the last persisted DB values in place of a live SNMP walk.
             if (! empty($dev['missing_since'])) {
                 $this->deviceTable->markMissingHealthDiscovered($dev, 'smart_nvme_health', 5, self::healthStateTranslations());
+
+                $diskKey = $dev['disk_key'];
+                $currentOp = DB::table('smart_nvme_health')
+                    ->where('app_id', $this->ctx->appId)
+                    ->where('disk_key', $diskKey)
+                    ->value('current_selftest_op');
+                $dbHealth = $currentOp !== null ? ['smartmonNvmeCurrentSelfTestOperationValue' => $currentOp] : [];
+                $dbSelftestRows = DB::table('smart_nvme_selftest_log')
+                    ->where('app_id', $this->ctx->appId)
+                    ->where('disk_key', $diskKey)
+                    ->get(['result', 'power_on_hours'])
+                    ->map(fn ($row) => [
+                        'smartmonNvmeSelfTestResult'       => $row->result,
+                        'smartmonNvmeSelfTestPowerOnHours' => $row->power_on_hours,
+                    ])
+                    ->all();
+                $this->discoverNvmeSelftestStatusSensor($dev, $dbHealth, $dbSelftestRows);
 
                 continue;
             }
@@ -249,19 +268,24 @@ final class NvmeHandler implements DiskTypeHandler
             descr: "{$group} {$devName} Self-test Status",
             current: $value,
             group: $group,
-        )
-            ->withStateTranslations('smart_nvme_selftest_status', [
-                StateTranslation::define('Completed without error', 0, Severity::Ok),
-                StateTranslation::define('Aborted by self-test command', 1, Severity::Ok),
-                StateTranslation::define('Aborted by controller level reset', 2, Severity::Ok),
-                StateTranslation::define('Aborted due to removal of a namespace', 3, Severity::Ok),
-                StateTranslation::define('Aborted due to processing of a Format NVM command', 4, Severity::Ok),
-                StateTranslation::define('Completed: segment failed', 5, Severity::Warning),
-                StateTranslation::define('Failed for unknown reason', 6, Severity::Warning),
-                StateTranslation::define('Completed: failed segment unknown', 7, Severity::Warning),
-                StateTranslation::define('Completed: one or more segments failed', 8, Severity::Warning),
-                StateTranslation::define('Self-test in progress', 15, Severity::Ok),
-            ]);
+        )->withStateTranslations('smart_nvme_selftest_status', self::selftestStatusTranslations());
+    }
+
+    /** @return array<int, StateTranslation> */
+    private static function selftestStatusTranslations(): array
+    {
+        return [
+            StateTranslation::define('Completed without error', 0, Severity::Ok),
+            StateTranslation::define('Aborted by self-test command', 1, Severity::Ok),
+            StateTranslation::define('Aborted by controller level reset', 2, Severity::Ok),
+            StateTranslation::define('Aborted due to removal of a namespace', 3, Severity::Ok),
+            StateTranslation::define('Aborted due to processing of a Format NVM command', 4, Severity::Ok),
+            StateTranslation::define('Completed: segment failed', 5, Severity::Warning),
+            StateTranslation::define('Failed for unknown reason', 6, Severity::Warning),
+            StateTranslation::define('Completed: failed segment unknown', 7, Severity::Warning),
+            StateTranslation::define('Completed: one or more segments failed', 8, Severity::Warning),
+            StateTranslation::define('Self-test in progress', 15, Severity::Ok),
+        ];
     }
 
     /**
