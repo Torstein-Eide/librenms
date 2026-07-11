@@ -601,11 +601,17 @@ class Common extends Application
             . count($this->sataDeviceList) . ' SATA / ' . count($this->nvmeDeviceList) . ' NVMe device(s) to update');
 
         foreach ($this->sataDeviceList as $devIdx => $dev) {
+            if ($this->deviceTable->pollSkipReason($dev) !== null) {
+                continue;
+            }
             $idx = $this->mibDiskIndex($dev['disk_key']);
             $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
         }
 
         foreach ($this->nvmeDeviceList as $devIdx => $dev) {
+            if ($this->deviceTable->pollSkipReason($dev) !== null) {
+                continue;
+            }
             $idx = $this->mibDiskIndex($dev['disk_key']);
             $this->matchSensorMibValues($idx, (string) $devIdx, $sensorValues);
         }

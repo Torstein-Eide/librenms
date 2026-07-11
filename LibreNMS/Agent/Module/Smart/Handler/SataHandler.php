@@ -172,6 +172,19 @@ final class SataHandler implements DiskTypeHandler
     {
         $this->sataDeviceList = $devices;
 
+        // Table walks below only run against devices this poll actually wants
+        // fresh DB/RRD data for -- missing/idle-or-sleeping disks (see
+        // pollSkipReason()) keep their last-synced state untouched instead of
+        // being redundantly rewritten with unchanged data every cycle, same as
+        // NvmeHandler::poll(). The full $devices list is restored below the
+        // walks so the per-device loop still sees missing disks (to flip their
+        // Health sensor to Unavailable and write an RRD gap) and idle ones (to
+        // skip them there too).
+        $this->sataDeviceList = array_filter(
+            $devices,
+            fn (array $dev) => $this->deviceTable->pollSkipReason($dev) === null
+        );
+
         // Table: Health (change-guarded; DB sync; sensors updated below)
         $this->walkAndSyncSataTable('smartmonSataHealthTable', 1, ChangeTracker::TID_HEALTH, [$this, 'syncSataHealthRow']);
 
@@ -188,6 +201,8 @@ final class SataHandler implements DiskTypeHandler
         $this->walkAndSyncSataTable('smartmonSataSelfTestTable', 2, ChangeTracker::TID_SELFTEST, [$this, 'syncSataSelfTestRows']);
         $this->walkAndSyncSataTable('smartmonSataSelectiveTestTable', 2, ChangeTracker::TID_SELECTIVE_TEST, [$this, 'syncSataSelectiveTestRows']);
         $this->walkAndSyncSataTable('smartmonSataPendingDefectsTable', 2, ChangeTracker::TID_PENDING_DEFECTS, [$this, 'syncSataPendingDefectRows']);
+
+        $this->sataDeviceList = $devices;
 
         // Health, self-test status, and self-test age sensors, computed from the
         // tables just synced above and batched through a single updateSensorValues()
