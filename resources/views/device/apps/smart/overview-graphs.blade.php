@@ -94,6 +94,10 @@
                 $devices[] = [
                     'key' => $key, 'disk' => $disk,
                     'badge' => isset($spec['header']) ? '<span class="text-muted" style="font-size:12px">' . htmlspecialchars($spec['header']) . '</span>' : '',
+                    // Header is always "Normalized:X Raw:Y" (see HtmlData::attributeGraphSpecs) --
+                    // split into its two parts so the mini thumbnail can stack them on their own
+                    // lines instead of overflowing a single line next to the disk label.
+                    'badge_lines' => isset($spec['header']) ? explode(' ', $spec['header'], 2) : null,
                     'graph_array' => [
                         'type'        => 'smart_sata_attr_value',
                         'id'          => $data->app->app_id,
@@ -195,9 +199,19 @@
                         'page_title' => $active['title'] . ': ' . $data->displayLabel($entry['disk'], $labelMode),
                     ]);
                     $linkUrl = Url::generate($linkArgs);
-                    $badge = $entry['badge'] !== '' ? '<span class="pull-right">' . $entry['badge'] . '</span>' : '';
+                    if (! empty($entry['badge_lines'])) {
+                        // Attribute badge: label on its own line, Normalized/Raw each on
+                        // their own line below it, so long raw values (now SI-abbreviated
+                        // by formatRawSI too) don't run off the edge of the 180px thumbnail.
+                        $badgeLines = implode('<br>', array_map('htmlspecialchars', $entry['badge_lines']));
+                        $header = '<div style="font-size:11px;margin-bottom:2px">' . $label . '</div>'
+                            . '<div class="text-muted" style="font-size:11px;line-height:1.4;margin-bottom:4px">' . $badgeLines . '</div>';
+                    } else {
+                        $badge = $entry['badge'] !== '' ? '<span class="pull-right">' . $entry['badge'] . '</span>' : '';
+                        $header = '<div style="font-size:11px;margin-bottom:4px">' . $label . $badge . '</div>';
+                    }
                     echo '<div class="pull-left" style="margin-right:8px;margin-bottom:8px">'
-                        . '<div style="font-size:11px;margin-bottom:4px">' . $label . $badge . '</div>'
+                        . $header
                         . '<a href="' . htmlspecialchars($linkUrl, ENT_QUOTES) . '">' . Url::lazyGraphTag($thumbArgs) . '</a>'
                         . '</div>';
                 }

@@ -1394,7 +1394,7 @@ class HtmlData
             $name = str_replace('_', ' ', $rawName);
             $rawValue = $attr['value_raw_string'] ?? $attr['value_raw'] ?? null;
             $header = 'Normalized:' . $this->numericString($attr['value_norm'] ?? null)
-                . ' Raw:' . $this->numericString($rawValue);
+                . ' Raw:' . $this->formatRawSI($this->numericString($rawValue));
 
             $specs[$id] = [
                 'id'        => $id,
