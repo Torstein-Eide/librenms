@@ -105,11 +105,17 @@ foreach ($rrd_list as $rrd) {
 
     $stack = $i && ($dostack === 1) ? ':STACK' : '';
 
+    // Per-row GPRINT decimal-places override (e.g. sata_attr_multi.inc.php's
+    // COUNTER-DS rate rows): the default %8.0lf rounds any value under 1 to "0",
+    // which silently reintroduces the "shows 0" symptom for a slow rate even
+    // after it's correctly CDEF-scaled -- 1 decimal keeps it visible.
+    $gprintFormat = '%8.' . ($rrd['decimals'] ?? 0) . 'lf%s';
+
     $rrd_options[] = 'LINE2:' . $g_defname . $i . '#' . $colour . ':' . $descr . "$stack";
-    $rrd_options[] = 'GPRINT:' . $t_defname . $i . ':LAST:%8.0lf%s';
-    $rrd_options[] = 'GPRINT:' . $t_defname . $i . 'min:MIN:%8.0lf%s';
-    $rrd_options[] = 'GPRINT:' . $t_defname . $i . 'max:MAX:%8.0lf%s';
-    $rrd_options[] = 'GPRINT:' . $t_defname . $i . ':AVERAGE:%8.0lf%s\\n';
+    $rrd_options[] = 'GPRINT:' . $t_defname . $i . ':LAST:' . $gprintFormat;
+    $rrd_options[] = 'GPRINT:' . $t_defname . $i . 'min:MIN:' . $gprintFormat;
+    $rrd_options[] = 'GPRINT:' . $t_defname . $i . 'max:MAX:' . $gprintFormat;
+    $rrd_options[] = 'GPRINT:' . $t_defname . $i . ':AVERAGE:' . $gprintFormat . '\\n';
 
     if ($printtotal === 1) {
         $rrd_options[] = 'GPRINT:tot' . $rrd['ds'] . $i . ':%6.2lf%s' . Rrd::safeDescr($total_units);

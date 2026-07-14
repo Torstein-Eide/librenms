@@ -1033,6 +1033,45 @@ class HtmlData
     }
 
     /**
+     * Keyword -> [vertical-axis description, unit] for a Raw SMART attribute value's
+     * axis label. SMART attribute names are vendor-defined text, not a typed unit --
+     * this is a best-effort guess from well-known ATA attribute name patterns
+     * (smartmontools' drivedb.h naming). Order matters: most specific pattern first,
+     * since e.g. "Seek Time Performance" must match /performance/ before a generic
+     * time/hours rule below it would otherwise misfire, and "Uncorrectable Error Cnt"
+     * must match /uncorrect/ as an error, not get caught by a broader sector rule.
+     *
+     * Shared by every per-disk and multi-disk SMART attribute graph
+     * (sata_attr_value.inc.php, sata_attr_multi.inc.php) so they stay in sync.
+     *
+     * @return array{0: string, 1: string} [unit_text, unit_label] -- unit_label is '' when there's no abbreviation to show
+     */
+    public static function attributeUnitLabel(string $attrName): array
+    {
+        static $rules = [
+            '/temperature/i'                                => ['Temperature', '°C'],
+            '/load-in time/i'                                => ['Load Time', 'ms'],
+            '/spin.?up.?time/i'                              => ['Spin-up Time', 'ms'],
+            '/performance/i'                                 => ['Performance', ''],
+            '/helium level/i'                                => ['Helium Level', '%'],
+            '/(health monitor|head health)/i'                => ['Health', ''],
+            '/(wear leveling|media wear)/i'                  => ['Wear', '%'],
+            '/rdwr ratio/i'                                  => ['Ratio', '%'],
+            '/workld timer/i'                                => ['Time', 'min'],
+            '/(hours)/i'                                     => ['Time', 'h'],
+            '/(total.?lbas.?(written|read)|nand.?writes)/i'  => ['Data', ''],
+        ];
+
+        foreach ($rules as $pattern => $textLabel) {
+            if (preg_match($pattern, $attrName)) {
+                return $textLabel;
+            }
+        }
+
+        return ['Raw', ''];
+    }
+
+    /**
      * Human-readable flag lines for an attribute, for the Flags tooltip,
      * derived from the smartmonSataAttrFlags bitmask.
      *

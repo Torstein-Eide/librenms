@@ -96,6 +96,7 @@
         // fallback never triggers.
         $activeRateUnit = null;
         $activeDiskKey = null;
+        $activeThresh = null;
         foreach ($data->diskKeys() as $key) {
             $disk = $data->disk($key);
 
@@ -109,6 +110,7 @@
                 }
                 $activeRateUnit ??= $spec['rate_unit'] ?? null;
                 $activeDiskKey ??= $key;
+                $activeThresh ??= $spec['thresh'] ?? null;
                 $devices[] = [
                     'key' => $key, 'disk' => $disk,
                     'badge' => isset($spec['header']) ? '<span class="text-muted" style="font-size:12px">' . htmlspecialchars($spec['header']) . '</span>' : '',
@@ -193,6 +195,7 @@
             $graph_array['attr_id'] = $active['attr_id'];
             $graph_array['attr_name'] = $active['attr_name'];
             $graph_array['rate_unit'] = $activeRateUnit ?? '';
+            $graph_array['attr_thresh'] = $activeThresh !== null ? (string) $activeThresh : '';
             // sata_attr_multi.inc.php itself never reads 'disk' (it queries every disk
             // carrying this attribute directly) -- this is purely to keep
             // auth.inc.php's drive/attribute selectors from "correcting" attr_id back

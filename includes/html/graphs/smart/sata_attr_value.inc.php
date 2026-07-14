@@ -3,6 +3,7 @@
 use App\Facades\LibrenmsConfig;
 use App\Facades\Rrd;
 use Illuminate\Support\Facades\DB;
+use LibreNMS\Agent\Unix\Smart\HtmlData;
 use LibreNMS\Exceptions\RrdGraphException;
 use LibreNMS\Util\Number;
 use LibreNMS\Util\RrdTrendForecast;
@@ -20,47 +21,7 @@ $attrRow = DB::table('smart_sata_attributes')
     ->first(['name', 'rate_672h', 'rate_168h', 'rate_24h', 'rate_8h']);
 $attrName = (string) ($attrRow->name ?? '');
 
-/**
- * Keyword -> [vertical-axis description, unit] for the Raw line's label.
- * SMART attribute names are vendor-defined text, not a typed unit -- this is
- * a best-effort guess from well-known ATA attribute name patterns
- * (smartmontools' drivedb.h naming). Order matters: most specific pattern
- * first, since e.g. "Seek Time Performance" must match /performance/ before
- * a generic time/hours rule below it would otherwise misfire, and
- * "Uncorrectable Error Cnt" must match /uncorrect/ as an error, not get
- * caught by a broader sector rule.
- */
-$attrUnitRules = [
-    '/temperature/i'                                 => ['Temperature', '°C'],
-    '/load-in time/i'                                 => ['Load Time', 'ms'],
-    '/spin.?up.?time/i'                                 => ['Spin-up Time', 'ms'],
-    '/performance/i'                                  => ['Performance', ''],
-    '/helium level/i'                                 => ['Helium Level', '%'],
-    //   '/helium condition/i'                             => ['Helium Level', ''],
-    '/(health monitor|head health)/i'                 => ['Health', ''],
-    '/(wear leveling|media wear)/i'                   => ['Wear', '%'],
-    '/rdwr ratio/i'                                   => ['Ratio', '%'],
-    '/workld timer/i'                                 => ['Time', 'min'],
-    '/(hours)/i'                                      => ['Time', 'h'],
-    '/(total.?lbas.?(written|read)|nand.?writes)/i'      => ['Data', ''],
-    //    '/disk shift/i'                                   => ['Shift', ''],
-    //    '/pressure limit/i'                               => ['Pressure', ''],
-    //    '/(exception mode|throttle)/i'                    => ['Status', ''],
-    //    '/sector/i'                                       => ['Sectors', ''],
-    //    '/(rsvd blk|bad block)/i'                         => ['Blocks', ''],
-    //    '/(error|crc|g-sense|timeout|fail|uncorrect)/i'   => ['Errors', ''],
-    //    '/(count|cycle|retry|retract|recovery|downshift)/i' => ['Count', ''],
-];
-
-$unit_text = 'Raw';
-$unit_label = '';
-foreach ($attrUnitRules as $pattern => $textLabel) {
-    if (preg_match($pattern, $attrName)) {
-        [$unit_text, $unit_label] = $textLabel;
-        break;
-    }
-}
-
+[$unit_text, $unit_label] = HtmlData::attributeUnitLabel($attrName);
 $verticalLabel = $unit_label !== '' ? "{$unit_text} ({$unit_label})" : $unit_text;
 
 /**
