@@ -20,22 +20,6 @@ $attrRow = DB::table('smart_sata_attributes')
     ->first(['name', 'rate_672h', 'rate_168h', 'rate_24h', 'rate_8h']);
 $attrName = (string) ($attrRow->name ?? '');
 
-// Longest available lookback window wins -- it's the smoothest estimate of
-// long-term drift, same preference order the settings threshold tables use
-// when picking which Δ column to trust for a "trend" read. Only used to feed
-// RrdTrendForecast's HWPREDICT branch a "crosses threshold in ~N days"
-// estimate (see below); the linear-fallback branch derives its own slope and
-// ignores this.
-$persistedRatePerHour = null;
-if ($attrRow !== null) {
-    foreach (['rate_672h', 'rate_168h', 'rate_24h', 'rate_8h'] as $column) {
-        if (is_numeric($attrRow->$column ?? null)) {
-            $persistedRatePerHour = (float) $attrRow->$column;
-            break;
-        }
-    }
-}
-
 /**
  * Keyword -> [vertical-axis description, unit] for the Raw line's label.
  * SMART attribute names are vendor-defined text, not a typed unit -- this is
@@ -499,16 +483,16 @@ if ($hasDiv) {
  * also embedded directly into Normalized's own Last/Min/Max row (its Avg/Trend
  * column) rather than repeated in the trend legend line.
  * Excludes the temperature attributes (194/190), which have their own
- * dedicated graph (see HwForecastSetting's "except temperature" behavior).
- * Shown when the graph's end time extends into the future (same convention as
- * the sensor and port_bits graphs -- see includes/html/pages/graphs.inc.php's
- * "set to future date" hint), not behind a separate UI toggle.
+ * dedicated graph. Shown when the graph's end time extends into the future
+ * (same convention as the sensor and port_bits graphs -- see
+ * includes/html/pages/graphs.inc.php's "set to future date" hint), not
+ * behind a separate UI toggle.
  *
  * The Raw overlay (against $dsRaw, using $threshRawValue converted from
- * Normalized's 0-110 scale and $persistedRatePerHour) is temporarily disabled
- * -- see the commented-out block that used to live here -- since Normalized is
- * the more meaningful trajectory to project and the two fighting for attention
- * made it harder to read either. Re-enable by restoring that call (also inline,
- * before the Raw data line, for the same draw-order reason) if Raw-side
- * trending is wanted again.
+ * Normalized's 0-110 scale) is temporarily disabled -- see the commented-out
+ * block that used to live here -- since Normalized is the more meaningful
+ * trajectory to project and the two fighting for attention made it harder to
+ * read either. Re-enable by restoring that call (also inline, before the Raw
+ * data line, for the same draw-order reason) if Raw-side trending is wanted
+ * again.
  */

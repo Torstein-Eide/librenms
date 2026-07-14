@@ -418,63 +418,6 @@
                     .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('log extra dev stats (reset)', jqXHR)); });
             });
 
-            // Holt-Winters forecast: global default (Global tab) + per-device
-            // override (Device tab, tri-state via reset link).
-            function saveHwForecast(scope, value) {
-                return $.ajax({
-                    type: 'POST',
-                    url: $('#smart-hw-forecast-global').data('update-url'),
-                    dataType: 'json',
-                    data: {
-                        _token: token,
-                        app_id: appId,
-                        scope: scope,
-                        value: toBooleanParam(value),
-                    },
-                });
-            }
-
-            $('#smart-hw-forecast-global').on('switchChange.bootstrapSwitch', function (event, state) {
-                saveHwForecast('global', state)
-                    .done(function (data) {
-                        toastr.success(data.message);
-                        setStateBadge('smart-hw-forecast-global-badge', state);
-                        if ($('#smart-hw-forecast-override').data('tristate') === '') {
-                            setStateBadge('smart-hw-forecast-badge', state);
-                        }
-                    })
-                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('hw forecast (global)', jqXHR)); });
-            });
-
-            $('#smart-hw-forecast-override').on('switchChange.bootstrapSwitch', function (event, state) {
-                saveHwForecast('disk', state)
-                    .done(function (data) {
-                        toastr.success(data.message);
-                        $('#smart-hw-forecast-override').data('tristate', state ? '1' : '0');
-                        $('#smart-hw-forecast-reset').removeClass('disabled');
-                        setStateBadge('smart-hw-forecast-badge', state);
-                    })
-                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('hw forecast (override)', jqXHR)); });
-            });
-
-            $('#smart-hw-forecast-reset').on('click', function (event) {
-                event.preventDefault();
-                if ($(this).hasClass('disabled')) return;
-
-                var $reset = $(this);
-                saveHwForecast('disk', null)
-                    .done(function (data) {
-                        toastr.success(data.message);
-                        var globalChecked = $('#smart-hw-forecast-global').is(':checked');
-                        $('#smart-hw-forecast-override')
-                            .bootstrapSwitch('state', globalChecked, true)
-                            .data('tristate', '');
-                        $reset.addClass('disabled');
-                        setStateBadge('smart-hw-forecast-badge', globalChecked);
-                    })
-                    .fail(function (jqXHR) { toastr.error('{{ __('Could not update setting') }}' + ': ' + debugAjaxError('hw forecast (reset)', jqXHR)); });
-            });
-
             // Excluded ATA Attributes: one instance per scope (Global tab's
             // defaults, one per disk-key tab on the Device tab). Add/remove
             // rows client-side; any row change (or add/remove) re-POSTs the

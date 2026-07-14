@@ -8,16 +8,11 @@ use LibreNMS\Data\Store\Rrd as RrdStore;
  * Shared "Trend / Forecast" overlay for per-disk SMART RRD graphs: always draws a
  * long-term straight-line trend (rrdtool's own LSLSLOPE/LSLINT least-squares fit,
  * per https://hints.jeb.be/2009/12/04/trend-prediction-with-rrdtool/, fit across
- * every visible sample), then additionally draws the RRD's own Holt-Winters
- * forecast band (see RrdHwForecast) when the file was created with it enabled --
- * HWPREDICT is seasonal over one day there, so it's not a substitute for this
- * long-term line, only a complement to it for short-term aberrant-sample
- * flagging. When there's no HWPREDICT RRA (forecasting disabled, or an RRD type
- * -- e.g. NVMe -- that never gets one), a "days until threshold" estimate is
- * derived in PHP from a plain rrdtool fetch instead, since rrdtool's native fit
- * has no ready-made threshold-crossing output. Originated in
- * sata_attr_value.inc.php's per-attribute trend overlay; generalized here for
- * reuse across the other per-disk SMART graphs (includes/html/graphs/smart/*.inc.php).
+ * every visible sample). A "days until threshold" estimate is derived in PHP
+ * from a plain rrdtool fetch, since rrdtool's native fit has no ready-made
+ * threshold-crossing output. Originated in sata_attr_value.inc.php's
+ * per-attribute trend overlay; generalized here for reuse across the other
+ * per-disk SMART graphs (includes/html/graphs/smart/*.inc.php).
  */
 final class RrdTrendForecast
 {
@@ -28,11 +23,9 @@ final class RrdTrendForecast
      * increasing index) so the rrdtool variable names emitted for multiple
      * overlaid series don't collide.
      *
-     * $thresholdRawValue, if given, is used for a "days until threshold" estimate:
-     * the linear-fallback path solves it directly from the slope/intercept it
-     * just regressed. The Holt-Winters path (RrdHwForecast) instead uses
-     * $persistedRatePerHour -- see that class for details. Both estimates always
-     * use $ds's own native domain, never the display remap below.
+     * $thresholdRawValue, if given, is used for a "days until threshold" estimate,
+     * solved directly from the slope/intercept just regressed. Always uses $ds's
+     * own native domain, never the display remap below.
      *
      * $displayScaleMultiplier/$displayScaleDivisor, if both given, remap every
      * plotted line via ",{mult},*,{div},/" before drawing -- for overlaying a
@@ -48,7 +41,7 @@ final class RrdTrendForecast
      * but prints the legend text after Normalized's own Last/Min/Max row (so the
      * two group together in the legend).
      */
-    public static function append(array &$rrd_options, string $rrdFilename, string $ds, string $varSuffix, float $multiplier, int $from, int $to, string $color = '#ff6600', ?float $thresholdRawValue = null, ?float $persistedRatePerHour = null, ?float $displayScaleMultiplier = null, ?float $displayScaleDivisor = null): void
+    public static function append(array &$rrd_options, string $rrdFilename, string $ds, string $varSuffix, float $multiplier, int $from, int $to, string $color = '#ff6600', ?float $thresholdRawValue = null, ?float $displayScaleMultiplier = null, ?float $displayScaleDivisor = null): void
     {
         self::appendPaint($rrd_options, $rrdFilename, $ds, $varSuffix, $multiplier, $color, $displayScaleMultiplier, $displayScaleDivisor);
         $summary = self::computeTrendSummary($rrdFilename, $ds, $multiplier, $from, $to, $thresholdRawValue);
@@ -59,11 +52,9 @@ final class RrdTrendForecast
      * Long-term straight-line trend, fit natively by rrdtool across every sample
      * visible in the graph (LSLSLOPE/LSLINT operate against the sample's
      * sequential COUNT, not real time -- see the blog post linked in the class
-     * docblock). Drawn unconditionally, HWPREDICT RRA or not: when the graph's
-     * end date is in the future, COUNT keeps incrementing across those
-     * future/unknown rows same as its real ones, so this line projects straight
-     * across that whole future span -- unlike RrdHwForecast's one-day-seasonal
-     * band, which only ever looks about one seasonal period ahead.
+     * docblock). When the graph's end date is in the future, COUNT keeps
+     * incrementing across those future/unknown rows same as its real ones, so
+     * this line projects straight across that whole future span.
      *
      * Draws the LINE with no legend text of its own -- see appendLegend() for
      * that, called separately so a caller can group the two apart in the
@@ -213,10 +204,9 @@ final class RrdTrendForecast
             // only runs when $to > time()). Converting the crossing point back to
             // an absolute timestamp and measuring the gap from the *actual*
             // current time (not $to) is what makes "in N days" mean "N days from
-            // today", matching RrdHwForecast::appendRateBasedCrossing()'s same
-            // now-relative convention -- otherwise a graph window already set far
-            // into the future silently undercounts the remaining days by however
-            // far out $to already is.
+            // today" -- otherwise a graph window already set far into the future
+            // silently undercounts the remaining days by however far out $to
+            // already is.
             $crossTs = $to + ($thresholdRawValue - $intercept) / $slope;
             $daysUntil = ($crossTs - time()) / 86400;
             $threshDisplayText = trim(Number::formatSi($thresholdRawValue, 2, 0, ''));

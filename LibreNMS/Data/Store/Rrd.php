@@ -38,12 +38,10 @@ use LibreNMS\Exceptions\RrdFileExistsException;
 use LibreNMS\Exceptions\RrdGraphException;
 use LibreNMS\Exceptions\RrdNotFoundException;
 use LibreNMS\Exceptions\RrdStoreException;
-use LibreNMS\Exceptions\RrdUnknownException;
 use LibreNMS\RRD\RrdProcess;
 use LibreNMS\Util\Debug;
 use LibreNMS\Util\Rewrite;
 use SimpleXMLElement;
-use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Exception\RuntimeException as ProcessRuntimeException;
 use Symfony\Component\Process\Process;
 
@@ -249,31 +247,6 @@ class Rrd extends BaseDatastore
         }
 
         return [];
-    }
-
-    /**
-     * True if the RRD file has at least one RRA using consolidation function $cf (e.g. 'HWPREDICT').
-     *
-     * @throws RrdException if `rrdtool info` times out or exits non-zero. Callers that gate a
-     *     destructive action (e.g. deleting a file) on this result must catch and treat a failed
-     *     check as "unknown", not as "RRA not present" -- the two are not equivalent.
-     */
-    public function hasRraConsolidationFunction(string $filename, string $cf): bool
-    {
-        $process = new Process([$this->rrdtool_executable, 'info', $filename]);
-        $process->setTimeout(10);
-
-        try {
-            $process->run();
-        } catch (ProcessTimedOutException $e) {
-            throw new RrdUnknownException("rrdtool info timed out for $filename: " . $e->getMessage());
-        }
-
-        if (! $process->isSuccessful()) {
-            throw new RrdUnknownException("rrdtool info failed for $filename: " . $process->getErrorOutput());
-        }
-
-        return (bool) preg_match('/^rra\[\d+\]\.cf = "' . preg_quote($cf, '/') . '"$/m', $process->getOutput());
     }
 
     /**

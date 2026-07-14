@@ -1,5 +1,5 @@
 {{-- Device tab: per-disk attribute thresholds, per-disk naming overrides, and this
-     device's override toggles for log-extra-dev-stats / hw-forecast. Included by
+     device's override toggle for log-extra-dev-stats. Included by
      settings.blade.php. Expects $stateBadge from the parent view. --}}
 <div class="panel-group" id="smart-settings-device-accordion">
     <div class="panel panel-default">
@@ -149,34 +149,6 @@
                         {{ __('Override for this device') }}
                     </label>
                     <a href="#" id="smart-log-extra-dev-stats-reset" class="{{ $logExtraDevStatsOverride === null ? 'disabled' : '' }}" style="margin-left:8px">{{ __('Reset to default') }}</a>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="panel panel-default">
-        <div class="panel-heading" style="display:flex;justify-content:space-between;align-items:center">
-            <a data-toggle="collapse" data-parent="#smart-settings-device-accordion" href="#smart-settings-hw-forecast-device-body">
-                {{ __('Enable Holt-Winters forecasting') }}
-            </a>
-            {!! $stateBadge($enableHwForecastOverride ?? $enableHwForecastGlobal, 'smart-hw-forecast-badge') !!}
-        </div>
-        <div id="smart-settings-hw-forecast-device-body" class="panel-collapse collapse">
-            <div class="panel-body">
-                <p class="text-muted" style="margin:0 0 6px">
-                    {{ __('Stores this disk\'s SMART data with RRDtool Holt-Winters trend prediction enabled for every numeric attribute (except temperature, which has its own graph). Because of how RRDtool works, this changes the storage format for the whole disk file, not just the predicted metrics, and RRAs cannot be added to an existing file: if this disk\'s RRD file predates the setting, enabling it has no effect until that file is deleted (check the device\'s Eventlog for a notice when this applies) so it can be recreated -- this loses the disk\'s existing history. Prediction bands become meaningful after ~2 days of data.') }}
-                </p>
-                <div class="checkbox">
-                    <label>
-                        <input type="checkbox"
-                               class="smart-toggle-switch"
-                               id="smart-hw-forecast-override"
-                               data-tristate="{{ $enableHwForecastOverride === null ? '' : ($enableHwForecastOverride ? '1' : '0') }}"
-                               data-update-url="{{ route('device.apps.smart.settings.hw_forecast', $device) }}"
-                               @checked($enableHwForecastOverride ?? $enableHwForecastGlobal)>
-                        {{ __('Override for this device') }}
-                    </label>
-                    <a href="#" id="smart-hw-forecast-reset" class="{{ $enableHwForecastOverride === null ? 'disabled' : '' }}" style="margin-left:8px">{{ __('Reset to default') }}</a>
                 </div>
             </div>
         </div>

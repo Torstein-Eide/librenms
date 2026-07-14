@@ -123,32 +123,6 @@
     </div>
 
     <div class="panel panel-default">
-        <div class="panel-heading" style="display:flex;justify-content:space-between;align-items:center">
-            <a data-toggle="collapse" data-parent="#smart-settings-global-accordion" href="#smart-settings-hw-forecast-global-body">
-                {{ __('Enable Holt-Winters forecasting') }}
-            </a>
-            {!! $stateBadge($enableHwForecastGlobal, 'smart-hw-forecast-global-badge') !!}
-        </div>
-        <div id="smart-settings-hw-forecast-global-body" class="panel-collapse collapse">
-            <div class="panel-body">
-                <p class="text-muted" style="margin:0 0 6px">
-                    {{ __('Stores SMART data with RRDtool Holt-Winters trend prediction enabled for every numeric attribute (except temperature, which has its own graph). Applies to every device that has no override of its own. Because of how RRDtool works, this changes the storage format for the whole disk file, not just the predicted metrics, and RRAs cannot be added to an existing file: if a disk\'s RRD file predates the setting, enabling it has no effect until that file is deleted so it can be recreated -- this loses that disk\'s existing history. Prediction bands become meaningful after ~2 days of data.') }}
-                </p>
-                <div class="checkbox">
-                    <label>
-                        <input type="checkbox"
-                               class="smart-toggle-switch"
-                               id="smart-hw-forecast-global"
-                               data-update-url="{{ route('device.apps.smart.settings.hw_forecast', $device) }}"
-                               @checked($enableHwForecastGlobal)>
-                        {{ __('Enabled by default') }}
-                    </label>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="panel panel-default">
         <div class="panel-heading">
             <h4 class="panel-title">
                 <a data-toggle="collapse" data-parent="#smart-settings-global-accordion" href="#smart-settings-excluded-attrs-global-body">

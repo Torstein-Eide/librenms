@@ -12,7 +12,6 @@ use Illuminate\Support\Facades\DB;
 use LibreNMS\Agent\Module\Smart\Support\DbSync;
 use LibreNMS\Agent\Module\Smart\Support\ExcludedAttributesSetting;
 use LibreNMS\Agent\Module\Smart\Support\ExtraDevStatSetting;
-use LibreNMS\Agent\Module\Smart\Support\HwForecastSetting;
 use LibreNMS\Agent\Unix\Smart\HtmlData;
 
 /**
@@ -219,14 +218,10 @@ class SmartAttributeSettingsController
 
         $logExtraDevStatsGlobal = ExtraDevStatSetting::resolve(self::GLOBAL_SETTINGS_APP_ID);
         $logExtraDevStatsOverride = null;
-        $enableHwForecastGlobal = HwForecastSetting::resolve(self::GLOBAL_SETTINGS_APP_ID);
-        $enableHwForecastOverride = null;
 
         if ($appId !== null) {
             $rawOverride = DB::table('smart_app_settings')->where('app_id', $appId)->value('log_extra_dev_stats');
             $logExtraDevStatsOverride = $rawOverride === null ? null : (bool) $rawOverride;
-            $rawHwOverride = DB::table('smart_app_settings')->where('app_id', $appId)->value('enable_hw_forecast');
-            $enableHwForecastOverride = $rawHwOverride === null ? null : (bool) $rawHwOverride;
         }
 
         // Rotating Wear sensor's excluded attributes: global default list
@@ -274,8 +269,6 @@ class SmartAttributeSettingsController
             'viewModes' => $viewModes,
             'logExtraDevStatsGlobal' => $logExtraDevStatsGlobal,
             'logExtraDevStatsOverride' => $logExtraDevStatsOverride,
-            'enableHwForecastGlobal' => $enableHwForecastGlobal,
-            'enableHwForecastOverride' => $enableHwForecastOverride,
             'excludedAttributesGlobal' => $excludedAttributesGlobal,
             'excludedAttributesGlobalCustomized' => $excludedAttributesGlobalCustomized,
             'excludedAttributesByDisk' => $excludedAttributesByDisk,
@@ -383,39 +376,6 @@ class SmartAttributeSettingsController
         DB::table('smart_app_settings')->updateOrInsert(
             ['app_id' => $targetAppId],
             ['log_extra_dev_stats' => $value === null ? null : (bool) $value]
-        );
-
-        $this->invalidateHtmlData($device, $appId);
-
-        return response()->json(['status' => 'ok', 'message' => 'Setting updated']);
-    }
-
-    /**
-     * Save the global default for "Enable Holt-Winters forecasting", or a
-     * per-device override when scope=disk. A null value on scope=disk clears
-     * the override so the device goes back to inheriting the global default.
-     */
-    public function updateHwForecast(Device $device, Request $request): JsonResponse
-    {
-        $this->authorize('update', $device);
-
-        $validated = $request->validate([
-            'app_id' => 'required|integer',
-            'scope' => 'required|in:disk,global',
-            'value' => 'nullable|boolean',
-        ]);
-
-        $appId = $this->ownedAppId($device, (int) $validated['app_id']);
-        if ($appId === null) {
-            return response()->json(['status' => 'error', 'message' => 'Unknown app'], 404);
-        }
-
-        $targetAppId = $validated['scope'] === 'global' ? HwForecastSetting::GLOBAL_APP_ID : $appId;
-        $value = $validated['value'] ?? null;
-
-        DB::table('smart_app_settings')->updateOrInsert(
-            ['app_id' => $targetAppId],
-            ['enable_hw_forecast' => $value === null ? null : (bool) $value]
         );
 
         $this->invalidateHtmlData($device, $appId);

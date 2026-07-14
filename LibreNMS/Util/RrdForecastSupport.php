@@ -5,8 +5,8 @@ namespace LibreNMS\Util;
 use App\Facades\LibrenmsConfig;
 
 /**
- * Small helpers shared by the SMART per-disk RRD forecast overlays:
- * RrdTrendForecast's native long-term line and RrdHwForecast's Holt-Winters band.
+ * Small helpers shared by the SMART per-disk RRD forecast overlay:
+ * RrdTrendForecast's native long-term line.
  */
 final class RrdForecastSupport
 {

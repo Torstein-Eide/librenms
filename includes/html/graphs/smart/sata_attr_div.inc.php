@@ -186,8 +186,7 @@ $rrd_options[] = 'GPRINT:div:MAX:%5.1lf%S\l';
 // Trend/forecast overlay for Hi only -- it's the counter that actually grows
 // toward a failure threshold; Div is a ratio, not a magnitude to project. Shown
 // when the graph's end time extends into the future (same convention as the
-// sensor/port_bits graphs). See RrdTrendForecast for the HWPREDICT-vs-linear
-// fallback logic.
+// sensor/port_bits graphs). See RrdTrendForecast for the long-term-trend logic.
 if ($to > time()) {
     RrdTrendForecast::append($rrd_options, $rrd_filename, $dsHi, 'hw', $rateMultiplier, $graph_params->from, $graph_params->to);
 }
