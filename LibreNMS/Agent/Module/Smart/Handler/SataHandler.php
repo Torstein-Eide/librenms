@@ -1261,8 +1261,10 @@ final class SataHandler implements DiskTypeHandler
             }
             foreach ($offsets as $offset => $row) {
                 $flagsRaw = SmartSnmpDecode::bitsValue($row['smartmonSataDevStatFlagsValue'] ?? null);
-                $valid = $flagsRaw !== null ? (bool) ($flagsRaw & 0x40) : null;
-                $normalized = $flagsRaw !== null ? (bool) ($flagsRaw & 0x20) : null;
+                // bitsValue() returns bit(N)-indexed flags (see its docblock); valid(1) and
+                // normalized(2) are the SYNTAX BITS enum indexes.
+                $valid = $flagsRaw !== null ? (bool) ($flagsRaw & (1 << 1)) : null;
+                $normalized = $flagsRaw !== null ? (bool) ($flagsRaw & (1 << 2)) : null;
 
                 DbSync::upsert('smart_sata_dev_stats', [
                     'app_id'      => $this->ctx->appId,
