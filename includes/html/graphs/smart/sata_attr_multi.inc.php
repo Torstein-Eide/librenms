@@ -18,8 +18,28 @@ $attrName = isset($vars['attr_name']) ? trim((string) $vars['attr_name']) : null
 
 $dsName = 'id' . $attrId;
 
+// COUNTER-typed attributes (see AttributeRateTracker/HtmlData::attributeRateUnit()):
+// pollSataDeviceRrd() writes their plain id{N} DS as RRD type COUNTER so
+// rrdtool can compute rrd_8h/24h/168h/672h rates natively. That means an
+// AVERAGE fetch of id{N} always returns a rate, never the stored raw value --
+// for a slowly-incrementing attribute (e.g. a handful of power cycles a day)
+// that rate rounds down to 0 in the legend. sata_attr_value.inc.php (the
+// per-disk graph) already handles this by relabeling id{N} as a changes/hour
+// or changes/second line instead of pretending it's the raw count; mirror
+// that here rather than showing a broken "0" for every disk.
+$rateUnit = isset($vars['rate_unit']) ? (string) $vars['rate_unit'] : '';
+$rateMultiplier = match ($rateUnit) {
+    'hour' => 3600.0,
+    'second' => 1.0,
+    default => null,
+};
+
 $name = 'smart';
-$unit_text = '';
+$unit_text = match ($rateUnit) {
+    'hour' => 'Rate/h',
+    'second' => 'Rate/s',
+    default => '',
+};
 $unitlen = 10;
 $bigdescrlen = 25;
 $smalldescrlen = 25;
@@ -98,11 +118,19 @@ foreach ($disks as $disk) {
         ? $htmlData->displayLabel($diskData, $labelMode)
         : (trim((string) $disk->device_name) !== '' ? $disk->device_name : $disk->disk_key);
 
-    $rrd_list[] = [
+    // Only the plain id{N} DS is ever written RRD-type COUNTER -- the Hi/P-part
+    // fallbacks above are always GAUGE (already the real stored magnitude), so
+    // the rate CDEF/relabel must not be applied to them.
+    $entry = [
         'filename' => $rrd_filename,
         'descr'    => $descr . $labelSuffix,
         'ds'       => $ds,
     ];
+    if ($ds === $dsName && $rateMultiplier !== null) {
+        $entry['multiplier'] = $rateMultiplier;
+        $entry['descr'] .= $rateUnit === 'hour' ? ' (/h)' : ' (/s)';
+    }
+    $rrd_list[] = $entry;
 }
 
 if (empty($rrd_list)) {

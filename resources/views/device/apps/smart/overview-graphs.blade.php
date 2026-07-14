@@ -80,6 +80,22 @@
         // per-attribute sections (only disks that actually report that
         // attribute; others are simply omitted).
         $devices = [];
+        // Representative rate unit (and disk_key) for the aggregate multi-disk graph
+        // below: same attr_id+attr_name pins to the same underlying vendor attribute
+        // across disks, so its COUNTER/GAUGE classification (and hour-vs-second rate
+        // unit) is consistent -- the first matching disk's spec stands in for all of
+        // them. The disk_key itself also has to be passed through: auth.inc.php's
+        // drive/attribute selectors don't know sata_attr_multi has no single "current
+        // disk" concept, and default to diskKeys()[0] when 'disk' is absent -- if that
+        // disk doesn't happen to carry this attribute (e.g. an SSD with no
+        // Load_Cycle_Count), its own attribute list doesn't contain attr_id, so
+        // auth.inc.php "corrects" attr_id/attr_name/rate_unit to that disk's first
+        // attribute instead, silently replacing the one this page actually selected.
+        // Handing it a disk_key that's confirmed to carry the attribute keeps
+        // auth.inc.php's own lookups (on that disk) consistent with $active, so its
+        // fallback never triggers.
+        $activeRateUnit = null;
+        $activeDiskKey = null;
         foreach ($data->diskKeys() as $key) {
             $disk = $data->disk($key);
 
@@ -91,6 +107,8 @@
                 if ($spec === null || $spec['raw_name'] !== $active['attr_name']) {
                     continue;
                 }
+                $activeRateUnit ??= $spec['rate_unit'] ?? null;
+                $activeDiskKey ??= $key;
                 $devices[] = [
                     'key' => $key, 'disk' => $disk,
                     'badge' => isset($spec['header']) ? '<span class="text-muted" style="font-size:12px">' . htmlspecialchars($spec['header']) . '</span>' : '',
@@ -174,6 +192,20 @@
         if (isset($active['attr_id'])) {
             $graph_array['attr_id'] = $active['attr_id'];
             $graph_array['attr_name'] = $active['attr_name'];
+            $graph_array['rate_unit'] = $activeRateUnit ?? '';
+            // sata_attr_multi.inc.php itself never reads 'disk' (it queries every disk
+            // carrying this attribute directly) -- this is purely to keep
+            // auth.inc.php's drive/attribute selectors from "correcting" attr_id back
+            // to some other disk's first attribute. See the note above $activeDiskKey.
+            if ($activeDiskKey !== null) {
+                $graph_array['disk'] = $activeDiskKey;
+                // Passing 'disk' makes auth.inc.php treat this as a single-disk graph and
+                // prepend that disk's name to its own computed title -- wrong for an
+                // all-disks aggregate. GraphParameters gives an explicit graph_title var
+                // priority over whatever auth.inc.php builds, so pin it back to the
+                // same disk-agnostic text already used for page_title above.
+                $graph_array['graph_title'] = $graph_array['page_title'];
+            }
         }
 
         $panelStart(htmlspecialchars($active['title']));

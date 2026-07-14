@@ -78,17 +78,23 @@ foreach ($rrd_list as $rrd) {
         $rrd_options[] = 'VDEF:tot' . $rrd['ds'] . $i . '=' . $rrd['ds'] . $i . ',TOTAL';
     }
 
+    // Per-row multiplier/divider (e.g. sata_attr_multi.inc.php's COUNTER-DS rate
+    // scaling, which only applies to some rows of a mixed attribute/format graph)
+    // overrides the graph-wide $multiplier/$divider for that row only.
+    $rowMultiplier = $rrd['multiplier'] ?? (is_numeric($multiplier) ? $multiplier : null);
+    $rowDivider = $rrd['divider'] ?? (is_numeric($divider) ? $divider : null);
+
     $g_defname = $rrd['ds'];
-    if (is_numeric($multiplier)) {
+    if ($rowMultiplier !== null) {
         $g_defname = $rrd['ds'] . '_cdef';
-        $rrd_options[] = 'CDEF:' . $g_defname . $i . '=' . $rrd['ds'] . $i . ',' . $multiplier . ',*';
-        $rrd_options[] = 'CDEF:' . $g_defname . $i . 'min=' . $rrd['ds'] . $i . 'min,' . $multiplier . ',*';
-        $rrd_options[] = 'CDEF:' . $g_defname . $i . 'max=' . $rrd['ds'] . $i . 'max,' . $multiplier . ',*';
-    } elseif (is_numeric($divider)) {
+        $rrd_options[] = 'CDEF:' . $g_defname . $i . '=' . $rrd['ds'] . $i . ',' . $rowMultiplier . ',*';
+        $rrd_options[] = 'CDEF:' . $g_defname . $i . 'min=' . $rrd['ds'] . $i . 'min,' . $rowMultiplier . ',*';
+        $rrd_options[] = 'CDEF:' . $g_defname . $i . 'max=' . $rrd['ds'] . $i . 'max,' . $rowMultiplier . ',*';
+    } elseif ($rowDivider !== null) {
         $g_defname = $rrd['ds'] . '_cdef';
-        $rrd_options[] = 'CDEF:' . $g_defname . $i . '=' . $rrd['ds'] . $i . ',' . $divider . ',/';
-        $rrd_options[] = 'CDEF:' . $g_defname . $i . 'min=' . $rrd['ds'] . $i . 'min,' . $divider . ',/';
-        $rrd_options[] = 'CDEF:' . $g_defname . $i . 'max=' . $rrd['ds'] . $i . 'max,' . $divider . ',/';
+        $rrd_options[] = 'CDEF:' . $g_defname . $i . '=' . $rrd['ds'] . $i . ',' . $rowDivider . ',/';
+        $rrd_options[] = 'CDEF:' . $g_defname . $i . 'min=' . $rrd['ds'] . $i . 'min,' . $rowDivider . ',/';
+        $rrd_options[] = 'CDEF:' . $g_defname . $i . 'max=' . $rrd['ds'] . $i . 'max,' . $rowDivider . ',/';
     }
 
     if (isset($text_orig) && $text_orig) {
