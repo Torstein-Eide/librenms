@@ -16,8 +16,8 @@
     $execRaw   = $health['selftest_exec_status_raw'] ?? null;
     $remaining = $health['selftest_remaining_pct'] ?? null;
     if ((int) $execRaw === 15 || (is_numeric($remaining) && (int) $remaining > 0)) {
-        $donePct = is_numeric($remaining) ? max(0, min(100, 100 - (int) $remaining)) : null;
-        $selftestPanelBadge = '<span class="label label-info">Running' . ($donePct !== null ? " {$donePct}%" : '') . '</span>';
+        $remainingPct = is_numeric($remaining) ? max(0, min(100, (int) $remaining)) : null;
+        $selftestPanelBadge = '<span class="label label-info">Running' . ($remainingPct !== null ? " ~{$remainingPct}%" : '') . '</span>';
     } elseif ($execRaw !== null) {
         $selftestPanelBadge = (int) $execRaw === 0
             ? '<span class="label label-default">Passed</span>'
@@ -34,15 +34,42 @@
         @if(! empty($disk['selftests']) || isset($info['selftest_polling_short_minutes']))
         @php
             $panelStart('Self-test Log', $selftestPanelBadge);
+            // Estimated self-test durations are reported in minutes; SMART firmware
+            // rounds these coarsely, so roll up to hours/days once large enough to matter.
+            $formatDuration = static function (int $minutes): string {
+                if ($minutes < 60) {
+                    return "{$minutes} min";
+                }
+                $hours = intdiv($minutes, 60);
+                $remMin = $minutes % 60;
+                if ($hours < 24) {
+                    return $remMin > 0 ? "{$hours}h {$remMin}m" : "{$hours}h";
+                }
+                $days = intdiv($hours, 24);
+                $remHours = $hours % 24;
+                return $remHours > 0 ? "{$days}d {$remHours}h" : "{$days}d";
+            };
             $pollingRows = [];
             foreach (['short' => 'Short', 'extended' => 'Extended', 'conveyance' => 'Conveyance'] as $k => $kLabel) {
                 $col = "selftest_polling_{$k}_minutes";
                 if (isset($info[$col]) && is_numeric($info[$col])) {
-                    $pollingRows[] = "{$kLabel}: " . (int) $info[$col] . ' min';
+                    $pollingRows[] = "{$kLabel}: " . $formatDuration((int) $info[$col]);
                 }
             }
             if ($pollingRows !== []) {
-                echo '<p style="margin-bottom:6px"><strong>Est. polling minutes:</strong> ' . htmlspecialchars(implode(' / ', $pollingRows)) . '</p>';
+                echo '<p style="margin-bottom:6px"><strong>Est. polling time:</strong> ' . htmlspecialchars(implode(' / ', $pollingRows)) . '</p>';
+            }
+            // Estimate fields are only meaningful mid-test: remaining_pct of 0 (no test
+            // running) or 90 (test just started, estimate not settled yet) are excluded.
+            if (is_numeric($remaining) && ! in_array((int) $remaining, [0, 90], true)) {
+                $estCompletion = $health['selftest_estimated_completion_time'] ?? null;
+                if ($estCompletion) {
+                    echo '<p style="margin-bottom:6px"><strong>Est. completion:</strong> ' . htmlspecialchars((string) $estCompletion) . '</p>';
+                }
+                $estBytesSec = $health['selftest_estimated_bytes_sec'] ?? null;
+                if (is_numeric($estBytesSec)) {
+                    echo '<p style="margin-bottom:6px"><strong>Est. throughput:</strong> ' . htmlspecialchars(\LibreNMS\Util\Number::formatSi((float) $estBytesSec, 2, 0, 'B') . '/s') . '</p>';
+                }
             }
             if (! empty($disk['selftests'])) {
                 $hasLba = false;
